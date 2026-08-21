@@ -1,0 +1,221 @@
+# Canonical Concept Registry + 승인 동의어 사전 (설계문서 §5.1)
+# version은 semantic cache key의 일부 (§5.4). 동의어 승인 시 version을 올린다.
+version: "1"
+
+concepts:
+  # ---- 공통/식별 ----
+  - concept_id: equipment_no
+    canonical_name_ko: 설비번호
+    canonical_name_en: Equipment No
+    value_type: string
+    allowed_roles: [input]
+    synonyms: [설비 번호, 장비번호, equipment id]
+    is_business_key: true
+  - concept_id: equipment_name
+    canonical_name_ko: 설비명
+    canonical_name_en: Equipment Name
+    value_type: string
+    synonyms: [장비명]
+  - concept_id: lot_no
+    canonical_name_ko: LOT
+    canonical_name_en: Lot No
+    value_type: string
+    synonyms: [lot, 로트, lot no, 로트번호]
+    is_business_key: true
+  - concept_id: batch_no
+    canonical_name_ko: BATCH 번호
+    canonical_name_en: Batch No
+    value_type: string
+    synonyms: [batch, 배치, batch id]
+    is_business_key: true
+  - concept_id: reactor_id
+    canonical_name_ko: 반응기
+    canonical_name_en: Reactor
+    value_type: string
+    synonyms: [reactor, 반응기번호]
+  - concept_id: product_name
+    canonical_name_ko: 품명
+    canonical_name_en: Product Name
+    value_type: string
+    synonyms: [제품명, 품목]
+  - concept_id: inspector
+    canonical_name_ko: 점검자
+    canonical_name_en: Inspector
+    value_type: string
+    synonyms: [검사자, 점검원, inspector]
+  - concept_id: operator
+    canonical_name_ko: 운전원
+    canonical_name_en: Operator
+    value_type: string
+    synonyms: [작업자, operator]
+  - concept_id: event_date
+    canonical_name_ko: 작업일
+    canonical_name_en: Event Date
+    value_type: date
+    synonyms: [점검일, 검사일, 운전일, 작업일자, date]
+    is_event_time: true
+  - concept_id: start_time
+    canonical_name_ko: 시작
+    canonical_name_en: Start Time
+    value_type: time
+    unit_dimension: time_of_day
+    synonyms: [시작시간, start]
+  - concept_id: end_time
+    canonical_name_ko: 종료
+    canonical_name_en: End Time
+    value_type: time
+    unit_dimension: time_of_day
+    synonyms: [종료시간, end]
+
+  # ---- 설비점검 측정 ----
+  - concept_id: vibration
+    canonical_name_ko: 진동
+    canonical_name_en: Vibration
+    parent_concept: mechanical_condition
+    value_type: float
+    canonical_unit: mm/s
+    unit_dimension: vibration_velocity
+    synonyms: [진동값, vibration]
+  - concept_id: discharge_pressure
+    canonical_name_ko: 토출압력
+    canonical_name_en: Discharge Pressure
+    parent_concept: pressure
+    value_type: float
+    canonical_unit: bar
+    unit_dimension: pressure
+    synonyms: [토출 압, "Disch. Pressure", 토출압]
+  - concept_id: bearing_temperature
+    canonical_name_ko: 베어링온도
+    canonical_name_en: Bearing Temperature
+    parent_concept: temperature
+    value_type: float
+    canonical_unit: "℃"
+    unit_dimension: temperature
+    synonyms: [베어링 온도]
+
+  # ---- 품질검사 측정 ----
+  - concept_id: outer_diameter
+    canonical_name_ko: 외경
+    canonical_name_en: Outer Diameter
+    value_type: float
+    canonical_unit: mm
+    unit_dimension: length
+    synonyms: [OD, 바깥지름]
+  - concept_id: part_length
+    canonical_name_ko: 길이
+    canonical_name_en: Length
+    value_type: float
+    canonical_unit: mm
+    unit_dimension: length
+    synonyms: [전장]
+  - concept_id: thickness
+    canonical_name_ko: 두께
+    canonical_name_en: Thickness
+    value_type: float
+    canonical_unit: mm
+    unit_dimension: length
+    synonyms: [살두께]
+  - concept_id: strength
+    canonical_name_ko: 강도
+    canonical_name_en: Strength
+    value_type: float
+    canonical_unit: MPa
+    unit_dimension: strength
+    synonyms: [인장강도]
+  - concept_id: moisture
+    canonical_name_ko: 수분
+    canonical_name_en: Moisture
+    value_type: float
+    canonical_unit: "%"
+    unit_dimension: percent
+    synonyms: [함수율, 수분율]
+  - concept_id: inspection_criteria
+    canonical_name_ko: 검사기준
+    canonical_name_en: Inspection Criteria
+    value_type: string
+    synonyms: [검사 기준]
+  - concept_id: strength_criteria
+    canonical_name_ko: 강도기준
+    canonical_name_en: Strength Criteria
+    value_type: string
+    synonyms: []
+
+  # ---- 공정운전 ----
+  - concept_id: input_amount
+    canonical_name_ko: 투입량
+    canonical_name_en: Input Amount
+    value_type: float
+    canonical_unit: kg
+    unit_dimension: mass
+    synonyms: [투입 량, 원료투입량]
+  - concept_id: output_amount
+    canonical_name_ko: 생산량
+    canonical_name_en: Output Amount
+    value_type: float
+    canonical_unit: kg
+    unit_dimension: mass
+    synonyms: [산출량]
+  - concept_id: operating_pressure
+    canonical_name_ko: 압력
+    canonical_name_en: Operating Pressure
+    parent_concept: pressure
+    value_type: float
+    canonical_unit: bar
+    unit_dimension: pressure
+    synonyms: [운전압력]
+  - concept_id: yield_rate
+    canonical_name_ko: 수율
+    canonical_name_en: Yield
+    value_type: float
+    canonical_unit: "%"
+    unit_dimension: percent
+    synonyms: [yield]
+  - concept_id: average_temperature
+    canonical_name_ko: 평균온도
+    canonical_name_en: Average Temperature
+    parent_concept: temperature
+    value_type: float
+    canonical_unit: "℃"
+    unit_dimension: temperature
+    synonyms: [평균 온도]
+  - concept_id: temp_initial
+    canonical_name_ko: 초기온도
+    canonical_name_en: Initial Temperature
+    parent_concept: temperature
+    value_type: float
+    canonical_unit: "℃"
+    unit_dimension: temperature
+    synonyms: [초기]
+    context_keywords: [온도, 프로파일, temp]
+  - concept_id: temp_middle
+    canonical_name_ko: 중간온도
+    canonical_name_en: Middle Temperature
+    parent_concept: temperature
+    value_type: float
+    canonical_unit: "℃"
+    unit_dimension: temperature
+    synonyms: [중간]
+    context_keywords: [온도, 프로파일, temp]
+  - concept_id: temp_final
+    canonical_name_ko: 종료온도
+    canonical_name_en: Final Temperature
+    parent_concept: temperature
+    value_type: float
+    canonical_unit: "℃"
+    unit_dimension: temperature
+    synonyms: [종료]
+    context_keywords: [온도, 프로파일, temp]
+
+  # ---- 판정/결과 ----
+  - concept_id: judgment
+    canonical_name_ko: 판정
+    canonical_name_en: Judgment
+    value_type: category
+    allowed_roles: [result]
+    synonyms: [결과, 합부판정]
+  - concept_id: overall_judgment
+    canonical_name_ko: 종합판정
+    canonical_name_en: Overall Judgment
+    value_type: category
+    allowed_roles: [result]
+    synonyms: [최종 판정, 최종판정, 종합 판정]

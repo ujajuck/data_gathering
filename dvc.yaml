@@ -1,0 +1,25 @@
+# DVC pipeline (설계문서 §8.5) — 최종 산출물은 canonical package까지.
+# PostgreSQL/DB 반영은 별도의 idempotent Loader(python -m src.cli ingest)가 맡는다.
+stages:
+  inspect:
+    # 원본 구조 추출. raw 또는 parser 코드가 바뀌면 재실행된다.
+    cmd: python -m src.inspect --input data/raw --out data/staging/structure.jsonl
+    deps:
+      - data/raw
+      - src/inspect
+    outs:
+      - data/staging/structure.jsonl
+  canonicalize:
+    # concept 사전이 바뀌어도 기존 파일을 다시 의미 해석해야 한다 (§5.4).
+    cmd: python -m src.canonicalize --raw data/raw --out data/canonical
+    deps:
+      - data/staging/structure.jsonl
+      - config/concepts.yaml
+      - config/units.yaml
+      - config/parser_rules.yaml
+      - src/segment
+      - src/mapping
+      - src/units
+      - src/canonicalize
+    outs:
+      - data/canonical

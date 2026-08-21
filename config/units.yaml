@@ -1,0 +1,40 @@
+# 단위 변환 규칙 (설계문서 §5 unit_dimension, §13 src.units)
+# version은 semantic cache key의 일부다 (§5.4) — 규칙이 바뀌면 재처리된다.
+version: "1"
+
+# alias -> canonical spelling
+aliases:
+  "°C": "℃"
+  "degC": "℃"
+  "celsius": "℃"
+  "PCT": "%"
+  "percent": "%"
+  "Kg": "kg"
+  "KG": "kg"
+
+# dimension -> {unit: factor-to-base}  (base = factor 1.0)
+dimensions:
+  temperature:
+    "℃": 1.0            # affine 변환 없는 섭씨 고정 (업무 표준, SI 강제 아님 §5.1)
+  pressure:
+    "bar": 1.0
+    "kPa": 0.01
+    "MPa": 10.0
+    "Pa": 0.00001
+  mass:
+    "kg": 1.0
+    "g": 0.001
+    "t": 1000.0
+  length:
+    "mm": 1.0
+    "cm": 10.0
+    "m": 1000.0
+    "um": 0.001
+  percent:
+    "%": 1.0
+  vibration_velocity:
+    "mm/s": 1.0
+  strength:
+    "MPa": 1.0
+    "GPa": 1000.0
+  time_of_day: {}       # 시각(hh:mm)은 변환 없이 정규화만 한다

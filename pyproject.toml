@@ -1,0 +1,17 @@
+[project]
+name = "excel-canonical"
+version = "0.1.0"
+description = "단일 공정 반정형 Excel 통합·DB화·DVC 변경추적 시스템"
+requires-python = ">=3.10"
+dependencies = [
+    "openpyxl>=3.1",
+    "PyYAML>=6.0",
+    "Pillow>=10.0",       # openpyxl 이미지 추출에 필요
+]
+
+[project.optional-dependencies]
+dvc = ["dvc[s3]>=3.0"]    # 원본 binary 버전 remote 보존 (미설치 시 sha256 fallback)
+test = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

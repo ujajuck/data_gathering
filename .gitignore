@@ -1,0 +1,14 @@
+# 파이프라인 산출물 (재현 가능 — dvc repro / src.cli ingest로 재생성)
+data/staging/
+data/canonical/
+data/quarantine/
+metadata/source_manifest.jsonl
+*.db
+
+# DVC 사용 시 raw는 DVC가 추적한다 (지금은 예시 3종을 git에 포함)
+# data/raw/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.dvc/cache
