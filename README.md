@@ -23,10 +23,13 @@ pip install -e ".[test]"
 python -m src.cli ingest            # data/raw 전체 증분 처리 (semantic cache)
 python -m src.cli status            # 문서/버전/레코드 현황
 python -m src.cli export            # 고정 5-sheet 표준 workbook 생성
+python -m src.cli hub --lot BT26821 # LOT 허브: 문서 횡단 통합 뷰
+python -m src.cli graph             # 지식 그래프 projection (엔티티/관계)
+python -m src.cli ontology          # 개념 온톨로지 계층
 python -m src.cli watch             # polling watcher 루프 (debounce+안정화)
 python -m src.cli reprocess         # 캐시 무시 전체 재처리
 
-python -m pytest tests/            # 설계문서 §14 합격 기준 28개 테스트
+python -m pytest tests/            # §14 합격 기준 + 복합 실데이터 41개 테스트
 ```
 
 ## 핵심 성질
@@ -45,6 +48,19 @@ python -m pytest tests/            # 설계문서 §14 합격 기준 28개 테�
   같은 레코드로 인식한다.
 - **다중 시트/대량 파일 전제**: 시트별 독립 분해, 파일별 증분 캐시, 삭제는
   tombstone 처리.
+- **복합 실데이터 대응(온톨로지/지식그래프 확장)**:
+  - 아핀 단위 변환: 348.15 K → 75.00 ℃, 167 °F → 75.00 ℃ (+ kPa/MPa/ton/g/
+    Pa·s/fraction/ppm/MWh 등 22종 변환 검증)
+  - 문서 내장 사전(MASTER_코드표, Tag_Dictionary, 현장코드, 계산근거)을 자동
+    인식해 doc-scoped 동의어로 흡수 — RX_TEMP/QTY_IN 같은 태그가 표준 개념으로 해소
+  - 반복 블록 없는 시트의 다영역 분할: 좌우 병렬 블록([Block A]|[Block B]),
+    AREA-1/2/3, 3단 헤더+단위행, "파랑=PLC" 인라인 범례
+  - Grain 교정: 행=LOT 표와 전치 표(개념=행, LOT=열)를 LOT 단위 레코드로 분할
+  - LOT 허브: 같은 LOT(BT26821)를 생산일보/MES/QC/공정실적 문서 횡단으로 통합
+  - Cross-document lineage: '반응온도'가 75℃/75 degC/348.15 K/PV 75 네 가지
+    표현에서 모두 75.00 ℃로 정규화되고 출처 셀 주소가 보존됨
+  - 온톨로지(공정/품질/설비/에너지/시간/기타 도메인)와 지식 그래프
+    (공정운전—uses→설비 등, 실제 레코드 co-occurrence 근거 포함) projection
 
 ## DVC
 

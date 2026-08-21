@@ -1,40 +1,94 @@
 # 단위 변환 규칙 (설계문서 §5 unit_dimension, §13 src.units)
 # version은 semantic cache key의 일부다 (§5.4) — 규칙이 바뀌면 재처리된다.
-version: "1"
+#
+# dimensions의 각 단위는 다음 형식을 가진다:
+#   unit: factor            # base = value * factor              (선형)
+#   unit: {factor: f, offset: o}   # base = value * f + o        (아핀: K, °F)
+# base 단위는 factor 1.0 (offset 0)인 단위다.
+version: "2"
 
 # alias -> canonical spelling
 aliases:
   "°C": "℃"
   "degC": "℃"
+  "deg C": "℃"
   "celsius": "℃"
+  "C": "℃"
+  "Kelvin": "K"
+  "°F": "°F"
+  "F": "°F"
+  "degF": "°F"
   "PCT": "%"
   "percent": "%"
+  "wt%": "%"
+  "mass%": "%"
+  "% (w/w)": "%"
+  "mass percent": "%"
   "Kg": "kg"
   "KG": "kg"
+  "metric ton": "t"
+  "ton": "t"
+  "tonne": "t"
+  "Pa.s": "Pa·s"
+  "Pa s": "Pa·s"
+  "Pas": "Pa·s"
+  "mPa.s": "mPa·s"
+  "mPa s": "mPa·s"
+  "pcs": "EA"
+  "ea": "EA"
+  "count": "EA"
+  "개": "EA"
+  "mass fraction": "fraction"
+  "0~1": "fraction"
+  "ratio": "fraction"
+  "Wh": "Wh"
+  "RPM": "rpm"
 
 # dimension -> {unit: factor-to-base}  (base = factor 1.0)
 dimensions:
   temperature:
-    "℃": 1.0            # affine 변환 없는 섭씨 고정 (업무 표준, SI 강제 아님 §5.1)
+    "℃": 1.0                          # 업무 표준 단위 (SI 강제 아님 §5.1)
+    "K": {factor: 1.0, offset: -273.15}
+    "°F": {factor: 0.5555555555555556, offset: -17.77777777777778}
   pressure:
     "bar": 1.0
     "kPa": 0.01
     "MPa": 10.0
     "Pa": 0.00001
+    "psi": 0.0689475729
   mass:
     "kg": 1.0
     "g": 0.001
+    "mg": 0.000001
     "t": 1000.0
   length:
     "mm": 1.0
     "cm": 10.0
     "m": 1000.0
     "um": 0.001
+  # 농도류: % 를 base로 두고 ppm/fraction을 환산 (문서 계산근거 시트와 일치)
+  concentration:
+    "%": 1.0
+    "ppm": 0.0001
+    "fraction": 100.0
   percent:
     "%": 1.0
+    "fraction": 100.0
   vibration_velocity:
     "mm/s": 1.0
+  viscosity:
+    "cP": 1.0
+    "mPa·s": 1.0
+    "Pa·s": 1000.0
   strength:
     "MPa": 1.0
     "GPa": 1000.0
+  energy:
+    "kWh": 1.0
+    "MWh": 1000.0
+    "Wh": 0.001
+  rotation_speed:
+    "rpm": 1.0
+  count:
+    "EA": 1.0
   time_of_day: {}       # 시각(hh:mm)은 변환 없이 정규화만 한다

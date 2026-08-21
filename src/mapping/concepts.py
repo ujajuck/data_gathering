@@ -34,6 +34,7 @@ class Concept:
     concept_id: str
     canonical_name_ko: str
     canonical_name_en: str = ""
+    domain: str | None = None          # 온톨로지 최상위 계층 (공정/품질/설비/…)
     parent_concept: str | None = None
     value_type: str = "string"
     canonical_unit: str | None = None
@@ -51,6 +52,7 @@ class Concept:
 class ConceptRegistry:
     def __init__(self, config: dict):
         self.version = str(config.get("version", "0"))
+        self.domains: dict[str, dict] = config.get("domains") or {}
         self.concepts: dict[str, Concept] = {}
         for row in config.get("concepts") or []:
             c = Concept(**{k: v for k, v in row.items() if k in Concept.__dataclass_fields__})
@@ -163,7 +165,51 @@ class ConceptMapper:
     def field_signature(self, f: FieldInfo, document_name: str, sheet_name: str) -> str:
         return f"{document_name}|{sheet_name}|{'>'.join(f.header_path)}|{f.raw_unit or ''}"
 
-    def decide(self, f: FieldInfo, document_name: str, sheet_name: str) -> MappingDecision:
+    def decide(self, f: FieldInfo, document_name: str, sheet_name: str,
+               doc_synonyms: dict[str, str] | None = None) -> MappingDecision:
+        # 0) 문서 내장 사전(MASTER_코드표/Tag_Dictionary 등)이 제공한 용어 우선
+        #    — 단, 단위 차원이 어긋나면 사전 매칭도 기각한다.
+        if doc_synonyms:
+            hit = doc_synonyms.get(normalize_label(f.raw_label))
+            if hit:
+                c = self.registry.concepts.get(hit)
+                unit_ok = (
+                    c is None or not c.unit_dimension or not f.raw_unit
+                    or self.units.in_dimension(f.raw_unit, c.unit_dimension)
+                )
+                if c is not None and unit_ok:
+                    return MappingDecision(
+                        field_signature=self.field_signature(f, document_name, sheet_name),
+                        raw_label=f.raw_label,
+                        context=f"{document_name}/{sheet_name}/{'>'.join(f.header_path)}",
+                        concept_id=hit,
+                        confidence=0.97,
+                        reasons={"top": {"document_dictionary": f.raw_label}, "runner_up": {}},
+                        decision="auto",
+                        mapping_version=self.mapping_version,
+                    )
+        decision = self._decide_label(f, document_name, sheet_name)
+        # leaf가 모호하면 상위 헤더로 fallback (예: '반응온도 > PV (℃)'의 PV)
+        if decision.decision == "pending" and len(f.header_path) > 1:
+            for parent in reversed(f.header_path[:-1]):
+                pf = FieldInfo(
+                    field_id=f.field_id, address=f.address, label_address=f.label_address,
+                    raw_label=parent, header_path=f.header_path[:-1],
+                    raw_value=f.raw_value, cached_value=f.cached_value,
+                    is_formula=f.is_formula, raw_unit=f.raw_unit, style_role=f.style_role,
+                )
+                pd = self._decide_label(pf, document_name, sheet_name)
+                if pd.decision == "auto":
+                    pd.field_signature = decision.field_signature
+                    pd.raw_label = f.raw_label
+                    pd.context = decision.context
+                    pd.confidence = round(pd.confidence * 0.95, 4)
+                    pd.reasons["top"]["via_parent"] = parent
+                    if pd.confidence >= self.AUTO_THRESHOLD:
+                        return pd
+        return decision
+
+    def _decide_label(self, f: FieldInfo, document_name: str, sheet_name: str) -> MappingDecision:
         cands = self.candidates(f, document_name, sheet_name)
         top = cands[0] if cands else None
         # 동률에 가까운 2위가 있으면 모호 → pending (§5.2-5/6)

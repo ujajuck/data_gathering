@@ -1,102 +1,358 @@
 # Canonical Concept Registry + 승인 동의어 사전 (설계문서 §5.1)
 # version은 semantic cache key의 일부 (§5.4). 동의어 승인 시 version을 올린다.
-version: "1"
+#
+# domain: 온톨로지 최상위 계층 (공정/품질/설비/에너지/시간/기타)
+# parent_concept: 도메인 내 상위 개념 (계층 그래프용)
+version: "2"
+
+domains:
+  process: {name_ko: 공정, name_en: Process}
+  quality: {name_ko: 품질, name_en: Quality}
+  equipment: {name_ko: 설비, name_en: Equipment}
+  energy: {name_ko: 에너지, name_en: Energy}
+  time: {name_ko: 시간, name_en: Time}
+  misc: {name_ko: 기타 정보, name_en: Misc}
 
 concepts:
-  # ---- 공통/식별 ----
-  - concept_id: equipment_no
-    canonical_name_ko: 설비번호
-    canonical_name_en: Equipment No
-    value_type: string
-    allowed_roles: [input]
-    synonyms: [설비 번호, 장비번호, equipment id]
-    is_business_key: true
-  - concept_id: equipment_name
-    canonical_name_ko: 설비명
-    canonical_name_en: Equipment Name
-    value_type: string
-    synonyms: [장비명]
+  # ================= 기타/식별 (배치·LOT·문서) =================
   - concept_id: lot_no
     canonical_name_ko: LOT
     canonical_name_en: Lot No
+    domain: misc
     value_type: string
-    synonyms: [lot, 로트, lot no, 로트번호]
+    synonyms: [lot, 로트, lot no, 로트번호, 제조번호, BATCH_KEY, Batch No., Batch, Sample/Lot, LOT / 제조번호]
     is_business_key: true
   - concept_id: batch_no
     canonical_name_ko: BATCH 번호
-    canonical_name_en: Batch No
+    canonical_name_en: Batch Card No
+    domain: misc
+    parent_concept: lot_no
     value_type: string
-    synonyms: [batch, 배치, batch id]
+    synonyms: [배치, batch id]
     is_business_key: true
-  - concept_id: reactor_id
-    canonical_name_ko: 반응기
-    canonical_name_en: Reactor
-    value_type: string
-    synonyms: [reactor, 반응기번호]
   - concept_id: product_name
     canonical_name_ko: 품명
     canonical_name_en: Product Name
+    domain: misc
     value_type: string
-    synonyms: [제품명, 품목]
+    synonyms: [제품명, 품목, 제품코드]
+  - concept_id: document_no
+    canonical_name_ko: 문서번호
+    canonical_name_en: Document No
+    domain: misc
+    value_type: string
+    synonyms: [Doc No, 문서 번호]
+  - concept_id: recipe_id
+    canonical_name_ko: 기준Recipe
+    canonical_name_en: Recipe ID
+    domain: misc
+    value_type: string
+    synonyms: [Recipe, RECIPE_ID, 레시피, 기준 Recipe]
+  - concept_id: shift
+    canonical_name_ko: Shift
+    canonical_name_en: Shift
+    domain: misc
+    value_type: string
+    synonyms: [교대, 교대조]
+  - concept_id: esignature
+    canonical_name_ko: 전자서명
+    canonical_name_en: E-Signature
+    domain: misc
+    value_type: string
+    synonyms: [서명, Signature, ID]
+
+  # ================= 사람 =================
   - concept_id: inspector
     canonical_name_ko: 점검자
     canonical_name_en: Inspector
+    domain: misc
     value_type: string
     synonyms: [검사자, 점검원, inspector]
   - concept_id: operator
     canonical_name_ko: 운전원
     canonical_name_en: Operator
+    domain: misc
     value_type: string
     synonyms: [작업자, operator]
+  - concept_id: qa_approver
+    canonical_name_ko: QA
+    canonical_name_en: QA Approver
+    domain: misc
+    value_type: string
+    synonyms: [QA승인, 승인자]
+
+  # ================= 시간 =================
   - concept_id: event_date
     canonical_name_ko: 작업일
     canonical_name_en: Event Date
+    domain: time
     value_type: date
-    synonyms: [점검일, 검사일, 운전일, 작업일자, date]
+    synonyms: [점검일, 검사일, 운전일, 작업일자, date, 작성일]
+    is_event_time: true
+  - concept_id: event_timestamp
+    canonical_name_ko: 발생시각
+    canonical_name_en: Event Timestamp
+    domain: time
+    value_type: datetime
+    synonyms: [EVENT_TS, Sampling, timestamp, Time]
     is_event_time: true
   - concept_id: start_time
     canonical_name_ko: 시작
     canonical_name_en: Start Time
+    domain: time
     value_type: time
     unit_dimension: time_of_day
-    synonyms: [시작시간, start]
+    synonyms: [시작시간, start, Start]
   - concept_id: end_time
     canonical_name_ko: 종료
     canonical_name_en: End Time
+    domain: time
     value_type: time
     unit_dimension: time_of_day
-    synonyms: [종료시간, end]
+    synonyms: [종료시간, end, End]
+  - concept_id: runtime_hours
+    canonical_name_ko: 가동시간
+    canonical_name_en: Runtime
+    domain: time
+    value_type: float
+    canonical_unit: h
+    synonyms: [Runtime, 운전시간]
 
-  # ---- 설비점검 측정 ----
+  # ================= 설비 =================
+  - concept_id: equipment_no
+    canonical_name_ko: 설비번호
+    canonical_name_en: Equipment No
+    domain: equipment
+    value_type: string
+    allowed_roles: [input]
+    synonyms: [설비 번호, 장비번호, equipment id, EQP, EQP-ID, ASSET_ID, Machine, 설비ID, 설비]
+    is_business_key: true
+  - concept_id: equipment_name
+    canonical_name_ko: 설비명
+    canonical_name_en: Equipment Name
+    domain: equipment
+    value_type: string
+    synonyms: [장비명]
+  - concept_id: reactor_id
+    canonical_name_ko: 반응기
+    canonical_name_en: Reactor
+    domain: equipment
+    parent_concept: equipment_no
+    value_type: string
+    synonyms: [reactor, 반응기번호]
+  - concept_id: line_no
+    canonical_name_ko: 호기
+    canonical_name_en: Line No
+    domain: equipment
+    value_type: string
+    synonyms: [Line, 라인, Line/호기]
+  - concept_id: meter_id
+    canonical_name_ko: 계량기ID
+    canonical_name_en: Meter ID
+    domain: equipment
+    value_type: string
+    synonyms: [Meter-ID]
   - concept_id: vibration
     canonical_name_ko: 진동
     canonical_name_en: Vibration
-    parent_concept: mechanical_condition
+    domain: equipment
     value_type: float
     canonical_unit: mm/s
     unit_dimension: vibration_velocity
-    synonyms: [진동값, vibration]
+    synonyms: [진동값, vibration, Vibration]
+  - concept_id: bearing_temperature
+    canonical_name_ko: 베어링온도
+    canonical_name_en: Bearing Temperature
+    domain: equipment
+    parent_concept: temperature
+    value_type: float
+    canonical_unit: "℃"
+    unit_dimension: temperature
+    synonyms: [베어링 온도, Bearing Temp]
+
+  # ================= 공정 — 운전조건 =================
+  - concept_id: reaction_temperature
+    canonical_name_ko: 반응온도
+    canonical_name_en: Reaction Temperature
+    domain: process
+    parent_concept: temperature
+    value_type: float
+    canonical_unit: "℃"
+    unit_dimension: temperature
+    synonyms: [Reactor Temperature, Reactor Temp., RX_TEMP, T-Reactor, T_rxn, 반응기온도,
+               중합온도, Vsl.Temp, 온도(반응기), Temp]
+  - concept_id: temp_setpoint
+    canonical_name_ko: 반응온도SP
+    canonical_name_en: Temperature Setpoint
+    domain: process
+    parent_concept: reaction_temperature
+    value_type: float
+    canonical_unit: "℃"
+    unit_dimension: temperature
+    synonyms: [SP, 설정온도, Setpoint]
+  - concept_id: reaction_pressure
+    canonical_name_ko: 압력
+    canonical_name_en: Reaction Pressure
+    domain: process
+    parent_concept: pressure
+    value_type: float
+    canonical_unit: bar
+    unit_dimension: pressure
+    synonyms: [반응기압력, RX_PRESS, P_rxn, Reactor pressure, Pressure, Gauge, Abs, P]
+  - concept_id: agitator_speed
+    canonical_name_ko: 교반속도
+    canonical_name_en: Agitator Speed
+    domain: process
+    value_type: float
+    canonical_unit: rpm
+    unit_dimension: rotation_speed
+    synonyms: [RPM, AGT_SPD, Agitator Speed, Agitator, Speed, 교반]
   - concept_id: discharge_pressure
     canonical_name_ko: 토출압력
     canonical_name_en: Discharge Pressure
+    domain: process
     parent_concept: pressure
     value_type: float
     canonical_unit: bar
     unit_dimension: pressure
     synonyms: [토출 압, "Disch. Pressure", 토출압]
-  - concept_id: bearing_temperature
-    canonical_name_ko: 베어링온도
-    canonical_name_en: Bearing Temperature
-    parent_concept: temperature
+  - concept_id: operating_pressure
+    canonical_name_ko: 운전압력
+    canonical_name_en: Operating Pressure
+    domain: process
+    parent_concept: pressure
     value_type: float
-    canonical_unit: "℃"
-    unit_dimension: temperature
-    synonyms: [베어링 온도]
+    canonical_unit: bar
+    unit_dimension: pressure
+    synonyms: [압력(운전)]
 
-  # ---- 품질검사 측정 ----
+  # ================= 공정 — 투입/산출 =================
+  - concept_id: material_name
+    canonical_name_ko: 원료
+    canonical_name_en: Material
+    domain: process
+    value_type: string
+    synonyms: [원료명, Material, MAT_DESC, 원료명(KR), 자재]
+  - concept_id: spec_code
+    canonical_name_ko: 원료코드
+    canonical_name_en: Spec Code
+    domain: process
+    value_type: string
+    synonyms: [Spec.Code, 자재코드]
+  - concept_id: input_amount
+    canonical_name_ko: 투입량
+    canonical_name_en: Input Amount
+    domain: process
+    value_type: float
+    canonical_unit: kg
+    unit_dimension: mass
+    synonyms: [투입 량, 원료투입량, QTY_IN, Input, Input Qty, Sample Charge, W_in, 투입질량, Input mass]
+  - concept_id: output_amount
+    canonical_name_ko: 생산량
+    canonical_name_en: Output Amount
+    domain: process
+    value_type: float
+    canonical_unit: kg
+    unit_dimension: mass
+    synonyms: [산출량, QTY_OUT, Output, Output Qty, Recovered Product, W_out, 제품량, Product mass]
+  - concept_id: yield_rate
+    canonical_name_ko: 수율
+    canonical_name_en: Yield
+    domain: process
+    value_type: float
+    canonical_unit: "%"
+    unit_dimension: percent
+    synonyms: [yield, Yield, YLD, YIELD_RATIO, Yield ratio]
+  - concept_id: production_plan
+    canonical_name_ko: 생산계획
+    canonical_name_en: Production Plan
+    domain: process
+    value_type: float
+    canonical_unit: t
+    unit_dimension: mass
+    synonyms: [Plan]
+    context_keywords: [월, 누적, Monthly, Jun, Jul, Aug, "26"]
+  - concept_id: production_actual
+    canonical_name_ko: 생산실적
+    canonical_name_en: Production Actual
+    domain: process
+    value_type: float
+    canonical_unit: t
+    unit_dimension: mass
+    synonyms: [Actual]
+    context_keywords: [월, 누적, Monthly, Jun, Jul, Aug, "26"]
+
+  # ================= 품질 =================
+  - concept_id: viscosity
+    canonical_name_ko: 점도
+    canonical_name_en: Viscosity
+    domain: quality
+    value_type: float
+    canonical_unit: cP
+    unit_dimension: viscosity
+    synonyms: ["Visc.", "η", VISCOSITY, Dynamic Viscosity, "η / Visc."]
+  - concept_id: solids_content
+    canonical_name_ko: 고형분
+    canonical_name_en: Solid Content
+    domain: quality
+    value_type: float
+    canonical_unit: "%"
+    unit_dimension: percent
+    synonyms: [Solid, SOLIDS, Solid Content, Nonvolatile Matter, NV, 고형분(%)]
+  - concept_id: moisture
+    canonical_name_ko: 수분
+    canonical_name_en: Moisture
+    domain: quality
+    value_type: float
+    canonical_unit: ppm
+    unit_dimension: concentration
+    synonyms: [함수율, 수분율, "Moist.", MC, Moisture, Water Content, H2O, 수분함량]
+  - concept_id: color_apha
+    canonical_name_ko: 색상(APHA)
+    canonical_name_en: Color APHA
+    domain: quality
+    value_type: float
+    synonyms: [APHA, Color]
+  - concept_id: acid_value
+    canonical_name_ko: 산가
+    canonical_name_en: Acid Value
+    domain: quality
+    value_type: float
+    canonical_unit: mgKOH/g
+    synonyms: [Acid Value, AV]
+  - concept_id: particle_count
+    canonical_name_ko: 입자수
+    canonical_name_en: Particle Count
+    domain: quality
+    value_type: float
+    synonyms: [Particle, "Particle ≥50μm", Particle NG]
+  - concept_id: appearance
+    canonical_name_ko: 외관
+    canonical_name_en: Appearance
+    domain: quality
+    value_type: string
+    synonyms: [Appearance, 육안]
+  - concept_id: reject_count
+    canonical_name_ko: 불량수
+    canonical_name_en: Reject Count
+    domain: quality
+    value_type: int
+    canonical_unit: EA
+    unit_dimension: count
+    synonyms: [불량, NG, Reject, REJECT, Scrap Qty, NG Qty, Defect, Reject quantity,
+               Reject Particle Count, 불량수량]
+  - concept_id: strength
+    canonical_name_ko: 강도
+    canonical_name_en: Strength
+    domain: quality
+    value_type: float
+    canonical_unit: MPa
+    unit_dimension: strength
+    synonyms: [인장강도]
   - concept_id: outer_diameter
     canonical_name_ko: 외경
     canonical_name_en: Outer Diameter
+    domain: quality
     value_type: float
     canonical_unit: mm
     unit_dimension: length
@@ -104,6 +360,7 @@ concepts:
   - concept_id: part_length
     canonical_name_ko: 길이
     canonical_name_en: Length
+    domain: quality
     value_type: float
     canonical_unit: mm
     unit_dimension: length
@@ -111,68 +368,56 @@ concepts:
   - concept_id: thickness
     canonical_name_ko: 두께
     canonical_name_en: Thickness
+    domain: quality
     value_type: float
     canonical_unit: mm
     unit_dimension: length
     synonyms: [살두께]
-  - concept_id: strength
-    canonical_name_ko: 강도
-    canonical_name_en: Strength
-    value_type: float
-    canonical_unit: MPa
-    unit_dimension: strength
-    synonyms: [인장강도]
-  - concept_id: moisture
-    canonical_name_ko: 수분
-    canonical_name_en: Moisture
-    value_type: float
-    canonical_unit: "%"
-    unit_dimension: percent
-    synonyms: [함수율, 수분율]
   - concept_id: inspection_criteria
     canonical_name_ko: 검사기준
     canonical_name_en: Inspection Criteria
+    domain: quality
     value_type: string
-    synonyms: [검사 기준]
+    synonyms: [검사 기준, Spec]
   - concept_id: strength_criteria
     canonical_name_ko: 강도기준
     canonical_name_en: Strength Criteria
+    domain: quality
     value_type: string
     synonyms: []
 
-  # ---- 공정운전 ----
-  - concept_id: input_amount
-    canonical_name_ko: 투입량
-    canonical_name_en: Input Amount
+  # ================= 에너지 =================
+  - concept_id: energy_consumption
+    canonical_name_ko: 전력사용량
+    canonical_name_en: Energy Consumption
+    domain: energy
     value_type: float
-    canonical_unit: kg
-    unit_dimension: mass
-    synonyms: [투입 량, 원료투입량]
-  - concept_id: output_amount
-    canonical_name_ko: 생산량
-    canonical_name_en: Output Amount
+    canonical_unit: kWh
+    unit_dimension: energy
+    synonyms: [전력, Power, Power Use, 사용전력, ENERGY, Usage kWh, Electrical energy,
+               Energy consumption, 전력사용]
+  - concept_id: meter_start
+    canonical_name_ko: 시작검침
+    canonical_name_en: Meter Start
+    domain: energy
     value_type: float
-    canonical_unit: kg
-    unit_dimension: mass
-    synonyms: [산출량]
-  - concept_id: operating_pressure
-    canonical_name_ko: 압력
-    canonical_name_en: Operating Pressure
-    parent_concept: pressure
+    canonical_unit: kWh
+    unit_dimension: energy
+    synonyms: [Start kWh]
+  - concept_id: meter_end
+    canonical_name_ko: 종료검침
+    canonical_name_en: Meter End
+    domain: energy
     value_type: float
-    canonical_unit: bar
-    unit_dimension: pressure
-    synonyms: [운전압력]
-  - concept_id: yield_rate
-    canonical_name_ko: 수율
-    canonical_name_en: Yield
-    value_type: float
-    canonical_unit: "%"
-    unit_dimension: percent
-    synonyms: [yield]
+    canonical_unit: kWh
+    unit_dimension: energy
+    synonyms: [End kWh]
+
+  # ================= 공정운전 나머지 (기존 유지) =================
   - concept_id: average_temperature
     canonical_name_ko: 평균온도
     canonical_name_en: Average Temperature
+    domain: process
     parent_concept: temperature
     value_type: float
     canonical_unit: "℃"
@@ -181,6 +426,7 @@ concepts:
   - concept_id: temp_initial
     canonical_name_ko: 초기온도
     canonical_name_en: Initial Temperature
+    domain: process
     parent_concept: temperature
     value_type: float
     canonical_unit: "℃"
@@ -190,6 +436,7 @@ concepts:
   - concept_id: temp_middle
     canonical_name_ko: 중간온도
     canonical_name_en: Middle Temperature
+    domain: process
     parent_concept: temperature
     value_type: float
     canonical_unit: "℃"
@@ -199,6 +446,7 @@ concepts:
   - concept_id: temp_final
     canonical_name_ko: 종료온도
     canonical_name_en: Final Temperature
+    domain: process
     parent_concept: temperature
     value_type: float
     canonical_unit: "℃"
@@ -206,16 +454,18 @@ concepts:
     synonyms: [종료]
     context_keywords: [온도, 프로파일, temp]
 
-  # ---- 판정/결과 ----
+  # ================= 판정/결과 =================
   - concept_id: judgment
     canonical_name_ko: 판정
     canonical_name_en: Judgment
+    domain: quality
     value_type: category
     allowed_roles: [result]
-    synonyms: [결과, 합부판정]
+    synonyms: [결과, 합부판정, 검사판정, Status, BATCH_STATE, Final, OK/NG, Pass/Fail]
   - concept_id: overall_judgment
     canonical_name_ko: 종합판정
     canonical_name_en: Overall Judgment
+    domain: quality
     value_type: category
     allowed_roles: [result]
-    synonyms: [최종 판정, 최종판정, 종합 판정]
+    synonyms: [최종 판정, 최종판정, 종합 판정, Release, QC Final]

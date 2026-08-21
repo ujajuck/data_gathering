@@ -122,6 +122,7 @@ class Region:
     min_col: int
     max_col: int
     layout_fingerprint: str = ""
+    orientation: str = ""            # col_concept(개념=열) / row_concept(개념=행)
     fields: list[FieldInfo] = field(default_factory=list)
     note_text: Optional[str] = None
 

@@ -40,6 +40,12 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("status", help="문서/버전/레코드 현황")
 
+    p_hub = sub.add_parser("hub", help="LOT 허브: 문서 횡단 통합 뷰")
+    p_hub.add_argument("--lot", default=None)
+
+    sub.add_parser("graph", help="지식 그래프 projection (엔티티/관계)")
+    sub.add_parser("ontology", help="개념 온톨로지 계층")
+
     p_re = sub.add_parser("reprocess", help="캐시 무시 재처리")
     p_re.add_argument("--raw", default="data/raw", type=Path)
     p_re.add_argument("--force", action="store_true", default=True)
@@ -90,6 +96,24 @@ def main(argv: list[str] | None = None) -> int:
             "current_observations": obs,
             "pending_mappings": pend,
         }, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.cmd == "hub":
+        from src.api.queries import lot_hub_projection
+        print(json.dumps(lot_hub_projection(pipe.loader, business_key=args.lot),
+                         ensure_ascii=False, indent=2, default=str))
+        return 0
+
+    if args.cmd == "graph":
+        from src.api.queries import knowledge_graph_projection, load_relations
+        rel = load_relations(args.repo_root / "config")
+        print(json.dumps(knowledge_graph_projection(pipe.loader, pipe.registry, rel),
+                         ensure_ascii=False, indent=2))
+        return 0
+
+    if args.cmd == "ontology":
+        from src.api.queries import ontology_projection
+        print(json.dumps(ontology_projection(pipe.registry), ensure_ascii=False, indent=2))
         return 0
 
     if args.cmd == "reprocess":

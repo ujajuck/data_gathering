@@ -1,0 +1,67 @@
+# 개념 간 관계 그래프 정의 (이미지 패널 2 — 지식 그래프)
+# entity_classes: concept를 엔티티 클래스로 묶는 규칙.
+#   concepts가 명시되면 그 목록이 우선, 없으면 domain_fallback으로 배정한다.
+version: "1"
+
+entity_classes:
+  run:
+    name_ko: 공정운전
+    name_en: Run
+    concepts: [reaction_temperature, temp_setpoint, reaction_pressure, agitator_speed,
+               operating_pressure, discharge_pressure, average_temperature,
+               temp_initial, temp_middle, temp_final, runtime_hours, shift]
+  lot:
+    name_ko: 배치(LOT)
+    name_en: Lot
+    concepts: [lot_no, batch_no]
+  equipment:
+    name_ko: 설비
+    name_en: Equipment
+    concepts: [equipment_no, equipment_name, reactor_id, line_no, meter_id,
+               vibration, bearing_temperature]
+  input:
+    name_ko: 원료투입
+    name_en: Input
+    concepts: [material_name, spec_code, input_amount, recipe_id]
+  output:
+    name_ko: 산출/수율
+    name_en: Output
+    concepts: [output_amount, yield_rate, production_plan, production_actual]
+  quality:
+    name_ko: 품질결과
+    name_en: Quality
+    concepts: []          # domain_fallback: quality
+  energy:
+    name_ko: 에너지사용
+    name_en: Energy
+    concepts: [energy_consumption, meter_start, meter_end]
+  time:
+    name_ko: 시간
+    name_en: Time
+    concepts: []          # domain_fallback: time
+  document:
+    name_ko: 문서/출처
+    name_en: Document
+    concepts: [document_no, esignature]
+
+# domain -> 기본 엔티티 클래스
+domain_fallback:
+  process: run
+  quality: quality
+  equipment: equipment
+  energy: energy
+  time: time
+  misc: document
+
+# 클래스 간 관계 (이미지 패널 2의 엣지)
+relations:
+  - {subject: run, predicate: uses, object: equipment, name_ko: 사용함}
+  - {subject: run, predicate: consumes, object: input, name_ko: 투입함}
+  - {subject: run, predicate: produces, object: output, name_ko: 생성함}
+  - {subject: lot, predicate: belongs_to, object: run, name_ko: 소속됨}
+  - {subject: quality, predicate: evaluates, object: lot, name_ko: 평가함}
+  - {subject: output, predicate: produced_by, object: lot, name_ko: 생성됨}
+  - {subject: energy, predicate: used_by, object: run, name_ko: 사용됨}
+  - {subject: equipment, predicate: consumes, object: energy, name_ko: 소비함}
+  - {subject: lot, predicate: at_time, object: time, name_ko: 발생시간}
+  - {subject: energy, predicate: recorded_in, object: document, name_ko: 기록됨}

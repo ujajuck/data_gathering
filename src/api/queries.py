@@ -6,8 +6,15 @@ document → version, §11.1)을 DB에서 만든다.
 """
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
+import yaml
+
 from src.loader.versioned_loader import DEFAULT_PROCESS_ID, VersionedLoader
 from src.mapping.concepts import ConceptRegistry
+
+_ID_LIKE_RE = re.compile(r"^[A-Za-z]{1,6}[-_]?\d{3,}")
 
 
 def concept_map_projection(loader: VersionedLoader, registry: ConceptRegistry) -> dict:
@@ -91,3 +98,127 @@ def document_versions(loader: VersionedLoader, logical_name: str) -> list[dict]:
             (logical_name,),
         )
     ]
+
+
+# =============================== LOT 허브 (이미지 패널 5 — 개념 기반 통합 모델) ===
+
+def lot_hub_projection(loader: VersionedLoader, business_key: str | None = None) -> dict:
+    """LOT(배치)를 허브로 문서 횡단 레코드/개념을 통합한다.
+
+    서로 다른 문서(생산일보/MES/QC/공정실적)가 같은 LOT를 다른 record_type으로
+    적재해도 business_key로 조인되어 하나의 LOT 아래 모인다.
+    """
+    lots: dict[str, dict] = {}
+    for rec in loader.current_records():
+        bk = rec["business_key"]
+        if not bk or not _ID_LIKE_RE.match(bk):
+            continue
+        if business_key and bk != business_key:
+            continue
+        lot = lots.setdefault(bk, {"lot": bk, "records": [], "documents": set(),
+                                   "concepts": {}, "statuses": []})
+        lot["records"].append({
+            "record_key": rec["record_key"],
+            "record_type": rec["record_type"],
+            "event_time": rec["event_time"],
+            "overall_status": rec["overall_status"],
+            "source_sheet": rec["source_sheet"],
+        })
+        if rec["overall_status"]:
+            lot["statuses"].append(rec["overall_status"])
+        for o in loader.current_observations(rec["record_key"]):
+            doc = o["source_sheet"]
+            lot["documents"].add(doc)
+            if o["concept_id"]:
+                value = (o["normalized_value_num"] if o["normalized_value_num"] is not None
+                         else o["normalized_value_text"])
+                lot["concepts"].setdefault(o["concept_id"], []).append({
+                    "value": value,
+                    "unit": o["canonical_unit"],
+                    "source": f'{o["source_sheet"]}!{o["source_address"]}',
+                })
+    for lot in lots.values():
+        lot["documents"] = sorted(lot["documents"])
+        lot["record_count"] = len(lot["records"])
+    return {"process_id": DEFAULT_PROCESS_ID, "lots": dict(sorted(lots.items()))}
+
+
+# ====================== 온톨로지 계층 (이미지 패널 1 — 개념 계층 그래프) ===
+
+def ontology_projection(registry: ConceptRegistry) -> dict:
+    """domain → concept 트리 (parent_concept 계층 포함)."""
+    tree: dict[str, dict] = {}
+    for key, meta in registry.domains.items():
+        tree[key] = {"name_ko": meta.get("name_ko", key),
+                     "name_en": meta.get("name_en", key), "concepts": []}
+    for c in registry.concepts.values():
+        dom = c.domain if c.domain in tree else "misc"
+        tree.setdefault(dom, {"name_ko": dom, "name_en": dom, "concepts": []})
+        tree[dom]["concepts"].append({
+            "concept_id": c.concept_id,
+            "name_ko": c.canonical_name_ko,
+            "parent_concept": c.parent_concept,
+            "canonical_unit": c.canonical_unit,
+            "value_type": c.value_type,
+            "synonyms": c.synonyms,
+        })
+    for dom in tree.values():
+        dom["concepts"].sort(key=lambda c: c["concept_id"])
+    return {"domains": tree}
+
+
+# ================= 지식 그래프 (이미지 패널 2 — 개념 간 관계 그래프) ===
+
+def load_relations(config_dir: Path) -> dict:
+    with open(Path(config_dir) / "relations.yaml", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def entity_class_of(concept_id: str, registry: ConceptRegistry, relations_cfg: dict) -> str | None:
+    for cls, meta in (relations_cfg.get("entity_classes") or {}).items():
+        if concept_id in (meta.get("concepts") or []):
+            return cls
+    c = registry.concepts.get(concept_id)
+    if c and c.domain:
+        return (relations_cfg.get("domain_fallback") or {}).get(c.domain)
+    return None
+
+
+def knowledge_graph_projection(loader: VersionedLoader, registry: ConceptRegistry,
+                               relations_cfg: dict) -> dict:
+    """엔티티 클래스 노드 + 관계 엣지. 엣지 가중치는 현재 레코드에서
+    두 클래스가 동시에 등장한 횟수(co-occurrence)로 근거를 단다."""
+    classes = relations_cfg.get("entity_classes") or {}
+    obs_count: dict[str, int] = {c: 0 for c in classes}
+    instances: dict[str, set] = {c: set() for c in classes}
+    record_classes: list[set] = []
+
+    rec_keys = [r["record_key"] for r in loader.current_records()]
+    for rk in rec_keys:
+        present: set[str] = {"document"}
+        for o in loader.current_observations(rk):
+            if not o["concept_id"]:
+                continue
+            cls = entity_class_of(o["concept_id"], registry, relations_cfg)
+            if cls is None:
+                continue
+            obs_count[cls] = obs_count.get(cls, 0) + 1
+            present.add(cls)
+            if cls in ("lot", "equipment") and o["normalized_value_text"]:
+                instances[cls].add(o["normalized_value_text"])
+        record_classes.append(present)
+
+    nodes = []
+    for cls, meta in classes.items():
+        nodes.append({
+            "class": cls,
+            "name_ko": meta.get("name_ko", cls),
+            "observation_count": obs_count.get(cls, 0),
+            "instances": sorted(instances.get(cls, set()))[:12],
+        })
+    edges = []
+    for rel in relations_cfg.get("relations") or []:
+        s, o = rel["subject"], rel["object"]
+        weight = sum(1 for present in record_classes if s in present and o in present)
+        edges.append({**rel, "evidence_records": weight})
+    return {"nodes": nodes, "edges": edges}

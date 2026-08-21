@@ -32,12 +32,51 @@ LEGEND_KEYWORDS = ("범례", "의미", "구분", "legend")
 
 # style_role inference from legend meaning text (문서 §10.2: 로컬 범례 우선)
 _ROLE_PATTERNS = [
-    (re.compile(r"입력"), "input"),
-    (re.compile(r"계산|수식|자동"), "calculated"),
-    (re.compile(r"이상|이탈|오류|error|불량"), "error"),
-    (re.compile(r"확인|주의|warn"), "warning"),
+    (re.compile(r"입력|수기"), "input"),
+    (re.compile(r"PLC|자동측정", re.I), "measured"),
+    (re.compile(r"계산|수식|자동|참조"), "calculated"),
+    (re.compile(r"이상|이탈|오류|error|불량|규격", re.I), "error"),
+    (re.compile(r"확인|주의|warn", re.I), "warning"),
     (re.compile(r"정상|합격|ok", re.I), "ok"),
 ]
+
+# 인라인 범례: "파랑=PLC" / "노란색=수기입력 / 파란색=PLC" (한 셀에 여러 쌍 가능)
+_INLINE_LEGEND_PAIR_RE = re.compile(r"(파랑|파란색|파란글씨|노랑|노란색|회색|빨강|빨간색|빨간글씨|녹색|초록)\s*=\s*([^/=]+)")
+
+_COLOR_CLASS = {"파랑": "blue", "파란색": "blue", "파란글씨": "blue",
+                "노랑": "yellow", "노란색": "yellow",
+                "회색": "gray", "빨강": "red", "빨간색": "red", "빨간글씨": "red",
+                "녹색": "green", "초록": "green"}
+
+# 스펙/범위 토큰 ("≤80", "110~190", "47~52") — 헤더 경로에서 제약으로 분리
+_SPEC_TOKEN_RE = re.compile(r"^\s*[≤≥<>]?\s*\d+(\.\d+)?\s*([~\-]\s*\d+(\.\d+)?)?\s*$")
+
+# units 미제공 시의 최소 단위 토큰 집합
+_FALLBACK_UNITS = {"℃", "°C", "degC", "K", "°F", "bar", "kPa", "MPa", "Pa", "kg", "g",
+                   "t", "ton", "metric ton", "mm", "cm", "%", "wt%", "mass%", "ppm",
+                   "cP", "Pa·s", "Pa.s", "mPa·s", "kWh", "MWh", "rpm", "EA", "pcs",
+                   "mm/s", "0~1", "mass fraction", "h", "min", "text", "enum", "timestamp"}
+
+
+def classify_hue(rgb: str) -> str | None:
+    """'FFDDEBF7' → blue/yellow/gray/red/green 대략 분류 (인라인 범례 매칭용)."""
+    h = rgb[-6:]
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return None
+    mx, mn = max(r, g, b), min(r, g, b)
+    if mx - mn <= 12:
+        return "gray" if mx < 245 else None   # 흰색 계열은 의미 없음
+    if r >= g >= b and (r - b) > 20 and (r - g) < 40:
+        return "yellow"
+    if r > g and r > b:
+        return "red"
+    if b > r and b >= g:
+        return "blue"
+    if g > r and g > b:
+        return "green"
+    return None
 
 _UNIT_IN_LABEL_RE = re.compile(r"^(.*?)[\s]*\(([^()]{1,10})\)\s*$")
 _UNIT_TOKEN_RE = re.compile(r"^[A-Za-z%℃°/·\^0-9\.\-]+$")
@@ -114,10 +153,49 @@ class _RowClass:
 
 
 class RegionDetector:
-    def __init__(self, parser_rules: dict | None = None):
+    def __init__(self, parser_rules: dict | None = None, units=None):
         self.parser_rules = parser_rules or {}
+        self.units = units                 # UnitRegistry (optional)
+        self._legend_rows: set[int] = set()
+
+    # ------------------------------------------------------------- tokens ----
+    def _is_unit_token(self, text: str) -> bool:
+        t = (text or "").strip()
+        if not t or len(t) > 14:
+            return False
+        if self.units is not None:
+            norm = self.units.normalize_unit(t)
+            if self.units.dimensions_of(norm):
+                return True
+            # 값 타입 서술 행 토큰 (text/enum/timestamp 등)도 단위행으로 취급
+            return t.lower() in {"text", "enum", "timestamp", "h", "min"}
+        return t in _FALLBACK_UNITS
 
     # ------------------------------------------------------------ legend ----
+    def detect_inline_legend(self, grid: SheetGrid) -> tuple[dict[str, str], set[int]]:
+        """셀 텍스트 안의 '파랑=PLC' 형태 범례를 찾아 hue 매칭으로 fill→의미를 만든다."""
+        pairs_by_row: dict[int, dict[str, str]] = {}
+        for c in grid.sheet.cells:
+            if not _is_text(c):
+                continue
+            found = _INLINE_LEGEND_PAIR_RE.findall(str(c.value))
+            if found:
+                row_pairs = pairs_by_row.setdefault(c.row, {})
+                for name, meaning in found:
+                    row_pairs[_COLOR_CLASS[name]] = meaning.strip()
+        semantics: dict[str, str] = {}
+        legend_rows: set[int] = set()
+        for row, class_map in pairs_by_row.items():
+            if len(class_map) < 2:
+                continue
+            legend_rows.add(row)
+            fills = {c.fill_rgb for c in grid.sheet.cells if c.fill_rgb}
+            for rgb in fills:
+                cls = classify_hue(rgb)
+                if cls in class_map:
+                    semantics.setdefault(rgb, class_map[cls])
+        return semantics, legend_rows
+
     def detect_legend(self, grid: SheetGrid) -> tuple[str | None, dict[str, str]]:
         for c in grid.sheet.cells:
             if _is_text(c) and any(k in str(c.value).lower() or k in str(c.value) for k in LEGEND_KEYWORDS):
@@ -181,15 +259,13 @@ class RegionDetector:
         if repeated_groups:
             top = min(repeated_groups, key=lambda cells: min(c.row for c in cells))
             return sorted(top, key=lambda c: c.row)
-
-        # fallback: single-report sheet — first wide candidate becomes the block title
-        if candidates:
-            return [sorted(candidates, key=lambda c: c.row)[0]]
         return []
 
     # -------------------------------------------------------- row classes ----
     def _classify_row(self, grid: SheetGrid, row: int, min_col: int, max_col: int,
                       block_width: int, in_table: bool, table_cols: list[int]) -> _RowClass:
+        if row in self._legend_rows:
+            return _RowClass("BLANK")
         cells = grid.row_values(row, min_col, max_col)
         if not cells:
             return _RowClass("BLANK")
@@ -236,6 +312,10 @@ class RegionDetector:
     def segment_sheet(self, sheet: SheetStructure) -> SheetSegmentation:
         grid = SheetGrid(sheet)
         legend_bbox, semantics = self.detect_legend(grid)
+        inline_semantics, legend_rows = self.detect_inline_legend(grid)
+        self._legend_rows = legend_rows
+        for rgb, meaning in inline_semantics.items():
+            semantics.setdefault(rgb, meaning)
         style_roles = self.style_roles_from_semantics(semantics)
         # approved per-document rules can extend/override inferred roles (§10.2)
         for rgb, role in (self.parser_rules.get("style_roles") or {}).items():
@@ -249,17 +329,19 @@ class RegionDetector:
         )
 
         headers = self.detect_block_headers(grid, legend_bbox)
-        if not headers:
-            return seg
-
-        # global sheet title = wide merged bold row above first repeated header
-        header_rows = [h.row for h in headers]
-        for i, h in enumerate(headers):
-            top = h.row
-            bottom = headers[i + 1].row - 1 if i + 1 < len(headers) else sheet.max_row
-            mn_c, _, mx_c, _ = range_boundaries(h.merged_range) if h.merged_range else (h.col, h.row, h.col, h.row)
-            block = self._build_block(grid, h, top, bottom, mn_c, mx_c, style_roles)
-            seg.blocks.append(block)
+        if headers:
+            # 반복 제목 기반 block 분할 (기존 경로)
+            for i, h in enumerate(headers):
+                top = h.row
+                bottom = headers[i + 1].row - 1 if i + 1 < len(headers) else sheet.max_row
+                mn_c, _, mx_c, _ = range_boundaries(h.merged_range) if h.merged_range else (h.col, h.row, h.col, h.row)
+                block = self._build_block(grid, str(h.value).strip(), h.address,
+                                          top, top + 1, bottom, mn_c, mx_c, style_roles,
+                                          f"{h.col}w{grid.merge_width(h)}")
+                seg.blocks.append(block)
+        else:
+            # 반복 구조가 없는 시트: 열 밴드 × 빈 행 기반 섹션 분할 (다영역/병렬 지원)
+            seg.blocks.extend(self._segment_sections(grid, sheet, style_roles))
 
         # image attribution: anchor row belongs to the covering block, else nearest
         for img in sheet.images:
@@ -275,14 +357,68 @@ class RegionDetector:
                 target.images.append(img)
         return seg
 
-    def _build_block(self, grid: SheetGrid, header: CellInfo, top: int, bottom: int,
-                     min_col: int, max_col: int, style_roles: dict[str, str]) -> BlockInfo:
-        title = str(header.value).strip()
+    def _segment_sections(self, grid: SheetGrid, sheet: SheetStructure,
+                          style_roles: dict[str, str]) -> list[BlockInfo]:
+        """반복 제목이 없는 시트: 빈 열로 밴드를 나누고 빈 행으로 섹션을 나눈다.
+
+        좌우 병렬 블록([Block A]|[Block B], AREA-1|AREA-3)과 세로 다영역
+        (메타 KV / 메인 표 / 부속 로그)을 모두 독립 block으로 분리한다.
+        """
+        value_cells = [c for c in sheet.cells
+                       if c.value is not None and c.row not in self._legend_rows]
+        if not value_cells:
+            return []
+
+        # 열 밴드: 값이 있는 열의 연속 구간
+        cols_used = sorted({c.col for c in value_cells})
+        bands: list[tuple[int, int]] = []
+        start = prev = cols_used[0]
+        for col in cols_used[1:]:
+            if col > prev + 1:
+                bands.append((start, prev))
+                start = col
+            prev = col
+        bands.append((start, prev))
+
+        blocks: list[BlockInfo] = []
+        for mn_c, mx_c in bands:
+            band_cells = [c for c in value_cells if mn_c <= c.col <= mx_c]
+            rows_used = sorted({c.row for c in band_cells})
+            if not rows_used:
+                continue
+            sections: list[list[int]] = [[rows_used[0]]]
+            for r in rows_used[1:]:
+                if r > sections[-1][-1] + 1:
+                    sections.append([])
+                sections[-1].append(r)
+            for sec_rows in sections:
+                top, bottom = sec_rows[0], sec_rows[-1]
+                # 섹션 첫 행이 단독 wide 제목이면 제목으로 소비
+                first = [c for c in band_cells if c.row == top]
+                title, title_addr, content_top = grid.sheet.sheet_name, None, top
+                if len(first) == 1 and _is_text(first[0]) and (
+                        grid.merge_width(first[0]) >= 3 or bottom == top):
+                    title = str(first[0].value).strip()
+                    title_addr = first[0].address
+                    content_top = top + 1
+                if content_top > bottom:
+                    continue  # 제목뿐인 섹션 (시트 타이틀 등)
+                block = self._build_block(grid, title, title_addr or f"R{top}",
+                                          top, content_top, bottom, mn_c, mx_c,
+                                          style_roles, f"band{mn_c}-{mx_c}")
+                if any(r.fields for r in block.regions) or block.images:
+                    blocks.append(block)
+        return blocks
+
+    def _build_block(self, grid: SheetGrid, title: str, title_address: str,
+                     top: int, content_top: int, bottom: int,
+                     min_col: int, max_col: int, style_roles: dict[str, str],
+                     width_sig: str) -> BlockInfo:
         block = BlockInfo(
             block_id=f"{grid.sheet.sheet_name}!R{top}",
             sheet_name=grid.sheet.sheet_name,
             title=title,
-            title_address=header.address,
+            title_address=title_address,
             min_row=top,
             max_row=bottom,
         )
@@ -291,7 +427,7 @@ class RegionDetector:
         rows: list[tuple[int, _RowClass]] = []
         in_table = False
         table_cols: list[int] = []
-        for r in range(top + 1, bottom + 1):
+        for r in range(content_top, bottom + 1):
             rc = self._classify_row(grid, r, min_col, max_col, block_width, in_table, table_cols)
             if rc.kind == "HEADER":
                 if not in_table:
@@ -342,7 +478,7 @@ class RegionDetector:
             i = j
 
         parts = [f"{reg.region_type}:{len(reg.fields)}" for reg in block.regions]
-        block.layout_fingerprint = _fingerprint([f"{header.col}w{grid.merge_width(header)}"] + parts)
+        block.layout_fingerprint = _fingerprint([width_sig] + parts)
         return block
 
     # ---------------------------------------------------- region builders ----
@@ -397,18 +533,38 @@ class RegionDetector:
         region.layout_fingerprint = _fingerprint(["KV"] + sorted(f.raw_label for f in region.fields))
         return region
 
-    def _header_paths(self, grid: SheetGrid, hdr_rows, data_cols: list[int]) -> dict[int, list[str]]:
+    def _header_paths(self, grid: SheetGrid, hdr_rows, data_cols: list[int]
+                      ) -> tuple[dict[int, list[str]], dict[int, str], dict[int, str]]:
+        """헤더 경로 + 열별 단위/규격.
+
+        다층 헤더 안에 단위 행("degC", "kg")이나 스펙 행("110~190", "≤80")이
+        섞여 있으면 header_path에서 분리해 열 단위/제약으로 보존한다.
+        """
         paths: dict[int, list[str]] = {}
+        col_units: dict[int, str] = {}
+        col_specs: dict[int, str] = {}
         for col in data_cols:
-            path: list[str] = []
+            raw_path: list[str] = []
             for r, _ in hdr_rows:
                 cell = grid.resolved(r, col)
                 if cell is not None and _is_text(cell):
                     txt = str(cell.value).strip()
-                    if not path or path[-1] != txt:
-                        path.append(txt)
-            paths[col] = path
-        return paths
+                    if not raw_path or raw_path[-1] != txt:
+                        raw_path.append(txt)
+            cleaned: list[str] = []
+            for el in raw_path:
+                if self._is_unit_token(el):
+                    # 'text'/'enum' 같은 타입 서술 토큰은 경로에서만 제거하고
+                    # 실제 단위(차원 있음)만 열 단위로 기록한다
+                    pseudo = el.strip().lower() in {"text", "enum", "timestamp", "h", "min"}
+                    if not pseudo and (self.units is None or self.units.dimensions_of(el)):
+                        col_units[col] = el
+                elif _SPEC_TOKEN_RE.match(el):
+                    col_specs[col] = el
+                else:
+                    cleaned.append(el)
+            paths[col] = cleaned if cleaned else raw_path
+        return paths, col_units, col_specs
 
     def _build_table_region(self, grid, hdr_rows, data_rows, min_col, max_col,
                             style_roles, ridx, block_id) -> Region:
@@ -424,7 +580,7 @@ class RegionDetector:
             all_cols.update(c.col for c in rc.cells)
         data_cols = sorted(all_cols)
 
-        paths = self._header_paths(grid, hdr_rows, data_cols)
+        paths, col_units, col_specs = self._header_paths(grid, hdr_rows, data_cols)
         leaf = {col: (paths[col][-1] if paths[col] else "") for col in data_cols}
 
         rows_all = hdr_rows + data_rows
@@ -450,14 +606,15 @@ class RegionDetector:
                 region_type = "PROFILE"
 
         region = Region(region_id=f"{block_id}/r{ridx}", region_type=region_type,
-                        bbox=bbox, min_row=mn_r, max_row=mx_r, min_col=mn_c, max_col=mx_c)
+                        bbox=bbox, min_row=mn_r, max_row=mx_r, min_col=mn_c, max_col=mx_c,
+                        orientation=orientation)
 
         if orientation == "row_concept":
             self._extract_row_concept(grid, region, data_rows, data_cols, leaf, paths,
                                       unit_cols[0], key_col, style_roles, block_id)
         else:
             self._extract_col_concept(grid, region, data_rows, data_cols, leaf, paths,
-                                      key_col, style_roles, block_id)
+                                      key_col, style_roles, block_id, col_units)
 
         region.layout_fingerprint = _fingerprint(
             [region_type, orientation] + [leaf[c] for c in data_cols])
@@ -494,8 +651,9 @@ class RegionDetector:
                 region.fields.append(f)
 
     def _extract_col_concept(self, grid, region, data_rows, data_cols, leaf, paths,
-                             key_col, style_roles, block_id):
+                             key_col, style_roles, block_id, col_units=None):
         """Each column leaf header is a concept (e.g. 외경/길이); rows are instances."""
+        col_units = col_units or {}
         # '온도 프로파일 (℃)' 같은 단위를 가진 그룹 제목이 key 열 헤더에 있으면
         # 나머지 열의 문맥/단위로 상속한다 (가로형 profile, §2.3).
         group_path: list[str] = []
@@ -526,6 +684,7 @@ class RegionDetector:
                         if u:
                             unit = u
                             break
+                unit = unit or col_units.get(col)   # 단위 헤더 행에서 온 열 단위
                 full_path = path
                 if group_path and group_path[-1] not in path:
                     full_path = [*group_path, *path]
@@ -560,12 +719,19 @@ class RegionDetector:
         return region
 
 
-def segment_workbook(structure, parser_rules: dict | None = None) -> list[SheetSegmentation]:
-    """Segment every sheet of an inspected workbook (다중 시트 기본 전제, §2)."""
+def segment_workbook(structure, parser_rules: dict | None = None, units=None,
+                     skip_sheets: set[str] | None = None) -> list[SheetSegmentation]:
+    """Segment every sheet of an inspected workbook (다중 시트 기본 전제, §2).
+
+    skip_sheets: 문서 내장 사전 시트 등 레코드로 만들지 않을 시트 이름.
+    """
     rules = parser_rules or {}
+    skip = skip_sheets or set()
     out = []
     for sheet in structure.sheets:
+        if sheet.sheet_name in skip:
+            continue
         doc_rules = rules.get(structure.file_name, {}) if rules else {}
-        det = RegionDetector(parser_rules=doc_rules)
+        det = RegionDetector(parser_rules=doc_rules, units=units)
         out.append(det.segment_sheet(sheet))
     return out

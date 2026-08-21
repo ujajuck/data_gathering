@@ -24,13 +24,11 @@ _REF_RE = re.compile(r"(?:'[^']+'|[A-Za-z0-9_가-힣]+)?!?\$?([A-Z]{1,3})\$?([0-
 
 
 def extract_formula_refs(formula: str) -> list[str]:
+    """수식 참조 추출 — 시트 한정 참조('시트'!W15)는 시트명까지 보존한다
+    (cross-sheet lineage, 설계문서 §10.3)."""
     refs: list[str] = []
     for m in _REF_RE.finditer(formula):
-        c1, r1, c2, r2 = m.groups()
-        if c2 and r2:
-            refs.append(f"{c1}{r1}:{c2}{r2}")
-        else:
-            refs.append(f"{c1}{r1}")
+        refs.append(m.group(0).replace("$", ""))
     return refs
 
 

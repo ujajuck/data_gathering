@@ -16,6 +16,7 @@ from src.dvc_adapter.repository import make_dvc
 from src.inspect.inspector import PARSER_VERSION, WorkbookInspector
 from src.loader.versioned_loader import VersionedLoader
 from src.mapping.concepts import ConceptMapper, ConceptRegistry
+from src.mapping.doc_dictionary import extract_document_dictionary
 from src.segment.detector import segment_workbook
 from src.units.converter import UnitRegistry
 from src.watch.watcher import wait_until_stable
@@ -78,12 +79,16 @@ class Pipeline:
                               detail="semantic cache hit — no reprocessing")
                 return result
 
-            # 4) 구조 해석 + region/block 분해
+            # 4) 구조 해석 + 문서 내장 사전 흡수 + region/block 분해
             structure = self.inspector.inspect(path, relative_to=self.repo_root)
-            segmentations = segment_workbook(structure, self.parser_rules)
+            doc_dict = extract_document_dictionary(structure, self.registry)
+            segmentations = segment_workbook(structure, self.parser_rules,
+                                             units=self.units,
+                                             skip_sheets=doc_dict.sheet_names)
 
             # 5-6) concept 매핑 + review 분리 (§5.2: 낮은 신뢰도는 auto 확정 금지)
-            records, decisions = self.builder.build_records(structure, segmentations)
+            records, decisions = self.builder.build_records(
+                structure, segmentations, doc_synonyms=doc_dict.synonyms())
             pending = [d for d in decisions if d.decision == "pending"]
 
             # 7) canonical package (재현 가능 산출물, §8.5)
