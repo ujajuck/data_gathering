@@ -28,7 +28,9 @@ def _now() -> str:
 
 class VersionedLoader:
     def __init__(self, db_path: Path | str, process_name: str = "단일 공정"):
-        self.conn = sqlite3.connect(str(db_path))
+        # check_same_thread=False: API 서버(스레드풀)에서 공유 — 접근은 서버의
+        # 단일 lock으로 직렬화한다 (§15 동시성 원칙과 동일).
+        self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA.read_text(encoding="utf-8"))
         self.conn.execute(

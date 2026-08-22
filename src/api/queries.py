@@ -187,26 +187,31 @@ def entity_class_of(concept_id: str, registry: ConceptRegistry, relations_cfg: d
 def knowledge_graph_projection(loader: VersionedLoader, registry: ConceptRegistry,
                                relations_cfg: dict) -> dict:
     """엔티티 클래스 노드 + 관계 엣지. 엣지 가중치는 현재 레코드에서
-    두 클래스가 동시에 등장한 횟수(co-occurrence)로 근거를 단다."""
+    두 클래스가 동시에 등장한 횟수(co-occurrence)로 근거를 단다.
+
+    관측치 전체를 한 번만 스캔한다 — 레코드별 재조회(N+1) 없음.
+    """
+    from src.api.store import graph_scan
+
     classes = relations_cfg.get("entity_classes") or {}
     obs_count: dict[str, int] = {c: 0 for c in classes}
     instances: dict[str, set] = {c: set() for c in classes}
-    record_classes: list[set] = []
+    class_cache: dict[str, str | None] = {}
+    per_record: dict[str, set] = {}
 
-    rec_keys = [r["record_key"] for r in loader.current_records()]
-    for rk in rec_keys:
-        present: set[str] = {"document"}
-        for o in loader.current_observations(rk):
-            if not o["concept_id"]:
-                continue
-            cls = entity_class_of(o["concept_id"], registry, relations_cfg)
-            if cls is None:
-                continue
-            obs_count[cls] = obs_count.get(cls, 0) + 1
-            present.add(cls)
-            if cls in ("lot", "equipment") and o["normalized_value_text"]:
-                instances[cls].add(o["normalized_value_text"])
-        record_classes.append(present)
+    for o in graph_scan(loader.conn):
+        cid = o["concept_id"]
+        cls = class_cache.get(cid)
+        if cid not in class_cache:
+            cls = entity_class_of(cid, registry, relations_cfg)
+            class_cache[cid] = cls
+        if cls is None:
+            continue
+        obs_count[cls] = obs_count.get(cls, 0) + 1
+        per_record.setdefault(o["record_key"], {"document"}).add(cls)
+        if cls in ("lot", "equipment") and o["normalized_value_text"]:
+            instances[cls].add(o["normalized_value_text"])
+    record_classes = list(per_record.values())
 
     nodes = []
     for cls, meta in classes.items():

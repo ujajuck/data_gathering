@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS record (
     is_tombstone INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_record_key ON record(record_key, is_current);
+CREATE INDEX IF NOT EXISTS idx_record_bk ON record(business_key, is_current);
 
 CREATE TABLE IF NOT EXISTS observation (
     observation_id TEXT PRIMARY KEY,
@@ -80,6 +81,7 @@ CREATE TABLE IF NOT EXISTS observation (
 );
 CREATE INDEX IF NOT EXISTS idx_obs_key ON observation(record_key, observation_key, is_current);
 CREATE INDEX IF NOT EXISTS idx_obs_concept ON observation(concept_id, is_current);
+CREATE INDEX IF NOT EXISTS idx_obs_docver ON observation(source_document_version_id);
 
 CREATE TABLE IF NOT EXISTS attachment (
     attachment_id TEXT PRIMARY KEY,

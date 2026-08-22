@@ -29,8 +29,25 @@ python -m src.cli ontology          # 개념 온톨로지 계층
 python -m src.cli watch             # polling watcher 루프 (debounce+안정화)
 python -m src.cli reprocess         # 캐시 무시 전체 재처리
 
-python -m pytest tests/            # §14 합격 기준 + 복합 실데이터 41개 테스트
+python -m pytest tests/            # §14 합격 기준 + 복합 실데이터 + API 54개 테스트
 ```
+
+### 웹 UI (REST API + 경량 프론트)
+
+```bash
+pip install fastapi uvicorn
+uvicorn src.api.server:app --port 8000
+# → http://localhost:8000        7개 뷰 (온톨로지/지식그래프/매핑리뷰/단위/LOT허브/Lineage/레코드)
+# → http://localhost:8000/docs   OpenAPI 스키마 (프론트-백 계약)
+```
+
+- 모든 목록은 서버 페이지네이션(`?page=&size=`, 최대 500) — 대량 데이터에서도
+  화면에 보이는 만큼만 조회한다. 1만 관측치 기준 목록 12ms / 상세 5ms.
+- 고정 크기 projection(stats/ontology/graph/documents)은 프로세스 캐시 + ETag 304.
+- 매핑 리뷰 화면에서 검토 대기 항목을 승인하면 `config/concepts.yaml` 동의어로
+  승격되고 사전 버전이 올라가 다음 ingest부터 재매핑된다 (§5 학습 루프).
+- 프론트(`web/`)는 빌드 파이프라인 없는 순수 ES Module — 컴포넌트는 DOM을
+  반환하는 순수 함수라 파일 복사만으로 재사용 가능하다. 구조는 WEB_PLAN.md 참고.
 
 ## 핵심 성질
 

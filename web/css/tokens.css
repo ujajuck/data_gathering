@@ -1,0 +1,24 @@
+/* 디자인 토큰 — Artifact 시안에서 확정한 라이트/다크 팔레트 (IBM Plex 계열) */
+:root {
+  --bg:#f5f8f9; --surface:#ffffff; --ink:#182630; --dim:#5c7280; --line:#d3dee4;
+  --accent:#1265a8; --accent-soft:#e3eef7; --accent-ink:#0d4c80;
+  --ok:#1f7a5c; --ok-soft:#e0f0e9; --bad:#b3372f; --bad-soft:#f7e5e2;
+  --warn:#b87310; --warn-soft:#f7eddc;
+  --chip:#eef3f6; --on-accent:#ffffff;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --sans:'IBM Plex Sans KR',system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg:#0f171c; --surface:#16222a; --ink:#dbe7ed; --dim:#8aa0ad; --line:#2b3b45;
+  --accent:#5aa9e0; --accent-soft:#16324a; --accent-ink:#9dcbec;
+  --ok:#57bd94; --ok-soft:#12362a; --bad:#e08a80; --bad-soft:#3f1f1b;
+  --warn:#d9a05b; --warn-soft:#3a2c15;
+  --chip:#1d2b34; --on-accent:#0f171c;
+} }
+:root[data-theme="dark"] {
+  --bg:#0f171c; --surface:#16222a; --ink:#dbe7ed; --dim:#8aa0ad; --line:#2b3b45;
+  --accent:#5aa9e0; --accent-soft:#16324a; --accent-ink:#9dcbec;
+  --ok:#57bd94; --ok-soft:#12362a; --bad:#e08a80; --bad-soft:#3f1f1b;
+  --warn:#d9a05b; --warn-soft:#3a2c15;
+  --chip:#1d2b34; --on-accent:#0f171c;
+}
