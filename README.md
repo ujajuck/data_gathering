@@ -49,6 +49,12 @@ uvicorn src.api.server:app --port 8000
 - 프론트(`web/`)는 빌드 파이프라인 없는 순수 ES Module — 컴포넌트는 DOM을
   반환하는 순수 함수라 파일 복사만으로 재사용 가능하다. 구조는 WEB_PLAN.md 참고.
 
+서버 없이 공유할 스냅샷이 필요하면 정적 리포트 생성기를 쓴다:
+
+```bash
+python scripts/build_report.py     # → data/canonical/report.html (6패널 + Workbook 미리보기)
+```
+
 ## 핵심 성질
 
 - **3중 버전 분리**: raw binary(DVC/sha256) / structure hash / semantic hash.

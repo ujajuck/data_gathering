@@ -150,7 +150,7 @@ def test_unit_normalization_matrix(pipe):
     amt = norm("input_amount")
     assert ("metric ton", 4800.0, "kg") in amt and ("g", 4800.0, "kg") in amt
     visc = norm("viscosity")
-    assert any(u.startswith("Pa") and v == 118.0 for u, v, _ in visc)
+    assert any(u and u.startswith("Pa") and v == 118.0 for u, v, _ in visc)
     assert ("0~1", 95.5, "%") in norm("yield_rate")
     assert ("MWh", 670.0, "kWh") in norm("energy_consumption")
     moist = norm("moisture")
