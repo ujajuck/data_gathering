@@ -1,4 +1,4 @@
-version: '2'
+version: '5'
 domains:
   experiment:
     name_ko: 실험조건
@@ -18,6 +18,9 @@ domains:
   misc:
     name_ko: 기타
     name_en: Misc
+  packaging:
+    name_ko: 포장
+    name_en: Packaging
 concepts:
 - concept_id: recipe_name
   canonical_name_ko: 레시피
@@ -28,6 +31,18 @@ concepts:
   - 레시피명
   - recipe
   - 제품명
+  is_business_key: true
+- concept_id: batch_id
+  canonical_name_ko: 배치ID
+  canonical_name_en: Batch ID
+  domain: experiment
+  value_type: string
+  synonyms:
+  - batch
+  - Batch
+  - 배치
+  - 배치번호
+  - block no
   is_business_key: true
 - concept_id: oven_temperature
   canonical_name_ko: 오븐온도
@@ -41,6 +56,10 @@ concepts:
   - 온도(℃)
   - 온도
   - Oven Temp
+  - Oven
+  - oven
+  - OVEN
+  - temp set
 - concept_id: experiment_date
   canonical_name_ko: 실험일
   canonical_name_en: Experiment Date
@@ -49,6 +68,7 @@ concepts:
   synonyms:
   - 실험일자
   - 관찰 기간
+  - 실험기간
   is_event_time: true
 - concept_id: dough_aging
   canonical_name_ko: 반죽숙성
@@ -67,6 +87,7 @@ concepts:
   unit_dimension: temperature
   synonyms:
   - Ambient
+  - 실내
 - concept_id: pan_type
   canonical_name_ko: 팬/몰드
   canonical_name_en: Pan Type
@@ -95,6 +116,8 @@ concepts:
   - Time
   - Time(min)
   - 경과시간
+  - t
+  - t(min)
 - concept_id: addin
   canonical_name_ko: 부재료
   canonical_name_en: Add-in
@@ -107,6 +130,10 @@ concepts:
   - condition
   - 옵션
   - option
+  - Option
+  - add-in
+  - '부재료: 무첨가'
+  - variant
 - concept_id: batch_standard
   canonical_name_ko: 기준배치
   canonical_name_en: Batch Standard
@@ -124,6 +151,9 @@ concepts:
   synonyms:
   - 심부온도(℃)
   - Core Temp
+  - core T
+  - core temp
+  - core
 - concept_id: core_temp_max
   canonical_name_ko: 심부최대온도
   canonical_name_en: Core Max Temperature
@@ -135,6 +165,8 @@ concepts:
   synonyms:
   - Core max
   - 평균 심부최대온도(℃)
+  - core max
+  - core max(℃)
 - concept_id: rise_height
   canonical_name_ko: 부풀기
   canonical_name_en: Rise Height
@@ -146,6 +178,10 @@ concepts:
   - 부풀기(mm)
   - 평균 부풀기(mm)
   - rise
+  - PUFF / dome rise
+  - puff
+  - dome rise
+  - rise mm
 - concept_id: crack
   canonical_name_ko: 균열
   canonical_name_en: Crack
@@ -153,6 +189,7 @@ concepts:
   value_type: category
   synonyms:
   - 갈라짐
+  - crack
 - concept_id: crack_rate
   canonical_name_ko: 균열발생률
   canonical_name_en: Crack Rate
@@ -163,6 +200,7 @@ concepts:
   unit_dimension: percent
   synonyms:
   - 균열발생률(%)
+  - crack%
 - concept_id: surface_color
   canonical_name_ko: 표면색
   canonical_name_en: Surface Color
@@ -171,6 +209,8 @@ concepts:
   synonyms:
   - visual
   - 색상
+  - surface
+  - color
 - concept_id: moistness
   canonical_name_ko: 촉촉함
   canonical_name_en: Moistness
@@ -190,6 +230,8 @@ concepts:
   unit_dimension: percent
   synonyms:
   - 무게손실(%)
+  - loss
+  - weight loss
 - concept_id: ingredient_name
   canonical_name_ko: 재료명
   canonical_name_en: Ingredient
@@ -199,6 +241,15 @@ concepts:
   - 재료명(KR)
   - Ingredient(EN)
   - Ingredient
+  - 재료
+  - 품명
+  - ENG
+  - 설명
+  - ITEM
+  - 품목
+  - alias
+  - 영문명
+  - Material_KR
 - concept_id: ingredient_qty
   canonical_name_ko: 배합량
   canonical_name_en: Quantity
@@ -209,6 +260,9 @@ concepts:
   synonyms:
   - qty
   - 배합
+  - 사용량
+  - 투입
+  - 양
 - concept_id: unit_price
   canonical_name_ko: 단가
   canonical_name_en: Unit Price
@@ -219,6 +273,10 @@ concepts:
   synonyms:
   - 단가(원/g or ea)
   - unit price
+  - 구매단가
+  - ₩/unit
+  - price ₩
+  - price
 - concept_id: batch_cost
   canonical_name_ko: 배치원가
   canonical_name_en: Batch Cost
@@ -227,9 +285,8 @@ concepts:
   canonical_unit: KRW
   unit_dimension: currency
   synonyms:
-  - 배치 원가(원)
   - 배치 총원가
-  - cost
+  - Batch total
 - concept_id: cost_ratio
   canonical_name_ko: 원가비율
   canonical_name_en: Cost Ratio
@@ -239,6 +296,10 @@ concepts:
   unit_dimension: percent
   synonyms:
   - 비율(%)
+  - 원가비중
+  - share%
+  - 비중
+  - ratio
 - concept_id: unit_cost
   canonical_name_ko: 개당원가
   canonical_name_en: Unit Cost
@@ -250,6 +311,9 @@ concepts:
   - 개당 원가(12ea 기준)
   - 평균 원가/ea(원)
   - 개당 원가
+  - cost/ea
+  - ea cost /12
+  - ea cost
 - concept_id: packaging_cost
   canonical_name_ko: 포장비
   canonical_name_en: Packaging Cost
@@ -259,6 +323,7 @@ concepts:
   unit_dimension: currency
   synonyms:
   - 포장/라벨 추가
+  - package
 - concept_id: est_price
   canonical_name_ko: 추정판매가
   canonical_name_en: Estimated Price
@@ -268,6 +333,8 @@ concepts:
   unit_dimension: currency
   synonyms:
   - 추정 판매가
+  - 판매가 rough
+  - 판매가
 - concept_id: vendor
   canonical_name_ko: 공급처
   canonical_name_en: Vendor
@@ -276,6 +343,9 @@ concepts:
   synonyms:
   - vendor
   - 거래처
+  - 구매처
+  - source
+  - 공급사
 - concept_id: extra_cost
   canonical_name_ko: 추가원가
   canonical_name_en: Extra Cost
@@ -286,6 +356,9 @@ concepts:
   synonyms:
   - 추가원가(원/ea)
   - Δ cost
+  - add.cost
+  - Δcost(₩)
+  - Δcost
 - concept_id: base_cost
   canonical_name_ko: 기준원가
   canonical_name_en: Base Cost
@@ -296,6 +369,7 @@ concepts:
   synonyms:
   - 기준원가(원/ea)
   - base cost
+  - base.cost
 - concept_id: cost_increase
   canonical_name_ko: 원가상승률
   canonical_name_en: Cost Increase
@@ -305,6 +379,8 @@ concepts:
   unit_dimension: percent
   synonyms:
   - 원가상승률(%)
+  - ↑cost%
+  - cost uplift%
 - concept_id: sales_rate
   canonical_name_ko: 판매율
   canonical_name_en: Sales Rate
@@ -316,6 +392,9 @@ concepts:
   - 예상 판매율(%)
   - 예상 판매율
   - 판매율(%)
+  - sales%
+  - sale rate%
+  - sale-rate
 - concept_id: repurchase_index
   canonical_name_ko: 재구매지수
   canonical_name_en: Repurchase Index
@@ -323,7 +402,8 @@ concepts:
   value_type: float
   canonical_unit: ratio
   unit_dimension: ratio
-  synonyms: []
+  synonyms:
+  - repeat.idx
 - concept_id: avg_ticket
   canonical_name_ko: 평균객단가
   canonical_name_en: Average Ticket
@@ -333,6 +413,7 @@ concepts:
   unit_dimension: currency
   synonyms:
   - 평균객단가(원)
+  - ticket
 - concept_id: memo
   canonical_name_ko: 메모
   canonical_name_en: Memo
@@ -343,6 +424,10 @@ concepts:
   - Note
   - Remark
   - 참고
+  - note
+  - sticky note
+  - comment
+  - remark
 - concept_id: doc_version
   canonical_name_ko: 문서버전
   canonical_name_en: Version
@@ -358,3 +443,103 @@ concepts:
   synonyms:
   - 판정 기준
   - 검사기준
+  - 판정
+- concept_id: ingredient_cost
+  canonical_name_ko: 재료원가
+  canonical_name_en: Ingredient Cost
+  domain: cost
+  value_type: float
+  canonical_unit: KRW
+  unit_dimension: currency
+  synonyms:
+  - 원가
+  - 배치 원가(원)
+  - cost/batch
+  - cost
+- concept_id: sample_mass
+  canonical_name_ko: 개당무게
+  canonical_name_en: Sample Mass
+  domain: quality
+  value_type: float
+  canonical_unit: g
+  unit_dimension: mass
+  synonyms:
+  - mass
+  - 무게
+- concept_id: operator2
+  canonical_name_ko: 실험자
+  canonical_name_en: Operator
+  domain: misc
+  value_type: string
+  synonyms:
+  - operator
+  - who
+  - 작업자
+  - owner
+- concept_id: pouch_width
+  canonical_name_ko: 봉투 폭
+  canonical_name_en: Pouch Width
+  domain: packaging
+  value_type: float
+  canonical_unit: mm
+  unit_dimension: length
+  synonyms:
+  - 봉투폭
+  - pouch width
+- concept_id: pouch_height
+  canonical_name_ko: 봉투 높이
+  canonical_name_en: Pouch Height
+  domain: packaging
+  value_type: float
+  canonical_unit: mm
+  unit_dimension: length
+  synonyms:
+  - 봉투높이
+  - pouch height
+- concept_id: film_type
+  canonical_name_ko: 포장 필름
+  canonical_name_en: Film
+  domain: packaging
+  value_type: string
+  synonyms:
+  - 필름
+  - film
+- concept_id: print_colors
+  canonical_name_ko: 인쇄도수
+  canonical_name_en: Print Colors
+  domain: packaging
+  value_type: string
+  synonyms:
+  - 인쇄 도수
+- concept_id: sticker
+  canonical_name_ko: 스티커
+  canonical_name_en: Sticker
+  domain: packaging
+  value_type: string
+  synonyms:
+  - sticker
+- concept_id: probe_type
+  canonical_name_ko: 측정프로브
+  canonical_name_en: Probe
+  domain: misc
+  value_type: string
+  synonyms:
+  - probe
+- concept_id: fan_mode
+  canonical_name_ko: 팬모드
+  canonical_name_en: Fan Mode
+  domain: experiment
+  value_type: string
+  synonyms:
+  - fan
+  - 컨벡션
+  - convection
+- concept_id: photo_ref
+  canonical_name_ko: 사진번호
+  canonical_name_en: Photo Ref
+  domain: misc
+  value_type: float
+  synonyms:
+  - photo#
+  - photo no
+  - 사진 번호

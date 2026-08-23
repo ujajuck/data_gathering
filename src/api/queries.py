@@ -15,6 +15,18 @@ from src.loader.versioned_loader import DEFAULT_PROCESS_ID, VersionedLoader
 from src.mapping.concepts import ConceptRegistry
 
 _ID_LIKE_RE = re.compile(r"^[A-Za-z]{1,6}[-_]?\d{3,}")
+_ROW_FALLBACK_RE = re.compile(r"^row\d+$")
+
+
+def _hub_key_like(bk: str) -> bool:
+    """허브 키 판정 — api/store.HUB_KEY_SQL과 동일 규칙.
+
+    LOT형 ID 또는 레시피명 같은 짧은 단일 토큰 키를 허용하고,
+    제목 fallback(stem:sheet)과 rowN 임시 키는 제외한다."""
+    if _ID_LIKE_RE.match(bk):
+        return True
+    return (":" not in bk and " " not in bk and len(bk) <= 24
+            and not _ROW_FALLBACK_RE.match(bk))
 
 
 def concept_map_projection(loader: VersionedLoader, registry: ConceptRegistry) -> dict:
@@ -111,7 +123,7 @@ def lot_hub_projection(loader: VersionedLoader, business_key: str | None = None)
     lots: dict[str, dict] = {}
     for rec in loader.current_records():
         bk = rec["business_key"]
-        if not bk or not _ID_LIKE_RE.match(bk):
+        if not bk or not _hub_key_like(bk):
             continue
         if business_key and bk != business_key:
             continue

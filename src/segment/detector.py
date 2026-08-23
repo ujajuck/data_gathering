@@ -85,9 +85,11 @@ _UNIT_TOKEN_RE = re.compile(r"^[A-Za-z%℃°/·\^0-9\.\-]+$")
 _LIMIT_RE = re.compile(r"기준|상한|하한|한계|규격|spec", re.I)
 _MEASURED_RE = re.compile(r"실측|측정|값|value", re.I)
 _JUDGE_RE = re.compile(r"판정|결과|합부|result", re.I)
-_UNIT_COL_RE = re.compile(r"^\s*단위\s*$|^\s*units?\s*$", re.I)
+_UNIT_COL_RE = re.compile(r"^\s*단위\s*$|^\s*units?\s*$|^\s*UOM\s*$|^\s*u\.?\s*$", re.I)
+# 첫 열 헤더가 '지표' 성격이면 열이 아니라 행이 개념이다 (전치 KPI/옵션 표)
+_METRIC_COL_RE = re.compile(r"^\s*(metric|항목|구분|지표)\s*$", re.I)
 # 첫 열 헤더가 '이름' 성격이면 행은 개념이 아니라 인스턴스다 (예: 재료명/품명)
-_INSTANCE_NAME_COL_RE = re.compile(r"명\s*(\(|$)|이름|name", re.I)
+_INSTANCE_NAME_COL_RE = re.compile(r"명\s*(\(|$)|이름|name|material|^\s*(원?재료|item|품목)\s*$", re.I)
 _SUMMARY_LABEL_RE = re.compile(r"종합|최종|overall|final", re.I)
 
 
@@ -163,7 +165,8 @@ class RegionDetector:
     # ------------------------------------------------------------- tokens ----
     # 단위행에 섞이는 스키마 서술 토큰 — 경로에서 제거하되 단위로는 쓰지 않는다
     PSEUDO_UNIT_TOKENS = {"text", "enum", "timestamp", "h", "min", "unit", "memo",
-                          "name", "qty", "visual", "rule", "manual", "flag"}
+                          "name", "qty", "visual", "rule", "manual", "flag",
+                          "y/n", "#", "est."}
 
     def _is_unit_token(self, text: str) -> bool:
         t = (text or "").strip()
@@ -188,6 +191,20 @@ class RegionDetector:
             return (label or "").strip(), None
         return (base, unit) if unit in _FALLBACK_UNITS or not unit.isalpha() or len(unit) > 2 \
             else ((label or "").strip(), None)
+
+    def _loose_label_unit(self, label: str) -> tuple[str, str | None]:
+        """'rise mm'/'crack%'처럼 괄호 없이 붙은 단위도 분리한다 (혼돈양식)."""
+        base, unit = self._split_label_unit(label)
+        if unit:
+            return base, unit
+        t = (label or "").strip()
+        if len(t) > 1 and t.endswith("%"):
+            return t[:-1].strip(), "%"
+        parts = t.rsplit(None, 1)
+        if len(parts) == 2 and parts[1].lower() not in self.PSEUDO_UNIT_TOKENS \
+                and self._is_unit_token(parts[1]):
+            return parts[0], parts[1]
+        return t, None
 
     # ------------------------------------------------------------ legend ----
     def detect_inline_legend(self, grid: SheetGrid) -> tuple[dict[str, str], set[int]]:
@@ -442,11 +459,200 @@ class RegionDetector:
         )
         block_width = max_col - min_col + 1
 
+        # 서식 없는 헤더 대응: '단위행'(등록 단위 토큰이 대부분인 행) 바로 위의
+        # 텍스트 행은 스타일이 없어도 헤더다 (혼돈양식 — bold/fill 미사용 파일)
+        forced_header_rows: set[int] = set()
+        for r in range(content_top, bottom + 1):
+            cells = grid.row_values(r, min_col, max_col)
+            texts = [c for c in cells if _is_text(c)]
+            if len(texts) < 3 or len(texts) < len(cells) * 0.8:
+                continue
+            unitish = sum(1 for c in texts
+                          if self._is_unit_token(str(c.value)) or _SPEC_TOKEN_RE.match(str(c.value)))
+            if unitish >= 3 and unitish >= len(texts) * 0.6:
+                above = grid.row_values(r - 1, min_col, max_col)
+                if sum(1 for c in above if _is_text(c)) >= 3:
+                    forced_header_rows.update({r - 1, r})
+
+        # 예비 분류: 진짜 HEADER 밴드와 그 아래 DATA 행은 정상 표 소속이므로
+        # 아래의 구출(rescue) 휴리스틱 대상에서 보호한다.
+        protected: set[int] = set()
+        _in_t, _tcols = False, []
+        for r in range(content_top, bottom + 1):
+            rc = self._classify_row(grid, r, min_col, max_col, block_width, _in_t, _tcols)
+            if r in forced_header_rows and rc.kind != "HEADER":
+                _cells = grid.row_values(r, min_col, max_col)
+                if _cells:
+                    rc = _RowClass("HEADER", _cells)
+            if rc.kind == "HEADER":
+                if not _in_t:
+                    _tcols = []
+                _in_t = True
+                _tcols = sorted(set(_tcols) | {c.col for c in rc.cells})
+            elif rc.kind in ("BLANK", "NOTE", "KV", "SUMMARY"):
+                _in_t = False
+                _tcols = [] if rc.kind == "BLANK" else _tcols
+            if _in_t:
+                protected.add(r)
+
+        # 후행 라벨/단위 대응: '…숫자열… | core T | °C'처럼 개념 라벨과 단위가
+        # 행 오른쪽 끝에 붙는 전치 변형(혼돈양식). 라벨을 왼쪽에서 찾는 규칙으로는
+        # 잡히지 않으므로 해당 행들을 통째로 별도 row_concept region으로 구출한다.
+        rescue_rows: list[tuple[int, CellInfo, CellInfo, list[CellInfo], list[CellInfo]]] = []
+        for r in range(content_top, bottom + 1):
+            if r in forced_header_rows or r in protected:
+                continue
+            cells = grid.row_values(r, min_col, max_col)
+            nums = [c for c in cells
+                    if isinstance(c.value, (int, float)) and not isinstance(c.value, bool)]
+            texts = [c for c in cells if _is_text(c)]
+            if len(nums) < 3 or len(texts) < 2:
+                continue
+            max_num_col = max(c.col for c in nums)
+            right = sorted((c for c in texts if c.col > max_num_col), key=lambda c: c.col)
+            if len(right) != 2:
+                continue
+            label_c, unit_c = right
+            utxt = str(unit_c.value).strip()
+            if utxt.lower() in self.PSEUDO_UNIT_TOKENS or not self._is_unit_token(utxt):
+                continue
+            if self._is_unit_token(str(label_c.value)):
+                continue
+            min_num_col = min(c.col for c in nums)
+            lefts = sorted((c for c in texts if c.col < min_num_col), key=lambda c: c.col)
+            rescue_rows.append((r, label_c, unit_c, nums, lefts))
+
+        def _find_key_row(first_r: int, num_cols: list[int]):
+            """열 키 행(시간축 등: 텍스트 리드 + 숫자열) 탐색 — 위쪽으로 거슬러
+            올라간다. 블록이 빈 행으로 쪼개져 헤더가 이전 블록에 있어도 grid로
+            도달 가능하다. 반환: (col_keys, lead_text, key_row|None)."""
+            def _shape(hr: int):
+                """키 행 후보 형태: 숫자 ≥3개가 num_cols와 겹침. 후행 단위 토큰이
+                있으면 전치 데이터 행이므로 후보가 아니다."""
+                if hr < 1:
+                    return None
+                hcells = grid.row_values(hr, min_col, max_col)
+                hnums = [c for c in hcells
+                         if isinstance(c.value, (int, float)) and not isinstance(c.value, bool)]
+                overlap = {c.col for c in hnums} & set(num_cols)
+                if len(hnums) < 3 or len(overlap) < max(2, int(len(num_cols) * 0.6)):
+                    return None
+                h_max_num = max(c.col for c in hnums)
+                trailing_unit = any(
+                    _is_text(c) and c.col > h_max_num and self._is_unit_token(str(c.value))
+                    and str(c.value).strip().lower() not in self.PSEUDO_UNIT_TOKENS
+                    for c in hcells)
+                if trailing_unit:
+                    return None
+                return hcells, hnums
+
+            for hr in range(first_r - 1, max(first_r - 40, 0), -1):
+                shape = _shape(hr)
+                if shape is None:
+                    continue
+                # 데이터 행은 연속 run으로 나타난다 — 이웃에 같은 형태의 행이
+                # 붙어 있으면 키 행이 아니라 다른 그룹의 데이터 행이다
+                if _shape(hr - 1) is not None or _shape(hr + 1) is not None:
+                    continue
+                hcells, hnums = shape
+                col_keys = {c.col: str(c.value) for c in hnums}
+                htexts = [c for c in hcells if _is_text(c)]
+                lead = str(htexts[0].value).strip() \
+                    if htexts and htexts[0].col < min(num_cols) else None
+                return col_keys, lead, hr
+            return {}, None, None
+
+        excluded_rows: set[int] = set()
+        col_keys: dict[int, str] = {}
+        if len(rescue_rows) >= 2:
+            excluded_rows = {rr[0] for rr in rescue_rows}
+            num_cols = sorted({c.col for rr in rescue_rows for c in rr[3]})
+            col_keys, _, key_row = _find_key_row(rescue_rows[0][0], num_cols)
+            if key_row is not None and content_top <= key_row <= bottom:
+                excluded_rows.add(key_row)
+        else:
+            rescue_rows = []
+
+        # 캡션 그룹 대응: 'CORE TEMP (℃)' 같은 단독 캡션 행 아래에
+        # '인스턴스명 | 숫자열' 행이 이어지는 변형(혼돈양식). 캡션이 개념,
+        # 행 머리는 변형(variant) 인스턴스, 열 키는 위쪽 Time 행이 준다.
+        caption_groups: list[tuple[str, list[tuple[int, CellInfo, list[CellInfo]]]]] = []
+        label_runs: list[tuple[int | None, list[tuple[int, CellInfo, list[CellInfo]]]]] = []
+        if not rescue_rows:
+            b_rows: dict[int, tuple[CellInfo, list[CellInfo]]] = {}
+            single_text_rows: dict[int, str] = {}
+            for r in range(content_top, bottom + 1):
+                if r in forced_header_rows or r in protected:
+                    continue
+                cells = grid.row_values(r, min_col, max_col)
+                nums = [c for c in cells
+                        if isinstance(c.value, (int, float)) and not isinstance(c.value, bool)]
+                texts = [c for c in cells if _is_text(c)]
+                if not nums and len(texts) == 1:
+                    single_text_rows[r] = str(texts[0].value).strip()
+                elif len(nums) >= 3 and len(texts) == 1 and texts[0].col < min(c.col for c in nums):
+                    b_rows[r] = (texts[0], nums)
+            # 연속 run으로 묶고, 바로 위(≤2행)의 캡션을 개념으로 삼는다
+            r_sorted = sorted(b_rows)
+            runs: list[list[int]] = []
+            for r in r_sorted:
+                if runs and r == runs[-1][-1] + 1:
+                    runs[-1].append(r)
+                else:
+                    runs.append([r])
+            for run in runs:
+                if len(run) < 2:
+                    continue
+                caption = None
+                for up in (run[0] - 1, run[0] - 2):
+                    if up in single_text_rows:
+                        caption = single_text_rows[up]
+                        caption_row = up
+                        break
+                if caption is None:
+                    # 전치 KPI: 첫 행이 'metric|180|190…' 키 행이고 나머지 행
+                    # 라벨이 단위를 품으면('core max(℃)'/'rise mm'/'crack%')
+                    # 행 라벨 자체가 개념이다 — 캡션 없이 구출한다
+                    first_lbl = str(b_rows[run[0]][0].value)
+                    metric_key = bool(_METRIC_COL_RE.match(first_lbl)) and len(run) >= 3
+                    if not metric_key and title != grid.sheet.sheet_name:
+                        caption, caption_row = title, None
+                    else:
+                        rows_run = run[1:] if metric_key else run
+                        unitful = sum(1 for rr in rows_run
+                                      if self._loose_label_unit(str(b_rows[rr][0].value))[1])
+                        if rows_run and unitful * 2 >= len(rows_run):
+                            ck_row = run[0] if metric_key else None
+                            label_runs.append((ck_row, [(rr, *b_rows[rr]) for rr in rows_run]))
+                            excluded_rows.update(rows_run)
+                            if ck_row is not None:
+                                excluded_rows.add(ck_row)
+                        continue
+                caption_groups.append((caption, [(r, *b_rows[r]) for r in run]))
+                excluded_rows.update(run)
+                if caption_row is not None:
+                    excluded_rows.add(caption_row)
+            if caption_groups:
+                num_cols = sorted({c.col for _, rows_ in caption_groups
+                                   for _, _, ns in rows_ for c in ns})
+                first_r = min(r for _, rows_ in caption_groups for r, _, _ in rows_)
+                ck, _, key_row = _find_key_row(first_r, num_cols)
+                col_keys = col_keys or ck
+                if key_row is not None and content_top <= key_row <= bottom:
+                    excluded_rows.add(key_row)
+
         rows: list[tuple[int, _RowClass]] = []
         in_table = False
         table_cols: list[int] = []
         for r in range(content_top, bottom + 1):
+            if r in excluded_rows:
+                rows.append((r, _RowClass("BLANK")))
+                continue
             rc = self._classify_row(grid, r, min_col, max_col, block_width, in_table, table_cols)
+            if r in forced_header_rows and rc.kind != "HEADER":
+                cells = grid.row_values(r, min_col, max_col)
+                if cells:
+                    rc = _RowClass("HEADER", cells)
             if rc.kind == "HEADER":
                 if not in_table:
                     table_cols = []
@@ -494,6 +700,81 @@ class RegionDetector:
                 block.regions.append(self._build_note_region(grid, same, ridx, block.block_id))
             ridx += 1
             i = j
+
+        if rescue_rows:
+            rows_rc = [(r, _RowClass("DATA", sorted([*ns, lc, uc, *lf], key=lambda c: c.col)))
+                       for r, lc, uc, ns, lf in rescue_rows]
+            bbox, mn_r, mx_r, mn_c, mx_c = self._bbox(rows_rc)
+            region = Region(region_id=f"{block.block_id}/r{ridx}", region_type="TABLE",
+                            bbox=bbox, min_row=mn_r, max_row=mx_r, min_col=mn_c, max_col=mx_c,
+                            orientation="row_concept")
+            labels = []
+            instance_done = False
+            for r, label_c, unit_c, nums, lefts in rescue_rows:
+                concept_label, label_unit = self._split_label_unit(str(label_c.value))
+                unit = str(unit_c.value).strip() or label_unit
+                labels.append(concept_label)
+                if lefts and not instance_done:
+                    # 행 앞의 텍스트(변형/인스턴스명, 예: plain/RUM)도 데이터로 보존
+                    region.fields.append(self._mk_field(
+                        block.block_id, None, lefts[0], "variant", ["variant"],
+                        None, style_roles))
+                    instance_done = True
+                for v in nums:
+                    rk = col_keys.get(v.col, get_column_letter(v.col))
+                    region.fields.append(self._mk_field(
+                        block.block_id, label_c, v, concept_label, [concept_label],
+                        unit, style_roles, row_key=rk))
+            region.layout_fingerprint = _fingerprint(["TRANSPOSED"] + labels)
+            block.regions.append(region)
+
+        for caption, grp_rows in caption_groups:
+            concept_label, cap_unit = self._split_label_unit(caption)
+            rows_rc = [(r, _RowClass("DATA", sorted([lc, *ns], key=lambda c: c.col)))
+                       for r, lc, ns in grp_rows]
+            bbox, mn_r, mx_r, mn_c, mx_c = self._bbox(rows_rc)
+            region = Region(region_id=f"{block.block_id}/r{ridx}", region_type="TABLE",
+                            bbox=bbox, min_row=mn_r, max_row=mx_r, min_col=mn_c, max_col=mx_c,
+                            orientation="row_concept")
+            ridx += 1
+            for r, label_c, nums in grp_rows:
+                variant = str(label_c.value).strip()
+                region.fields.append(self._mk_field(
+                    block.block_id, None, label_c, "variant", ["variant"], None,
+                    style_roles, row_key=variant))
+                for v in nums:
+                    rk = col_keys.get(v.col, get_column_letter(v.col))
+                    region.fields.append(self._mk_field(
+                        block.block_id, label_c, v, concept_label,
+                        [concept_label, variant], cap_unit, style_roles,
+                        row_key=f"{variant}@{rk}"))
+            region.layout_fingerprint = _fingerprint(["CAPTION", concept_label])
+            block.regions.append(region)
+
+        for ck_row, grp_rows in label_runs:
+            ck: dict[int, str] = {}
+            if ck_row is not None:
+                ck = {c.col: str(c.value) for c in grid.row_values(ck_row, min_col, max_col)
+                      if isinstance(c.value, (int, float)) and not isinstance(c.value, bool)}
+            rows_rc = [(r, _RowClass("DATA", sorted([lc, *ns], key=lambda c: c.col)))
+                       for r, lc, ns in grp_rows]
+            bbox, mn_r, mx_r, mn_c, mx_c = self._bbox(rows_rc)
+            region = Region(region_id=f"{block.block_id}/r{ridx}", region_type="TABLE",
+                            bbox=bbox, min_row=mn_r, max_row=mx_r, min_col=mn_c, max_col=mx_c,
+                            orientation="row_concept")
+            ridx += 1
+            labels = []
+            for r, label_c, nums in grp_rows:
+                raw = str(label_c.value).strip()
+                _, unit = self._loose_label_unit(raw)
+                labels.append(raw)
+                for v in nums:
+                    rk = ck.get(v.col, get_column_letter(v.col))
+                    region.fields.append(self._mk_field(
+                        block.block_id, label_c, v, raw, [raw], unit,
+                        style_roles, row_key=rk))
+            region.layout_fingerprint = _fingerprint(["LABELRUN"] + labels)
+            block.regions.append(region)
 
         parts = [f"{reg.region_type}:{len(reg.fields)}" for reg in block.regions]
         block.layout_fingerprint = _fingerprint([width_sig] + parts)
@@ -612,6 +893,12 @@ class RegionDetector:
             first_leaf = leaf.get(data_cols[0]) or ""
             if _INSTANCE_NAME_COL_RE.search(first_leaf):
                 orientation = "col_concept"
+        # 첫 열 헤더가 'metric/항목/구분'이면 행이 개념이다 (전치 KPI/옵션 표:
+        # metric|기본|럼 추가…) — 열 헤더는 인스턴스/조건이 되어 row_key로 남는다
+        if orientation == "col_concept" and data_cols and not unit_cols:
+            first_leaf = leaf.get(data_cols[0]) or ""
+            if _METRIC_COL_RE.match(first_leaf):
+                orientation = "row_concept"
 
         # row-key column: 앞쪽 열부터 탐색해 전부 텍스트인 첫 열을 채택한다.
         # 세로 병합 그룹 열(예: 반복 2행에 걸친 Time/부재료)은 건너뛰며 계속 보고,
@@ -643,10 +930,12 @@ class RegionDetector:
 
         if orientation == "row_concept":
             self._extract_row_concept(grid, region, data_rows, data_cols, leaf, paths,
-                                      unit_cols[0], key_col, style_roles, block_id)
+                                      unit_cols[0] if unit_cols else None,
+                                      key_col, style_roles, block_id)
         else:
             self._extract_col_concept(grid, region, data_rows, data_cols, leaf, paths,
-                                      key_col, style_roles, block_id, col_units)
+                                      key_col, style_roles, block_id, col_units,
+                                      row_unit_cols=unit_cols)
 
         region.layout_fingerprint = _fingerprint(
             [region_type, orientation] + [leaf[c] for c in data_cols])
@@ -683,9 +972,18 @@ class RegionDetector:
                 region.fields.append(f)
 
     def _extract_col_concept(self, grid, region, data_rows, data_cols, leaf, paths,
-                             key_col, style_roles, block_id, col_units=None):
+                             key_col, style_roles, block_id, col_units=None,
+                             row_unit_cols=None):
         """Each column leaf header is a concept (e.g. 외경/길이); rows are instances."""
         col_units = col_units or {}
+        # 인스턴스 표의 '단위' 열: 필드로 만들지 않고, 각 행의 단위를 바로 왼쪽
+        # 데이터 열에 전파한다 (배합량 kg/g 혼합 — 치즈 0.115 kg ≠ 0.115 g).
+        row_unit_cols = [c for c in (row_unit_cols or []) if c != key_col]
+        unit_target: dict[int, int] = {}
+        for uc in row_unit_cols:
+            cands = [c for c in data_cols if c < uc and c != key_col and c not in row_unit_cols]
+            if cands:
+                unit_target[uc] = cands[-1]
         # '온도 프로파일 (℃)' 같은 단위를 가진 그룹 제목이 key 열 헤더에 있으면
         # 나머지 열의 문맥/단위로 상속한다 (가로형 profile, §2.3).
         group_path: list[str] = []
@@ -708,8 +1006,19 @@ class RegionDetector:
                     if a == c_ and b_ <= r <= d_:
                         key_cell = master
             row_key = str(key_cell.value).strip() if key_cell is not None and key_cell.value is not None else f"row{r}"
+            row_units: dict[int, str] = {}
+            for uc in row_unit_cols:
+                ucell = by_col.get(uc)
+                if ucell is None or ucell.value is None:
+                    continue
+                utxt = str(ucell.value).strip()
+                if utxt.lower() in self.PSEUDO_UNIT_TOKENS or not self._is_unit_token(utxt):
+                    continue
+                tgt = unit_target.get(uc)
+                if tgt is not None:
+                    row_units[tgt] = utxt
             for col in data_cols:
-                if col == key_col:
+                if col == key_col or col in row_unit_cols:
                     continue
                 v = by_col.get(col)
                 if v is None or v.value is None:
@@ -725,6 +1034,8 @@ class RegionDetector:
                             unit = u
                             break
                 unit = unit or col_units.get(col)   # 단위 헤더 행에서 온 열 단위
+                if col in row_units:
+                    unit = row_units[col]           # 행별 '단위' 열이 가장 구체적
                 full_path = path
                 if group_path and group_path[-1] not in path:
                     full_path = [*group_path, *path]

@@ -48,6 +48,30 @@ def _jsonable_value(v):
     return v
 
 
+_BAD_SHEET_CHARS = re.compile(r"[\\/*?:\[\]]")
+
+
+def _repair_sheet_names(path: Path) -> Path:
+    """workbook.xml의 시트명에서 금지 문자를 '_'로 바꾼 임시 사본을 만든다."""
+    import tempfile
+    import zipfile
+
+    tmp = Path(tempfile.mkstemp(suffix=".xlsx")[1])
+    with zipfile.ZipFile(path) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "xl/workbook.xml":
+                xml = data.decode("utf-8")
+                xml = re.sub(
+                    r'name="([^"]*)"',
+                    lambda m: 'name="' + _BAD_SHEET_CHARS.sub("_", m.group(1)) + '"',
+                    xml,
+                )
+                data = xml.encode("utf-8")
+            zout.writestr(item, data)
+    return tmp
+
+
 class WorkbookInspector:
     """Extracts a WorkbookStructure from one xlsx file (all sheets)."""
 
@@ -56,8 +80,18 @@ class WorkbookInspector:
 
     def inspect(self, path: Path, relative_to: Path | None = None) -> WorkbookStructure:
         path = Path(path)
-        wb_f = openpyxl.load_workbook(path, data_only=False)
-        wb_v = openpyxl.load_workbook(path, data_only=True)
+        try:
+            wb_f = openpyxl.load_workbook(path, data_only=False)
+            wb_v = openpyxl.load_workbook(path, data_only=True)
+        except ValueError:
+            # 시트명에 금지 문자('210?' 등)가 있으면 openpyxl이 로드를 거부한다.
+            # 원본은 불변(§10) — 시트명만 정화한 임시 사본으로 재시도한다.
+            repaired = _repair_sheet_names(path)
+            try:
+                wb_f = openpyxl.load_workbook(repaired, data_only=False)
+                wb_v = openpyxl.load_workbook(repaired, data_only=True)
+            finally:
+                repaired.unlink(missing_ok=True)
 
         rel = str(path.relative_to(relative_to)) if relative_to else path.name
         stat = path.stat()
