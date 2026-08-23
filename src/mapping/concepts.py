@@ -133,10 +133,19 @@ class ConceptMapper:
                     reasons["unit_conflict"] = f"{f.raw_unit} !~ {c.unit_dimension}"
                     continue  # 불가능한 후보 제거 (§5.2-4)
             elif f.raw_unit is None and c.unit_dimension and c.unit_dimension != "time_of_day":
-                # 단위 없는 필드 vs 단위 개념: 값이 숫자가 아니면 제외
+                # 단위 없는 필드 vs 단위 개념: 값이 숫자가 아니면 제외.
+                # 단, '180 ℃'처럼 값에 단위가 내장된 표기는 분해해 판단한다.
                 if f.raw_value is not None and not isinstance(f.raw_value, (int, float)) and not f.is_formula:
                     txt = str(f.raw_value)
-                    if not re.match(r"^[\d\.\-+~≥≤<> ]+$", txt):
+                    embedded = self.units.parse_value(txt)
+                    if embedded is not None:
+                        if self.units.in_dimension(embedded[1], c.unit_dimension):
+                            reasons["unit"] = f"embedded {embedded[1]} ~ {c.unit_dimension}"
+                            base = min(1.0, base + 0.05)
+                        else:
+                            reasons["unit_conflict"] = f"embedded {embedded[1]} !~ {c.unit_dimension}"
+                            continue
+                    elif not re.match(r"^[\d\.\-+~≥≤<> ]+$", txt):
                         reasons["type_conflict"] = "non-numeric for unit concept"
                         continue
 

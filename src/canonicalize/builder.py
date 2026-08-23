@@ -124,14 +124,20 @@ class RecordBuilder:
         concept = self.registry.concepts.get(decision.concept_id) if decision.concept_id else None
         value = f.cached_value if f.is_formula else f.raw_value
         raw_num = parse_number(value)
+        raw_unit = f.raw_unit
+        if raw_num is None:
+            # '180 ℃' / '24℃' 처럼 값에 단위가 내장된 표기 분해
+            embedded = self.units.parse_value(value)
+            if embedded is not None:
+                raw_num, raw_unit = embedded[0], raw_unit or embedded[1]
         raw_text = None if raw_num is not None else (str(value) if value is not None else None)
 
         # 결정론적 정규화: 단위 변환 (§5.1 canonical_unit 기준)
-        norm_num, canonical_unit = raw_num, f.raw_unit
+        norm_num, canonical_unit = raw_num, raw_unit
         if concept is not None and concept.canonical_unit and raw_num is not None:
             canonical_unit = concept.canonical_unit
-            if f.raw_unit and self.units.compatible(f.raw_unit, concept.canonical_unit):
-                norm_num = self.units.convert(raw_num, f.raw_unit, concept.canonical_unit)
+            if raw_unit and self.units.compatible(raw_unit, concept.canonical_unit):
+                norm_num = self.units.convert(raw_num, raw_unit, concept.canonical_unit)
         norm_text = raw_text
         d = parse_date(value)
         if concept is not None and concept.value_type == "date" and d:
@@ -167,7 +173,7 @@ class RecordBuilder:
             raw_value_num=raw_num,
             normalized_value_text=norm_text,
             normalized_value_num=norm_num,
-            raw_unit=f.raw_unit,
+            raw_unit=raw_unit,
             canonical_unit=canonical_unit,
             value_role=role,
             status_code=status_code,
@@ -316,9 +322,22 @@ class RecordBuilder:
                 if cid in bkey_by_concept:
                     business_key = bkey_by_concept[cid]
                     break
+        if business_key is None and bkey_by_concept:
+            # 우선순위 목록 밖의 도메인 고유 business key (예: 레시피명) —
+            # registry 등록 순서로 결정론적으로 선택한다
+            for cid in self.registry.concepts:
+                if cid in bkey_by_concept:
+                    business_key = bkey_by_concept[cid]
+                    break
         if business_key is None and title_key_fallback:
             m = _TITLE_KEY_RE.search(block.title)
-            business_key = m.group(1) if m else block.title
+            if m:
+                business_key = m.group(1)
+            else:
+                # 제목에서 업무 키를 못 뽑으면 '문서:시트'로 특정한다 — 여러 문서가
+                # 같은 블록 제목을 쓸 때 record_key가 문서 간 충돌해 서로의
+                # current 레코드를 덮어쓰는(SCD2 오염) 것을 막는다.
+                business_key = f"{Path(structure.file_name).stem}:{seg.sheet_name}"
         if business_key is None:
             business_key = f"row{ordinal + 1}"
 

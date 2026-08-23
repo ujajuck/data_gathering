@@ -85,6 +85,26 @@ python scripts/build_report.py     # → data/canonical/report.html (6패널 + W
   - 온톨로지(공정/품질/설비/에너지/시간/기타 도메인)와 지식 그래프
     (공정운전—uses→설비 등, 실제 레코드 co-occurrence 근거 포함) projection
 
+## 다중 도메인
+
+도메인(공정/제품군)마다 독립 워크스페이스를 쓴다 — 사전과 DB가 완전히 분리된다:
+
+```
+domains/financier/            # 예: 휘낭시에 실험 도메인 (베이커리)
+├─ config/                    #   도메인 전용 concepts/units/relations
+└─ data/raw/                  #   해당 도메인 원본 Excel
+```
+
+```bash
+python -m src.cli --repo-root domains/financier ingest --raw domains/financier/data/raw
+python -c "import uvicorn; from src.api.server import create_app; \
+           uvicorn.run(create_app('domains/financier', web_dir='web'), port=8001)"
+```
+
+같은 파서·API·프론트가 사전 교체만으로 동작한다. 휘낭시에 6개 문서(60개 시트)
+기준 레코드 150개, 관측치 17,268개, 매핑률 98% — LOT 대신 레시피가 허브 키가
+되고, 지식 그래프는 도메인 관계(굽는다/측정함/원가구성)로 자동 배치된다.
+
 ## DVC
 
 `dvc`가 설치된 환경에서는 `dvc add data/raw` + remote push로 원본 binary를

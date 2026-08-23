@@ -1,19 +1,44 @@
-// 지식 그래프 SVG 렌더러 — /api/graph 데이터 주입형 (시안과 동일한 레이아웃)
+// 지식 그래프 SVG 렌더러 — /api/graph 데이터 주입형.
+// 알려진 레이아웃(화학공정 시안)이 전부 매칭될 때만 고정 좌표를 쓰고,
+// 그 외 도메인은 허브(엣지 차수 최대) 중심 원형 자동 배치로 그린다.
 import { esc } from '../api.js';
 
-const POS = {
+const PRESET = {
   run: [300, 90], equipment: [640, 90], lot: [470, 265],
   input: [110, 265], output: [830, 220], quality: [170, 430],
   energy: [760, 400], time: [470, 480], document: [900, 500],
 };
-const R = { lot: 64, document: 38 };
+const PRESET_R = { lot: 64, document: 38 };
 const LABEL_T = {
   'energy|used_by': 0.22, 'equipment|consumes': 0.74,
   'output|produced_by': 0.28, 'run|produces': 0.42, 'lot|belongs_to': 0.62,
 };
 
+function layout(data) {
+  const classes = data.nodes.map(n => n.class);
+  if (classes.every(c => PRESET[c])) {
+    return { pos: PRESET, radii: PRESET_R, hub: 'lot' };
+  }
+  // 자동 배치: 엣지 차수가 가장 큰 클래스를 중심에, 나머지는 원형으로
+  const degree = Object.fromEntries(classes.map(c => [c, 0]));
+  for (const e of data.edges) {
+    if (e.subject in degree) degree[e.subject] += 1;
+    if (e.object in degree) degree[e.object] += 1;
+  }
+  const hub = classes.slice().sort((a, b) => degree[b] - degree[a])[0];
+  const ring = classes.filter(c => c !== hub);
+  const cx = 490, cy = 275, R = 195;
+  const pos = { [hub]: [cx, cy] };
+  ring.forEach((c, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / ring.length;
+    pos[c] = [Math.round(cx + R * Math.cos(a) * 1.55), Math.round(cy + R * Math.sin(a))];
+  });
+  return { pos, radii: { [hub]: 64 }, hub };
+}
+
 export function renderGraph(container, data) {
   const nodes = Object.fromEntries(data.nodes.map(n => [n.class, n]));
+  const { pos: POS, radii: R, hub } = layout(data);
   const parts = [];
   for (const e of data.edges) {
     if (!POS[e.subject] || !POS[e.object]) continue;
@@ -31,11 +56,11 @@ export function renderGraph(container, data) {
     const n = nodes[cls];
     if (!n) continue;
     const r = R[cls] || 52;
-    const onacc = cls === 'lot' ? ' onacc' : '';
-    parts.push(`<circle cx="${x}" cy="${y}" r="${r}" class="kgn kg-${cls}"/>`,
+    const onacc = cls === hub ? ' onacc' : '';
+    parts.push(`<circle cx="${x}" cy="${y}" r="${r}" class="kgn${cls === hub ? ' kg-lot' : ''}"/>`,
       `<text x="${x}" y="${y - 6}" class="lab${onacc}">${esc(n.name_ko)}</text>`,
       `<text x="${x}" y="${y + 13}" class="cnt${onacc}">${n.observation_count.toLocaleString()}건</text>`);
-    if (cls === 'lot' && n.instances.length) {
+    if (cls === hub && n.instances.length) {
       parts.push(`<text x="${x}" y="${y + 34}" class="sub">예: ${esc(n.instances[0])}</text>`);
     }
   }

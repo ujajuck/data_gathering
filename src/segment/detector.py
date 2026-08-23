@@ -86,6 +86,8 @@ _LIMIT_RE = re.compile(r"기준|상한|하한|한계|규격|spec", re.I)
 _MEASURED_RE = re.compile(r"실측|측정|값|value", re.I)
 _JUDGE_RE = re.compile(r"판정|결과|합부|result", re.I)
 _UNIT_COL_RE = re.compile(r"^\s*단위\s*$|^\s*units?\s*$", re.I)
+# 첫 열 헤더가 '이름' 성격이면 행은 개념이 아니라 인스턴스다 (예: 재료명/품명)
+_INSTANCE_NAME_COL_RE = re.compile(r"명\s*(\(|$)|이름|name", re.I)
 _SUMMARY_LABEL_RE = re.compile(r"종합|최종|overall|final", re.I)
 
 
@@ -159,17 +161,33 @@ class RegionDetector:
         self._legend_rows: set[int] = set()
 
     # ------------------------------------------------------------- tokens ----
+    # 단위행에 섞이는 스키마 서술 토큰 — 경로에서 제거하되 단위로는 쓰지 않는다
+    PSEUDO_UNIT_TOKENS = {"text", "enum", "timestamp", "h", "min", "unit", "memo",
+                          "name", "qty", "visual", "rule", "manual", "flag"}
+
     def _is_unit_token(self, text: str) -> bool:
         t = (text or "").strip()
         if not t or len(t) > 14:
             return False
+        if t.lower() in self.PSEUDO_UNIT_TOKENS:
+            return True
         if self.units is not None:
             norm = self.units.normalize_unit(t)
-            if self.units.dimensions_of(norm):
-                return True
-            # 값 타입 서술 행 토큰 (text/enum/timestamp 등)도 단위행으로 취급
-            return t.lower() in {"text", "enum", "timestamp", "h", "min"}
+            return bool(self.units.dimensions_of(norm))
         return t in _FALLBACK_UNITS
+
+    def _split_label_unit(self, label: str) -> tuple[str, str | None]:
+        """split_label_unit + 단위 검증: '(KR)'/'(EN)' 같은 비단위 괄호는
+        단위로 취급하지 않는다 (registry가 있으면 등록 단위만 인정)."""
+        base, unit = split_label_unit(label)
+        if unit is None:
+            return base, None
+        if self.units is not None:
+            if self.units.dimensions_of(unit):
+                return base, unit
+            return (label or "").strip(), None
+        return (base, unit) if unit in _FALLBACK_UNITS or not unit.isalpha() or len(unit) > 2 \
+            else ((label or "").strip(), None)
 
     # ------------------------------------------------------------ legend ----
     def detect_inline_legend(self, grid: SheetGrid) -> tuple[dict[str, str], set[int]]:
@@ -525,7 +543,7 @@ class RegionDetector:
             while i < len(cells) - 1:
                 c, v = cells[i], cells[i + 1]
                 if _is_text(c) and v.col - c.col <= 2 + grid.merge_width(c) - 1:
-                    label, unit = split_label_unit(str(c.value))
+                    label, unit = self._split_label_unit(str(c.value))
                     region.fields.append(self._mk_field(block_id, c, v, label, [label], unit, style_roles))
                     i += 2
                 else:
@@ -554,9 +572,9 @@ class RegionDetector:
             cleaned: list[str] = []
             for el in raw_path:
                 if self._is_unit_token(el):
-                    # 'text'/'enum' 같은 타입 서술 토큰은 경로에서만 제거하고
+                    # 'text'/'unit'/'memo' 같은 서술 토큰은 경로에서만 제거하고
                     # 실제 단위(차원 있음)만 열 단위로 기록한다
-                    pseudo = el.strip().lower() in {"text", "enum", "timestamp", "h", "min"}
+                    pseudo = el.strip().lower() in self.PSEUDO_UNIT_TOKENS
                     if not pseudo and (self.units is None or self.units.dimensions_of(el)):
                         col_units[col] = el
                 elif _SPEC_TOKEN_RE.match(el):
@@ -588,8 +606,16 @@ class RegionDetector:
 
         unit_cols = [c for c in data_cols if _UNIT_COL_RE.match(leaf[c] or "")]
         orientation = "row_concept" if unit_cols else "col_concept"
+        # 단위 열이 있어도 첫 열이 '재료명' 같은 인스턴스 이름 열이면
+        # 행=인스턴스(col_concept)다 — 행 라벨을 개념으로 오인하지 않는다
+        if orientation == "row_concept" and data_cols:
+            first_leaf = leaf.get(data_cols[0]) or ""
+            if _INSTANCE_NAME_COL_RE.search(first_leaf):
+                orientation = "col_concept"
 
-        # row-key column = first data col whose data values are mostly text
+        # row-key column: 앞쪽 열부터 탐색해 전부 텍스트인 첫 열을 채택한다.
+        # 세로 병합 그룹 열(예: 반복 2행에 걸친 Time/부재료)은 건너뛰며 계속 보고,
+        # 일반 값 열을 만나면 중단해 중간의 메모/판정 열을 키로 오인하지 않는다.
         key_col = None
         for col in data_cols:
             vals = [grid.cell(r, col) for r, _ in data_rows]
@@ -597,11 +623,17 @@ class RegionDetector:
             if vals and all(_is_text(v) for v in vals):
                 key_col = col
                 break
+            has_vmerge = any(
+                v.merged_range and (lambda b: b[0] == b[2] and b[3] > b[1])(
+                    range_boundaries(v.merged_range))
+                for v in vals)
+            if not has_vmerge:
+                break
 
         region_type = "TABLE"
         if orientation == "col_concept" and len(data_rows) == 1:
             # single measurement row + group title carrying a unit → horizontal profile
-            group_units = [split_label_unit(p)[1] for path in paths.values() for p in path]
+            group_units = [self._split_label_unit(p)[1] for path in paths.values() for p in path]
             if any(u for u in group_units):
                 region_type = "PROFILE"
 
@@ -629,7 +661,7 @@ class RegionDetector:
             label_cell = by_col.get(label_col)
             if label_cell is None or not _is_text(label_cell):
                 continue
-            concept_label, label_unit = split_label_unit(str(label_cell.value))
+            concept_label, label_unit = self._split_label_unit(str(label_cell.value))
             unit_cell = by_col.get(unit_col)
             row_unit = str(unit_cell.value).strip() if unit_cell is not None and unit_cell.value is not None else label_unit
             for col in data_cols:
@@ -658,15 +690,23 @@ class RegionDetector:
         # 나머지 열의 문맥/단위로 상속한다 (가로형 profile, §2.3).
         group_path: list[str] = []
         group_unit: str | None = None
-        anchor_col = key_col if key_col is not None else (data_cols[0] if data_cols else None)
+        # 그룹 제목 상속은 key 열이 있을 때만 — 첫 데이터 열을 그룹으로 오인 금지
+        anchor_col = key_col
         if anchor_col is not None and paths.get(anchor_col):
-            _, u = split_label_unit(paths[anchor_col][-1])
+            _, u = self._split_label_unit(paths[anchor_col][-1])
             if u:
                 group_path = paths[anchor_col]
                 group_unit = u
         for r, rc in data_rows:
             by_col = {c.col: c for c in rc.cells}
             key_cell = by_col.get(key_col) if key_col is not None else None
+            if key_cell is None and key_col is not None:
+                # 세로 병합된 key 셀(예: 부재료가 반복 2행에 걸쳐 병합) 값 상속
+                master = grid.resolved(r, key_col)
+                if master is not None and master.merged_range:
+                    a, b_, c_, d_ = range_boundaries(master.merged_range)
+                    if a == c_ and b_ <= r <= d_:
+                        key_cell = master
             row_key = str(key_cell.value).strip() if key_cell is not None and key_cell.value is not None else f"row{r}"
             for col in data_cols:
                 if col == key_col:
@@ -677,10 +717,10 @@ class RegionDetector:
                 path = paths[col]
                 if not path:
                     continue
-                label, unit = split_label_unit(path[-1])
+                label, unit = self._split_label_unit(path[-1])
                 if unit is None:
                     for p in path[:-1]:
-                        _, u = split_label_unit(p)
+                        _, u = self._split_label_unit(p)
                         if u:
                             unit = u
                             break
@@ -701,7 +741,7 @@ class RegionDetector:
                         bbox=bbox, min_row=mn_r, max_row=mx_r, min_col=mn_c, max_col=mx_c)
         for r, rc in rows:
             label_cell = rc.cells[0]
-            label, unit = split_label_unit(str(label_cell.value))
+            label, unit = self._split_label_unit(str(label_cell.value))
             for v in rc.cells[1:]:
                 f = self._mk_field(block_id, label_cell, v, label, [label], unit, style_roles)
                 f.style_role = "result" if (_JUDGE_RE.search(label) or _SUMMARY_LABEL_RE.search(label)) else f.style_role

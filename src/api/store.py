@@ -50,7 +50,7 @@ def stats(conn) -> dict:
         "mapped_pct": round(100 * mapped / obs) if obs else 0,
         "pending_mappings": q("SELECT count(*) FROM mapping_decision WHERE decision='pending'"),
         "lots": q(f"SELECT count(DISTINCT business_key) FROM v_current_record "
-                  f"WHERE business_key REGEXP '{ID_LIKE_SQL}'"),
+                  f"WHERE {HUB_KEY_SQL}"),
     }
 
 
@@ -77,9 +77,17 @@ def like_escape(q: str) -> str:
 
 # ------------------------------------------------------------------- lots ----
 
+# 허브 대상 business key: ID 패턴(BT26821, R-201) 또는 짧은 도메인 키(레시피명 등).
+# 'stem:sheet' 형태의 fallback 키(콜론 포함)와 문장형 제목(공백 포함)은 제외한다.
+HUB_KEY_SQL = (f"(business_key REGEXP '{ID_LIKE_SQL}' OR "
+               "(business_key <> '' AND instr(business_key, ':') = 0 AND "
+               "instr(business_key, ' ') = 0 AND length(business_key) <= 24 AND "
+               "business_key NOT REGEXP '^row[0-9]+$'))")
+
+
 def lots_page(conn, page: int = 1, size: int = 50, q: str | None = None) -> dict:
     page, size = clamp_page(page, size)
-    where = f"business_key REGEXP '{ID_LIKE_SQL}'"
+    where = HUB_KEY_SQL
     args: list = []
     if q:
         where += " AND business_key LIKE ? ESCAPE '\\'"

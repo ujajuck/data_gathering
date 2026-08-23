@@ -14,6 +14,9 @@ import yaml
 # "cP@25℃", "cP @25℃", "kWh/톤" 같은 조건/부가 표기를 떼어낸 코어 단위
 _CONDITION_RE = re.compile(r"\s*@.*$")
 
+# 값에 단위가 내장된 표기: "180 ℃", "24℃", "8 h" — 숫자부 + 짧은 단위부
+_VALUE_UNIT_RE = re.compile(r"^\s*([-+]?\d+(?:\.\d+)?)\s*([^\s\d]{1,8})\s*$")
+
 
 def _parse_entry(entry) -> tuple[float, float]:
     """factor 또는 {factor, offset} → (factor, offset)."""
@@ -61,6 +64,18 @@ class UnitRegistry:
 
     def compatible(self, unit_a: str | None, unit_b: str | None) -> bool:
         return bool(self.dimensions_of(unit_a) & self.dimensions_of(unit_b))
+
+    def parse_value(self, text) -> tuple[float, str] | None:
+        """'180 ℃' / '24℃' / '8 h' → (숫자, 등록된 단위). 등록 단위가 아니면 None."""
+        if not isinstance(text, str):
+            return None
+        m = _VALUE_UNIT_RE.match(text)
+        if not m:
+            return None
+        unit = self.normalize_unit(m.group(2))
+        if unit and self.dimensions_of(unit):
+            return float(m.group(1)), unit
+        return None
 
     def convert(self, value: float, from_unit: str, to_unit: str) -> float:
         """Convert within one shared dimension; raises on incompatible units."""

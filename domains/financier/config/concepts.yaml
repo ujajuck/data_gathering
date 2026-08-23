@@ -1,0 +1,360 @@
+version: '2'
+domains:
+  experiment:
+    name_ko: 실험조건
+    name_en: Experiment
+  quality:
+    name_ko: 품질/관능
+    name_en: Quality
+  cost:
+    name_ko: 원가
+    name_en: Cost
+  sales:
+    name_ko: 판매
+    name_en: Sales
+  time:
+    name_ko: 시간
+    name_en: Time
+  misc:
+    name_ko: 기타
+    name_en: Misc
+concepts:
+- concept_id: recipe_name
+  canonical_name_ko: 레시피
+  canonical_name_en: Recipe
+  domain: experiment
+  value_type: string
+  synonyms:
+  - 레시피명
+  - recipe
+  - 제품명
+  is_business_key: true
+- concept_id: oven_temperature
+  canonical_name_ko: 오븐온도
+  canonical_name_en: Oven Temperature
+  domain: experiment
+  value_type: float
+  canonical_unit: ℃
+  unit_dimension: temperature
+  synonyms:
+  - 오븐설정
+  - 온도(℃)
+  - 온도
+  - Oven Temp
+- concept_id: experiment_date
+  canonical_name_ko: 실험일
+  canonical_name_en: Experiment Date
+  domain: time
+  value_type: date
+  synonyms:
+  - 실험일자
+  - 관찰 기간
+  is_event_time: true
+- concept_id: dough_aging
+  canonical_name_ko: 반죽숙성
+  canonical_name_en: Dough Aging
+  domain: experiment
+  value_type: string
+  synonyms:
+  - 반죽 숙성
+  - 숙성시간
+- concept_id: ambient_temperature
+  canonical_name_ko: 실내온도
+  canonical_name_en: Ambient Temperature
+  domain: experiment
+  value_type: float
+  canonical_unit: ℃
+  unit_dimension: temperature
+  synonyms:
+  - Ambient
+- concept_id: pan_type
+  canonical_name_ko: 팬/몰드
+  canonical_name_en: Pan Type
+  domain: experiment
+  value_type: string
+  synonyms:
+  - 몰드
+  - 팬
+- concept_id: repetition
+  canonical_name_ko: 반복
+  canonical_name_en: Repetition
+  domain: experiment
+  value_type: int
+  synonyms:
+  - rep
+  - 실험 반복
+  - n
+- concept_id: time_point
+  canonical_name_ko: 측정시점
+  canonical_name_en: Time Point
+  domain: time
+  value_type: float
+  canonical_unit: min
+  unit_dimension: duration
+  synonyms:
+  - Time
+  - Time(min)
+  - 경과시간
+- concept_id: addin
+  canonical_name_ko: 부재료
+  canonical_name_en: Add-in
+  domain: experiment
+  value_type: string
+  synonyms:
+  - Add-in
+  - 부재료/Add-in
+  - 토핑
+  - condition
+  - 옵션
+  - option
+- concept_id: batch_standard
+  canonical_name_ko: 기준배치
+  canonical_name_en: Batch Standard
+  domain: experiment
+  value_type: string
+  synonyms:
+  - 기준 배치
+- concept_id: core_temperature
+  canonical_name_ko: 심부온도
+  canonical_name_en: Core Temperature
+  domain: quality
+  value_type: float
+  canonical_unit: ℃
+  unit_dimension: temperature
+  synonyms:
+  - 심부온도(℃)
+  - Core Temp
+- concept_id: core_temp_max
+  canonical_name_ko: 심부최대온도
+  canonical_name_en: Core Max Temperature
+  domain: quality
+  parent_concept: core_temperature
+  value_type: float
+  canonical_unit: ℃
+  unit_dimension: temperature
+  synonyms:
+  - Core max
+  - 평균 심부최대온도(℃)
+- concept_id: rise_height
+  canonical_name_ko: 부풀기
+  canonical_name_en: Rise Height
+  domain: quality
+  value_type: float
+  canonical_unit: mm
+  unit_dimension: length
+  synonyms:
+  - 부풀기(mm)
+  - 평균 부풀기(mm)
+  - rise
+- concept_id: crack
+  canonical_name_ko: 균열
+  canonical_name_en: Crack
+  domain: quality
+  value_type: category
+  synonyms:
+  - 갈라짐
+- concept_id: crack_rate
+  canonical_name_ko: 균열발생률
+  canonical_name_en: Crack Rate
+  domain: quality
+  parent_concept: crack
+  value_type: float
+  canonical_unit: '%'
+  unit_dimension: percent
+  synonyms:
+  - 균열발생률(%)
+- concept_id: surface_color
+  canonical_name_ko: 표면색
+  canonical_name_en: Surface Color
+  domain: quality
+  value_type: category
+  synonyms:
+  - visual
+  - 색상
+- concept_id: moistness
+  canonical_name_ko: 촉촉함
+  canonical_name_en: Moistness
+  domain: quality
+  value_type: float
+  canonical_unit: score
+  unit_dimension: score
+  synonyms:
+  - moist
+  - 촉촉함/moist
+- concept_id: weight_loss
+  canonical_name_ko: 무게손실
+  canonical_name_en: Weight Loss
+  domain: quality
+  value_type: float
+  canonical_unit: '%'
+  unit_dimension: percent
+  synonyms:
+  - 무게손실(%)
+- concept_id: ingredient_name
+  canonical_name_ko: 재료명
+  canonical_name_en: Ingredient
+  domain: cost
+  value_type: string
+  synonyms:
+  - 재료명(KR)
+  - Ingredient(EN)
+  - Ingredient
+- concept_id: ingredient_qty
+  canonical_name_ko: 배합량
+  canonical_name_en: Quantity
+  domain: cost
+  value_type: float
+  canonical_unit: g
+  unit_dimension: mass
+  synonyms:
+  - qty
+  - 배합
+- concept_id: unit_price
+  canonical_name_ko: 단가
+  canonical_name_en: Unit Price
+  domain: cost
+  value_type: float
+  canonical_unit: KRW
+  unit_dimension: currency
+  synonyms:
+  - 단가(원/g or ea)
+  - unit price
+- concept_id: batch_cost
+  canonical_name_ko: 배치원가
+  canonical_name_en: Batch Cost
+  domain: cost
+  value_type: float
+  canonical_unit: KRW
+  unit_dimension: currency
+  synonyms:
+  - 배치 원가(원)
+  - 배치 총원가
+  - cost
+- concept_id: cost_ratio
+  canonical_name_ko: 원가비율
+  canonical_name_en: Cost Ratio
+  domain: cost
+  value_type: float
+  canonical_unit: '%'
+  unit_dimension: percent
+  synonyms:
+  - 비율(%)
+- concept_id: unit_cost
+  canonical_name_ko: 개당원가
+  canonical_name_en: Unit Cost
+  domain: cost
+  value_type: float
+  canonical_unit: KRW
+  unit_dimension: currency
+  synonyms:
+  - 개당 원가(12ea 기준)
+  - 평균 원가/ea(원)
+  - 개당 원가
+- concept_id: packaging_cost
+  canonical_name_ko: 포장비
+  canonical_name_en: Packaging Cost
+  domain: cost
+  value_type: float
+  canonical_unit: KRW
+  unit_dimension: currency
+  synonyms:
+  - 포장/라벨 추가
+- concept_id: est_price
+  canonical_name_ko: 추정판매가
+  canonical_name_en: Estimated Price
+  domain: cost
+  value_type: float
+  canonical_unit: KRW
+  unit_dimension: currency
+  synonyms:
+  - 추정 판매가
+- concept_id: vendor
+  canonical_name_ko: 공급처
+  canonical_name_en: Vendor
+  domain: cost
+  value_type: string
+  synonyms:
+  - vendor
+  - 거래처
+- concept_id: extra_cost
+  canonical_name_ko: 추가원가
+  canonical_name_en: Extra Cost
+  domain: cost
+  value_type: float
+  canonical_unit: KRW
+  unit_dimension: currency
+  synonyms:
+  - 추가원가(원/ea)
+  - Δ cost
+- concept_id: base_cost
+  canonical_name_ko: 기준원가
+  canonical_name_en: Base Cost
+  domain: cost
+  value_type: float
+  canonical_unit: KRW
+  unit_dimension: currency
+  synonyms:
+  - 기준원가(원/ea)
+  - base cost
+- concept_id: cost_increase
+  canonical_name_ko: 원가상승률
+  canonical_name_en: Cost Increase
+  domain: cost
+  value_type: float
+  canonical_unit: '%'
+  unit_dimension: percent
+  synonyms:
+  - 원가상승률(%)
+- concept_id: sales_rate
+  canonical_name_ko: 판매율
+  canonical_name_en: Sales Rate
+  domain: sales
+  value_type: float
+  canonical_unit: '%'
+  unit_dimension: percent
+  synonyms:
+  - 예상 판매율(%)
+  - 예상 판매율
+  - 판매율(%)
+- concept_id: repurchase_index
+  canonical_name_ko: 재구매지수
+  canonical_name_en: Repurchase Index
+  domain: sales
+  value_type: float
+  canonical_unit: ratio
+  unit_dimension: ratio
+  synonyms: []
+- concept_id: avg_ticket
+  canonical_name_ko: 평균객단가
+  canonical_name_en: Average Ticket
+  domain: sales
+  value_type: float
+  canonical_unit: KRW
+  unit_dimension: currency
+  synonyms:
+  - 평균객단가(원)
+- concept_id: memo
+  canonical_name_ko: 메모
+  canonical_name_en: Memo
+  domain: misc
+  value_type: string
+  synonyms:
+  - 비고
+  - Note
+  - Remark
+  - 참고
+- concept_id: doc_version
+  canonical_name_ko: 문서버전
+  canonical_name_en: Version
+  domain: misc
+  value_type: string
+  synonyms:
+  - ver.
+- concept_id: judgment_criteria
+  canonical_name_ko: 판정기준
+  canonical_name_en: Judgment Criteria
+  domain: experiment
+  value_type: string
+  synonyms:
+  - 판정 기준
+  - 검사기준
