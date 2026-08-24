@@ -7,6 +7,7 @@
     python -m src.cli export                 # 표준 5-sheet workbook 생성
     python -m src.cli status                 # 문서/버전/레코드 현황
     python -m src.cli reprocess --force      # 캐시 무시 전체 재처리
+    python -m src.cli survey --raw incoming/ # 적재 전 어휘 조사 (사전 격차 리포트)
 """
 from __future__ import annotations
 
@@ -50,7 +51,30 @@ def main(argv: list[str] | None = None) -> int:
     p_re.add_argument("--raw", default="data/raw", type=Path)
     p_re.add_argument("--force", action="store_true", default=True)
 
+    p_sv = sub.add_parser("survey", help="적재 전 어휘 조사 (dry-run 매핑 — DB/캐시 미변경)")
+    p_sv.add_argument("--raw", default="data/raw", type=Path)
+    p_sv.add_argument("--file", action="append", type=Path,
+                      help="개별 파일 지정 (반복 가능). 지정 시 --raw 무시")
+    p_sv.add_argument("--out", default=None, type=Path, help="JSON 리포트 저장 경로(선택)")
+
     args = parser.parse_args(argv)
+
+    if args.cmd == "survey":
+        # 적재 전 단계 — Pipeline(DB 생성)을 만들지 않는다
+        from src.survey import survey_dir, survey_paths
+        if args.file:
+            report = survey_paths(args.repo_root, args.file)
+        else:
+            report = survey_dir(args.repo_root, args.raw)
+        text = json.dumps(report, ensure_ascii=False, indent=2)
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(text, encoding="utf-8")
+            print(f"survey report: {args.out}")
+        else:
+            print(text)
+        return 0
+
     pipe = Pipeline(args.repo_root, db_path=args.db)
 
     if args.cmd == "ingest":

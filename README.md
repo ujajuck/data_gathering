@@ -28,6 +28,7 @@ python -m src.cli graph             # 지식 그래프 projection (엔티티/관
 python -m src.cli ontology          # 개념 온톨로지 계층
 python -m src.cli watch             # polling watcher 루프 (debounce+안정화)
 python -m src.cli reprocess         # 캐시 무시 전체 재처리
+python -m src.cli survey --raw incoming/   # 적재 전 어휘 조사 (사전 격차 리포트)
 
 python -m pytest tests/            # §14 합격 기준 + 복합/혼돈 실데이터 + API 71개 테스트
 ```
@@ -48,6 +49,27 @@ uvicorn src.api.server:app --port 8000
   승격되고 사전 버전이 올라가 다음 ingest부터 재매핑된다 (§5 학습 루프).
 - 프론트(`web/`)는 빌드 파이프라인 없는 순수 ES Module — 컴포넌트는 DOM을
   반환하는 순수 함수라 파일 복사만으로 재사용 가능하다. 구조는 WEB_PLAN.md 참고.
+
+### 적재 전 어휘 조사 (survey — 온톨로지 우선 워크플로)
+
+신규 문서 묶음은 바로 적재하지 말고 먼저 조사한다. `survey`는 DB/캐시를 일절
+건드리지 않는 dry-run으로 구조 해석 + 매핑만 수행해서 사전 격차를 보고한다:
+
+```bash
+python -m src.cli --repo-root domains/financier survey --raw incoming/ --out survey.json
+```
+
+- **미지 라벨**: 후보 개념이 없는 라벨 (신규 개념 정의 필요) — 빈도/출처/표본 값 포함
+- **모호 라벨**: 후보는 있으나 auto 임계(0.85) 미달 — 후보 개념·신뢰도와 함께 제시
+- **미등록 단위**: 값의 단위뿐 아니라, 단위가 라벨/헤더로 흡수된 경우까지 탐지
+  (예: °F 미등록 시 화씨 값이 무단위로 ℃ 개념에 적재되는 침묵 오염을 사전 차단)
+- **예상 매핑률**: 이대로 적재했을 때의 커버리지 예측
+- **proposal_yaml**: 후보 개념별 동의어 후보 / 신규 개념·단위 스텁 — 검토 후
+  concepts/units.yaml에 반영하면 적재→pending→수정→재적재 사이클이 한 번으로 준다
+
+검증: 혼돈양식 v3 6종을 보강 전(v4) 사전으로 survey하면 예상 매핑률 48.9%와
+함께 실제로 보강이 필요했던 라벨('core T' 468건, 'PUFF / dome rise', '봉투 폭',
+'°F' 등)을 정확히 짚는다. 보강 후 예상치(98.1%)는 실제 적재 결과와 일치한다.
 
 서버 없이 공유할 스냅샷이 필요하면 정적 리포트 생성기를 쓴다:
 
