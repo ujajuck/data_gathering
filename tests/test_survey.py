@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import pytest
 import yaml
@@ -85,3 +86,74 @@ def test_survey_proposal_yaml(root):
     assert "core T" in yaml_text
     # '봉투 폭'은 개념이 사라졌으니 미지 라벨(신규 개념 스텁)로
     assert "봉투 폭" in yaml_text
+
+
+def test_survey_mixed_absolute_relative_paths(root):
+    """--repo-root와 파일 경로의 절대/상대 표기가 달라도 죽지 않는다 (resolve 일치)."""
+    import os
+    # repo_root 절대 + 파일 절대 (repo 밖) — 기본 케이스
+    report = survey_paths(root, [F_CHEESE.resolve()])
+    assert report["totals"]["files"] == 1
+    # repo_root 상대 표기 + repo 안의 절대 경로 파일
+    (root / "incoming").mkdir()
+    shutil.copy2(F_CHEESE, root / "incoming" / F_CHEESE.name)
+    cwd = os.getcwd()
+    os.chdir(root)
+    try:
+        report = survey_paths(Path("."), [(root / "incoming" / F_CHEESE.name).resolve()])
+    finally:
+        os.chdir(cwd)
+    assert report["totals"]["files"] == 1 and not report["errors"]
+
+
+def test_survey_continues_past_broken_file(root):
+    """깨진 파일 하나가 전체 조사를 중단시키지 않는다 — errors로 보고하고 계속."""
+    bad = root / "broken.xlsx"
+    bad.write_bytes(b"this is not a zip archive")
+    report = survey_paths(root, [bad, F_CHEESE])
+    assert report["totals"]["files"] == 1
+    assert report["totals"]["failed_files"] == 1
+    assert report["errors"][0]["file"] == "broken.xlsx"
+    assert report["totals"]["observations"] > 500      # 치즈는 정상 조사됨
+
+
+def test_survey_dir_missing_raises(root):
+    """존재하지 않는 디렉터리는 빈 성공 리포트가 아니라 명시적 오류다."""
+    from src.survey import survey_dir
+    with pytest.raises(FileNotFoundError):
+        survey_dir(root, root / "no_such_dir")
+
+
+def test_pseudo_tokens_not_flagged_as_units(root):
+    """text/enum/timestamp 같은 스키마 서술 토큰은 미등록 단위로 제안하지 않는다."""
+    from src.survey import VocabularySurveyor
+    s = VocabularySurveyor(root)
+    assert not s._suspected_unit_token("text")
+    assert not s._suspected_unit_token("enum")
+    assert not s._suspected_unit_token("timestamp")
+    assert not s._suspected_unit_token("1%")           # 값+단위 합성도 제외
+    assert s._suspected_unit_token("°F") is False      # 등록되어 있으면 False
+    # °F를 registry에서 지운 상태를 흉내: 임시로 units만 교체
+    import yaml as _yaml
+    upath = root / "config" / "units.yaml"
+    cfg = _yaml.safe_load(upath.read_text(encoding="utf-8"))
+    cfg["aliases"] = {k: v for k, v in (cfg.get("aliases") or {}).items() if v != "°F"}
+    cfg["dimensions"]["temperature"].pop("°F", None)
+    upath.write_text(_yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False),
+                     encoding="utf-8")
+    s2 = VocabularySurveyor(root)
+    assert s2._suspected_unit_token("°F") is True      # 미등록이면 의심 단위
+
+
+def test_proposal_yaml_is_valid_yaml(root):
+    """proposal_yaml은 따옴표/특수문자 라벨이 있어도 파싱 가능한 YAML이다."""
+    cpath = root / "config" / "concepts.yaml"
+    cfg = yaml.safe_load(cpath.read_text(encoding="utf-8"))
+    for c in cfg["concepts"]:
+        if c["concept_id"] == "core_temperature":
+            c["synonyms"] = [s for s in c.get("synonyms", []) if s != "core T"]
+    cpath.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False),
+                     encoding="utf-8")
+    report = survey_paths(root, [F_CHEESE, F_CHOCO])
+    parsed = yaml.safe_load(report["proposal_yaml"])
+    assert isinstance(parsed, dict) and "add_synonyms" in parsed

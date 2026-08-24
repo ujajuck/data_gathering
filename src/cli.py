@@ -61,11 +61,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "survey":
         # 적재 전 단계 — Pipeline(DB 생성)을 만들지 않는다
+        import sys
+
         from src.survey import survey_dir, survey_paths
-        if args.file:
-            report = survey_paths(args.repo_root, args.file)
-        else:
-            report = survey_dir(args.repo_root, args.raw)
+        try:
+            if args.file:
+                report = survey_paths(args.repo_root, args.file)
+            else:
+                report = survey_dir(args.repo_root, args.raw)
+        except FileNotFoundError as e:
+            print(f"survey: {e}", file=sys.stderr)
+            return 2
         text = json.dumps(report, ensure_ascii=False, indent=2)
         if args.out:
             args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -73,7 +79,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"survey report: {args.out}")
         else:
             print(text)
-        return 0
+        # 조사한 파일이 하나도 없으면(빈 디렉터리/전부 실패) 성공으로 위장하지 않는다
+        return 0 if report["totals"]["files"] else 1
 
     pipe = Pipeline(args.repo_root, db_path=args.db)
 
