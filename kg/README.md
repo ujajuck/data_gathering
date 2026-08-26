@@ -60,7 +60,15 @@ python -m kg.cli --ws domains/financier metrics                               # 
 - Tree: 2,833 노드 / payload 24,348 값 / 헤더 locator 보존 100%
 - Mapping: 2,261 판정 — AUTO 89.1%, REVIEW 4.4%, UNMAPPED 6.5% (rule judge)
 - 역탐색: `core_temperature` → 두 양식·12문서 횡단, `core T`(전치)·`°F`(화씨) 소스 포함
-- Build: `experiment_result` 767행 (°F→℃, cm→mm 정규화), lineage 2,522셀
-- 변경 추적: 값 수정 → 매핑 승계 + payload 교체 / 헤더 개명 → 제거+추가 + 매핑 비활성화
+- Build: `experiment_result` 2,662행 (°F→℃·cm→mm 정규화, add-in별 시계열 보존),
+  lineage 8,958셀. 비호환 단위는 변환하지 않고(§15) 빌드 로그 warnings로 드러난다
+- 변경 추적: 값 수정 → 매핑 승계 + payload 교체 / 헤더 개명 → 제거+추가 + 매핑
+  비활성화 / 개명 원복 → 노드 부활(added). ingest는 원자적(도중 실패 시 전체 롤백)
 
-테스트: `python -m pytest tests/test_kg_system.py` (10 cases, 전체 스위트 90개와 공존).
+정책 노트: `REJECTED`는 사람의 결정이므로 자동 재평가하지 않는다(검수자가
+`review --action remap`으로만 변경). 사전 보강 후에는 `map --retry-unmapped`로
+UNMAPPED만 재평가한다. `lineage_edge.transform_path`는 해당 빌드의 선형 DAG
+전체이며, 파생/집계 셀은 lineage 항목의 `derived`/`aggregated` 표식으로
+구분된다.
+
+테스트: `python -m pytest tests/test_kg_system.py` (20 cases — 적대 리뷰 회귀 10건 포함, 전체 스위트 100개와 공존).

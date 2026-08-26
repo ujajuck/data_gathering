@@ -48,11 +48,15 @@ def _each_frame(fn):
 
 
 # ------------------------------------------------------------------ blocks --
+_META_KEY = "__frame_meta__"    # union이 심는 행별 소스 메타 — 모든 블록이 보존해야 한다
+
+
 @_each_frame
 def _select(f: Frame, cfg: dict, env: dict) -> Frame:
     cols = [c for c in (cfg.get("columns") or f.columns) if c in f.columns]
     f.rows = [{c: r.get(c) for c in cols} for r in f.rows]
-    f.lineage = [{c: ln.get(c) for c in cols} for ln in f.lineage]
+    f.lineage = [{**({_META_KEY: ln[_META_KEY]} if _META_KEY in ln else {}),
+                  **{c: ln.get(c) for c in cols}} for ln in f.lineage]
     f.columns = cols
     return f
 
@@ -85,25 +89,40 @@ def _type_cast(f: Frame, cfg: dict, env: dict) -> Frame:
 
 @_each_frame
 def _unit_convert(f: Frame, cfg: dict, env: dict) -> Frame:
-    """각 셀의 원본 노드 단위 → 필드 target_unit 변환 (units.yaml 기준, §10)."""
+    """각 셀의 원본 노드 단위 → 필드 target_unit 변환 (units.yaml 기준, §10).
+
+    변환 후 lineage의 unit을 target으로 갱신한다 — 블록 재적용 시 이중 변환
+    금지. 파생/집계 셀(derived/aggregated)은 원본 단위 개념이 없으므로 건드리지
+    않는다. 비호환·미등록 단위는 원본 보존(§15)하되 env['warnings']에 집계해
+    빌드 로그로 드러낸다 — 침묵 혼입 방지.
+    """
     units = env.get("units")
     targets: dict[str, str] = cfg.get("targets") or env.get("field_units") or {}
     node_units: dict[str, str] = env.get("node_units") or {}
     if units is None:
         return f
+    warn: dict[tuple, int] = {}
     for i, r in enumerate(f.rows):
         for col, tgt in targets.items():
             v = r.get(col)
             if v is None or not isinstance(v, (int, float)) or not tgt:
                 continue
             ln = f.lineage[i].get(col) or {}
+            if ln.get("derived") or ln.get("aggregated"):
+                continue
             src_unit = ln.get("unit") or node_units.get(ln.get("node_id") or "", None)
-            if not src_unit:
+            if not src_unit or src_unit == tgt:
                 continue
             try:
                 r[col] = round(units.convert(float(v), src_unit, tgt), 6)
+                ln["unit"] = tgt              # 변환 완료 표식 — 이중 변환 방지
             except (ValueError, KeyError):
-                pass                # 비호환/미등록 단위 — 원본 보존, 자동 변환 금지 (§15)
+                # 비호환/미등록 — 원본 보존, 자동 변환 금지 (§15). 단, 드러낸다.
+                warn[(col, src_unit, tgt)] = warn.get((col, src_unit, tgt), 0) + 1
+    if warn:
+        env.setdefault("warnings", []).extend(
+            {"op": "unit_convert", "column": c, "from": s, "to": t, "cells": n}
+            for (c, s, t), n in warn.items())
     return f
 
 
@@ -124,8 +143,14 @@ def _value_mapping(f: Frame, cfg: dict, env: dict) -> Frame:
     default = cfg.get("default", "__keep__")
     for r in f.rows:
         v = r.get(col)
-        if v in mapping:
-            r[col] = mapping[v]
+        # 숫자 키는 config JSON 왕복에서 문자열이 되므로 str 표기로도 조회한다
+        # (payload 숫자는 float라 180.0 → '180'까지 시도)
+        cands = [v, str(v)]
+        if isinstance(v, float) and v.is_integer():
+            cands.append(str(int(v)))
+        key = next((k for k in cands if k in mapping), None)
+        if key is not None:
+            r[col] = mapping[key]
         elif default != "__keep__":
             r[col] = default
     return f
@@ -176,7 +201,7 @@ def _union(frames: list[Frame], cfg: dict, env: dict) -> list[Frame]:
         for r, ln in zip(f.rows, f.lineage):
             out.rows.append({c: r.get(c) for c in cols})
             merged = {c: ln.get(c) for c in cols}
-            merged["__frame_meta__"] = f.meta
+            merged[_META_KEY] = ln.get(_META_KEY) or f.meta
             out.lineage.append(merged)
     return [out]
 
@@ -204,11 +229,14 @@ def _join(frames: list[Frame], cfg: dict, env: dict) -> list[Frame]:
                 by_key[k] = ({c: None for c in cols}, {})
                 order.append(k)
             row, lnk = by_key[k]
+            if _META_KEY in ln and _META_KEY not in lnk:
+                lnk[_META_KEY] = ln[_META_KEY]
+            elif _META_KEY not in lnk and f.meta:
+                lnk[_META_KEY] = f.meta
             for c in f.columns:
                 if r.get(c) is not None:
                     row[c] = r.get(c)
-                    if ln.get(c) is not None:
-                        lnk[c] = ln.get(c)
+                    lnk[c] = ln.get(c)      # 값과 계보는 항상 같은 셀에서 온다
     out = Frame(cols, [by_key[k][0] for k in order], [by_key[k][1] for k in order],
                 meta={"join_on": on})
     return [out, *rest]
@@ -226,7 +254,9 @@ def _aggregate(frames: list[Frame], cfg: dict, env: dict) -> list[Frame]:
         nf = Frame(cols, meta={**f.meta, "aggregated": True})
         for key, idxs in groups.items():
             row = dict(zip(group_by, key))
-            ln: dict = {}
+            first_meta = next((f.lineage[i][_META_KEY] for i in idxs
+                               if _META_KEY in f.lineage[i]), None)
+            ln: dict = {_META_KEY: first_meta} if first_meta else {}
             for col, how in aggs.items():
                 vals = [f.rows[i].get(col) for i in idxs
                         if isinstance(f.rows[i].get(col), (int, float))]

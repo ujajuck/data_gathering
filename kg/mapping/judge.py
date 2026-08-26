@@ -108,7 +108,10 @@ class LLMJudge:
             return d
 
         cid = data.get("concept_id")
-        conf = float(data.get("confidence") or 0.0)
+        try:
+            conf = max(0.0, min(1.0, float(data.get("confidence") or 0.0)))
+        except (TypeError, ValueError):
+            conf = 0.0
         reason = str(data.get("reason") or "")
         valid_ids = {c.concept_id for c in candidates}
         if cid == "UNMAPPED" or cid not in valid_ids:

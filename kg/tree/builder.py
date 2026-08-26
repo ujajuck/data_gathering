@@ -58,13 +58,13 @@ class NodeDraft:
     content_fingerprint: str = ""
 
     def finalize(self) -> None:
-        # 대표값은 content 지문에만 넣는다 — 값 수정이 의미 재매핑을 유발하지
-        # 않도록 semantic/content 지문을 분리한다 (§12.2 권장).
+        # 값에서 유도되는 것(대표값, 관찰 data_type)은 content 지문에만 넣는다 —
+        # 값 수정이 의미 재매핑을 유발하지 않도록 semantic/content를 분리한다
+        # (§12.2 권장: semantic fingerprint와 content fingerprint의 분리).
         self.semantic_fingerprint = _fp([
-            self.node_type, self.tree_path, self.node_name, self.unit,
-            self.data_type])
+            self.node_type, self.tree_path, self.node_name, self.unit])
         self.content_fingerprint = _fp([
-            self.semantic_fingerprint, self.representative_values,
+            self.semantic_fingerprint, self.data_type, self.representative_values,
             [(r[0], r[1], r[2]) for r in self.payload_rows]])
 
 
@@ -123,8 +123,14 @@ class KnowledgeTreeBuilder:
                 title_occ[title] += 1
                 block_path = f"{sheet_path}/{title}#{occ}"
                 first_table: NodeDraft | None = None
-                for ridx, region in enumerate(block.regions):
-                    table_path = f"{block_path}/r{ridx}"
+                sig_occ: Counter = Counter()
+                for region in block.regions:
+                    # Region 정체성은 위치 인덱스가 아니라 구조 시그니처로 잡는다 —
+                    # 앞 Region이 삭제돼도 살아남은 Region이 남의 node_id를
+                    # 물려받지 않는다 (같은 구조 반복만 발생 순서로 구분).
+                    sig = f"{region.region_type}:{(region.layout_fingerprint or '')[:10]}"
+                    table_path = f"{block_path}/{sig}#{sig_occ[sig]}"
+                    sig_occ[sig] += 1
                     table = NodeDraft(
                         node_id=stable_id(document_id, table_path),
                         parent_node_id=sheet.node_id, node_type="TABLE",
@@ -239,6 +245,8 @@ def load_workbook_tree(store: KgStore, repo_root: Path, path: Path,
     doc_dict = extract_document_dictionary(structure, registry) if registry else None
     segs = segment_workbook(structure, parser_rules, units=units,
                             skip_sheets=doc_dict.sheet_names if doc_dict else None)
-    document_id = stable_id(structure.file_name)
+    # 논리 문서 ID는 경로 기반 — 다른 디렉터리의 동명 파일이 병합되지 않는다
+    logical_path = structure.relative_path if rel is not None else str(path)
+    document_id = stable_id(logical_path)
     drafts = KnowledgeTreeBuilder().build(document_id, structure, segs)
     return document_id, drafts, sha256_file(path)

@@ -116,7 +116,12 @@ def cmd_map(ws: Workspace, args) -> int:
     from kg.mapping.retriever import DomainRetriever
     judge = get_judge()
     retriever = DomainRetriever(ws.store, units=ws.units)
-    stats = map_document(ws.store, retriever, judge)
+    try:
+        stats = map_document(ws.store, retriever, judge,
+                             retry_unmapped=getattr(args, "retry_unmapped", False))
+    except RuntimeError as e:
+        print(f"map: {e}", file=sys.stderr)
+        return 2
     _emit({"judge": judge.name, **stats})
     return 0
 
@@ -257,7 +262,9 @@ def main(argv: list[str] | None = None) -> int:
     pi.add_argument("--file", default=None, type=Path)
     pi.add_argument("--map", action="store_true", help="적재 후 바로 매핑")
 
-    sub.add_parser("map", help="미매핑 노드 Semantic Mapping")
+    pm = sub.add_parser("map", help="미매핑 노드 Semantic Mapping")
+    pm.add_argument("--retry-unmapped", action="store_true",
+                    help="사전 보강 후 UNMAPPED 노드 재평가")
 
     ps = sub.add_parser("search", help="Domain Concept 역탐색 (§8.1)")
     ps.add_argument("concept")

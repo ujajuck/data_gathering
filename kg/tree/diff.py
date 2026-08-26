@@ -75,46 +75,68 @@ def _write_payload(store: KgStore, d: NodeDraft, version_id: str) -> None:
 
 def apply_tree(store: KgStore, document_id: str, filename: str, filepath: str,
                file_hash: str, parser_version: str, drafts: list[NodeDraft]) -> TreeDiff:
-    """새 트리를 DB에 반영하고 diff를 돌려준다 (idempotent: 같은 내용이면 전부 unchanged)."""
-    store.upsert_document(document_id, filename, filepath)
-    old = store.active_nodes(document_id)
-    version_id = store.add_version(document_id, file_hash, parser_version)
-    diff = TreeDiff(version_id=version_id)
-    new_ids = {d.node_id for d in drafts}
+    """새 트리를 DB에 반영하고 diff를 돌려준다 (idempotent: 같은 내용이면 전부 unchanged).
 
-    for d in drafts:
-        prev = old.get(d.node_id)
-        if prev is None:
-            _insert_node(store, d, document_id, version_id)
-            _write_payload(store, d, version_id)
-            diff.added.append(d.node_id)
-        elif prev["semantic_fingerprint"] == d.semantic_fingerprint:
-            diff.unchanged.append(d.node_id)
-            if prev["content_fingerprint"] != d.content_fingerprint:
-                _update_node(store, d)          # 값만 변경 — 의미 지문은 유지
+    원자성: 도중 실패하면 전부 롤백한다 — 유령 version/반쪽 트리가 다음 커밋에
+    편승하지 않는다. REMOVED였던 노드가 같은 경로로 재등장하면(헤더 원복 등)
+    UPDATE로 부활시킨다 (§12.1 added 취급, 매핑은 제거 시점에 이미 비활성).
+    """
+    try:
+        store.upsert_document(document_id, filename, filepath)
+        # REMOVED 포함 전체 이전 노드 — 부활(re-add) 시 INSERT 충돌을 막는다
+        all_prev = {r["node_id"]: r for r in store.conn.execute(
+            "SELECT * FROM tree_node WHERE document_id=?", (document_id,))}
+        old = {nid: r for nid, r in all_prev.items() if r["status"] == "ACTIVE"}
+        version_id = store.add_version(document_id, file_hash, parser_version)
+        diff = TreeDiff(version_id=version_id)
+        new_ids = {d.node_id for d in drafts}
+
+        for d in drafts:
+            prev = all_prev.get(d.node_id)
+            if prev is None:
+                _insert_node(store, d, document_id, version_id)
                 _write_payload(store, d, version_id)
-        else:
-            _update_node(store, d)
-            _write_payload(store, d, version_id)
-            diff.changed.append(d.node_id)
-            m = store.active_mapping(d.node_id)
+                diff.added.append(d.node_id)
+            elif prev["status"] == "REMOVED":
+                _update_node(store, d)          # 부활 — ACTIVE 복원 + 최신 내용
+                _write_payload(store, d, version_id)
+                diff.added.append(d.node_id)
+            elif prev["semantic_fingerprint"] == d.semantic_fingerprint:
+                diff.unchanged.append(d.node_id)
+                if prev["content_fingerprint"] != d.content_fingerprint:
+                    _update_node(store, d)      # 값만 변경 — 의미 지문은 유지
+                    _write_payload(store, d, version_id)
+                elif (prev["locator"] != d.locator
+                      or prev["parent_node_id"] != d.parent_node_id):
+                    # 행 이동/재배치 — 의미·내용 불변이어도 위치 메타는 최신화
+                    # (§9.2 _source_locator·§11 계보가 실제 위치를 가리키도록)
+                    _update_node(store, d)
+            else:
+                _update_node(store, d)
+                _write_payload(store, d, version_id)
+                diff.changed.append(d.node_id)
+                m = store.active_mapping(d.node_id)
+                if m is not None:
+                    store.deactivate_mapping(
+                        m["mapping_id"], action="REMAP",
+                        note=f"semantic fingerprint changed @ {version_id}")
+
+        for node_id, prev in old.items():
+            if node_id in new_ids:
+                continue
+            store.conn.execute(
+                "UPDATE tree_node SET status='REMOVED', removed_version_id=? "
+                "WHERE node_id=?", (version_id, node_id))
+            store.conn.execute(
+                "UPDATE data_payload SET is_current=0 WHERE tree_node_id=?", (node_id,))
+            diff.removed.append(node_id)
+            m = store.active_mapping(node_id)
             if m is not None:
-                store.deactivate_mapping(m["mapping_id"], action="REMAP",
-                                         note=f"semantic fingerprint changed @ {version_id}")
+                store.deactivate_mapping(m["mapping_id"], action="DEACTIVATE",
+                                         note=f"node removed @ {version_id}")
 
-    for node_id, prev in old.items():
-        if node_id in new_ids:
-            continue
-        store.conn.execute(
-            "UPDATE tree_node SET status='REMOVED', removed_version_id=? WHERE node_id=?",
-            (version_id, node_id))
-        store.conn.execute(
-            "UPDATE data_payload SET is_current=0 WHERE tree_node_id=?", (node_id,))
-        diff.removed.append(node_id)
-        m = store.active_mapping(node_id)
-        if m is not None:
-            store.deactivate_mapping(m["mapping_id"], action="DEACTIVATE",
-                                     note=f"node removed @ {version_id}")
-
-    store.commit()
-    return diff
+        store.commit()
+        return diff
+    except Exception:
+        store.conn.rollback()
+        raise

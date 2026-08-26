@@ -265,3 +265,134 @@ def test_build_custom_rdbms_with_lineage(ws, tmp_path):
 def test_unmapped_concept_rejected(ws):
     with pytest.raises(KeyError):
         reverse_lookup(ws.store, "no_such_concept")
+
+
+# --------------------------------------------------- 리뷰 회귀 (확정 결함) ---
+F_CHOCO = FIXTURES / "financier" / "초코_휘낭시에_실험데이터_혼돈양식_v3.xlsx"
+
+
+def test_removed_node_revival_no_crash(ws, tmp_path):
+    """헤더 개명 후 원복 — REMOVED 노드가 같은 경로로 부활해도 크래시 없이 ACTIVE 복원."""
+    f = _mini_workbook(tmp_path / "mini.xlsx")
+    doc_id, _ = ws.ingest(f)
+    _mini_workbook(f, header="중심온도")
+    ws.ingest(f)
+    _mini_workbook(f, header="심부온도")                  # 원복
+    _, diff = ws.ingest(f)
+    assert diff.summary()["added"] >= 1                   # 부활 = added 취급
+    node = next(r for r in ws.store.active_nodes(doc_id).values()
+                if r["node_name"] == "심부온도")
+    assert node["status"] == "ACTIVE" and node["removed_version_id"] is None
+
+
+def test_apply_tree_rolls_back_on_failure(ws, tmp_path, monkeypatch):
+    """도중 실패 시 유령 version/반쪽 트리가 남지 않는다 (원자성)."""
+    import kg.tree.diff as diff_mod
+    f = _mini_workbook(tmp_path / "mini.xlsx")
+
+    calls = {"n": 0}
+    orig = diff_mod._write_payload
+
+    def boom(store, d, version_id):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise RuntimeError("disk full")
+        return orig(store, d, version_id)
+
+    monkeypatch.setattr(diff_mod, "_write_payload", boom)
+    with pytest.raises(RuntimeError):
+        ws.ingest(f)
+    monkeypatch.setattr(diff_mod, "_write_payload", orig)
+    assert ws.store.conn.execute(
+        "SELECT count(*) FROM document_version").fetchone()[0] == 0
+    assert ws.store.conn.execute(
+        "SELECT count(*) FROM tree_node").fetchone()[0] == 0
+    doc_id, diff = ws.ingest(f)                           # 재시도는 정상 동작
+    assert diff.summary()["added"] > 0
+
+
+def test_project_name_injection_rejected(ws):
+    """YAML의 이름은 신뢰 경계 밖 — 식별자 화이트리스트 위반은 정의 단계에서 거부."""
+    for bad in ('../../../escaped', 'x" (junk TEXT); --', 'a b'):
+        with pytest.raises(ValueError):
+            define_project(ws.store, {"name": bad, "fields": [
+                {"name": "f", "concept": None}]})
+    with pytest.raises(ValueError):
+        define_project(ws.store, {"name": "ok", "fields": [
+            {"name": 'a" TEXT, "injected', "concept": None}]})
+    with pytest.raises(ValueError):
+        define_project(ws.store, {"name": "ok", "fields": [{"name": "f"}],
+                                  "transform": [{"op": "nope"}]})
+
+
+def test_variant_scope_joins_with_values(ws):
+    """전치(caption) 표: variant 라벨('base')이 값 행(base@0…)에 브로드캐스트된다."""
+    from kg.integration.builder import assemble_sources
+    doc_id, _ = ws.ingest(F_CHOCO)
+    map_document(ws.store, ws.retriever(), RuleJudge(), doc_id)
+    iid = define_project(ws.store, {
+        "name": "variant_join",
+        "fields": [
+            {"name": "variant", "concept": "addin", "type": "text"},
+            {"name": "core_temp", "concept": "core_temperature", "type": "numeric"},
+        ]})
+    frames, _ = assemble_sources(ws.store, iid)
+    both = [r for fr in frames for r in fr.rows
+            if r.get("variant") is not None and r.get("core_temp") is not None]
+    assert len(both) >= 30                                 # 이전엔 0 (키 불일치)
+    assert {"base", "glaze"} <= {r["variant"] for r in both}
+
+
+def test_map_before_seed_errors(tmp_path):
+    store = KgStore(tmp_path / "empty.db")
+    with pytest.raises(RuntimeError):
+        map_document(store, DomainRetriever(store), RuleJudge())
+    store.close()
+
+
+def test_unit_convert_no_double_apply():
+    """변환 후 lineage 단위가 갱신되어 블록 재적용에도 이중 변환이 없다."""
+    from src.units.converter import UnitRegistry
+    units = UnitRegistry.load(UNITS_YAML)
+    f = Frame(["t"], [{"t": 77.7}],
+              [{"t": {"payload_id": "p", "row_idx": 0, "node_id": "n", "unit": "°F"}}])
+    env = {"units": units, "field_units": {"t": "℃"}}
+    out = run_dag([f], [{"op": "unit_convert"}, {"op": "unit_convert"}], env)
+    assert abs(out[0].rows[0]["t"] - 25.39) < 0.01         # 한 번만 변환됨
+
+
+def test_incompatible_unit_warned_not_converted():
+    from src.units.converter import UnitRegistry
+    units = UnitRegistry.load(UNITS_YAML)
+    f = Frame(["x"], [{"x": 100.0}],
+              [{"x": {"payload_id": "p", "row_idx": 0, "node_id": "n", "unit": "KRW"}}])
+    env = {"units": units, "field_units": {"x": "℃"}}
+    out = run_dag([f], [{"op": "unit_convert"}], env)
+    assert out[0].rows[0]["x"] == 100.0                    # 원본 보존 (§15)
+    assert env["warnings"] and env["warnings"][0]["from"] == "KRW"
+
+
+def test_source_meta_survives_union_select_aggregate(ws):
+    f1 = Frame(["k", "v"], [{"k": "a", "v": 1.0}], [{"k": None, "v": None}],
+               meta={"document_id": "D1", "sheet": "S1"})
+    out = run_dag([f1], [
+        {"op": "union"},
+        {"op": "select", "config": {"columns": ["k", "v"]}},
+        {"op": "aggregate", "config": {"group_by": ["k"], "aggs": {"v": "sum"}}},
+    ], {})
+    ln = out[0].lineage[0]
+    assert ln.get("__frame_meta__", {}).get("document_id") == "D1"
+
+
+def test_value_mapping_numeric_keys():
+    f = Frame(["c"], [{"c": 180.0}], [{"c": None}])
+    out = run_dag([f], [{"op": "value_mapping",
+                         "config": {"column": "c", "map": {"180": "mid"}}}], {})
+    assert out[0].rows[0]["c"] == "mid"
+
+
+def test_build_zero_columns_clear_error(ws, tmp_path):
+    iid = define_project(ws.store, {"name": "empty_proj", "fields": [
+        {"name": "f", "concept": None}]})
+    with pytest.raises(ValueError, match="컬럼"):
+        build(ws.store, iid, tmp_path / "b", units=ws.units)

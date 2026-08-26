@@ -14,7 +14,19 @@ MAPPABLE_TYPES = ("HEADER", "SUB_HEADER")
 
 
 def map_document(store: KgStore, retriever: DomainRetriever, judge,
-                 document_id: str | None = None) -> dict:
+                 document_id: str | None = None,
+                 retry_unmapped: bool = False) -> dict:
+    if not store.concepts():
+        raise RuntimeError("Domain KG가 비어 있습니다 — 먼저 seed를 실행하세요. "
+                           "(빈 KG로 매핑하면 전 노드가 UNMAPPED로 고착됩니다)")
+    if retry_unmapped:
+        # 사전이 자란 뒤 재평가: 활성 UNMAPPED 매핑을 비활성화해 재판정 대상으로
+        # 되돌린다 (REJECTED는 사람의 결정이므로 자동 재평가하지 않는다 — §15)
+        for m in store.conn.execute(
+                "SELECT mapping_id FROM semantic_mapping "
+                "WHERE is_active=1 AND status='UNMAPPED'").fetchall():
+            store.deactivate_mapping(m["mapping_id"], action="REMAP",
+                                     note="retry_unmapped")
     where = "n.node_type IN (?,?) AND n.status='ACTIVE'"
     params: list = list(MAPPABLE_TYPES)
     if document_id:
