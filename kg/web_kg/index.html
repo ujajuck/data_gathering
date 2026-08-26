@@ -61,6 +61,16 @@
   #status { padding: 4px 12px; color: var(--sub); font-size: 12px;
             border-top: 1px solid var(--line); flex: none; }
   .empty { color: var(--sub); padding: 6px 2px; }
+  #graph svg { width: 100%; height: auto; display: block; }
+  #graph .gn { fill: #fff; stroke: var(--line); }
+  #graph .gn.center { fill: var(--accent-soft); stroke: var(--accent); }
+  #graph .gn.nb { cursor: pointer; }
+  #graph .gn.nb:hover { stroke: var(--accent); }
+  #graph text { font: 11px -apple-system, 'Malgun Gothic', sans-serif;
+                fill: var(--ink); text-anchor: middle; pointer-events: none; }
+  #graph text.rel { fill: var(--sub); font-size: 9.5px; }
+  #graph text.cnt { fill: var(--sub); font-size: 9.5px; }
+  #graph line { stroke: #c7ccd4; stroke-width: 1.2; }
 </style>
 </head>
 <body>
@@ -73,9 +83,14 @@
 </header>
 <main>
   <div id="side">
+    <div class="card" id="graphcard" style="display:none">
+      <h2>지식 그래프 — 관계 이웃 (클릭하면 그 개념으로 이동)</h2>
+      <div id="graph"></div>
+    </div>
     <div class="card">
       <h2 id="srch2">개념을 검색하면 문서 횡단 소스가 나옵니다</h2>
-      <div id="sources"><div class="empty">← 위 검색창에 개념 이름</div></div>
+      <div id="sources" style="max-height:340px;overflow-y:auto">
+        <div class="empty">← 위 검색창에 개념 이름</div></div>
     </div>
     <div class="card">
       <h2>검수 대기 (REVIEW_REQUIRED)</h2>

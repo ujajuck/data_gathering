@@ -94,6 +94,58 @@ function jump(documentId, locator) {
   loadSheet(documentId, sheet, range).catch((e) => $('#status').textContent = e.message);
 }
 
+// ------------------------------------------------------------ 지식 그래프 ----
+const REL_KO = { IS_A: '상위', PART_OF: '부분', AFFECTS: '영향',
+                 MEASURED_BY: '측정', RELATED_TO: '연관' };
+
+function renderGraph(center, edges) {
+  const card = $('#graphcard');
+  if (!edges.length) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  // 이웃 노드 수집 (중복 개념은 관계를 합쳐 한 노드로)
+  const nbs = new Map();
+  for (const e of edges) {
+    const out = e.source_concept_id === center.concept_id;
+    const id = out ? e.target_concept_id : e.source_concept_id;
+    const name = out ? e.target_name : e.source_name;
+    if (!nbs.has(id)) nbs.set(id, { id, name, rels: [], sources: e.other_sources || 0 });
+    nbs.get(id).rels.push(`${out ? '→' : '←'}${REL_KO[e.relation_type] || e.relation_type}`);
+  }
+  const ring = [...nbs.values()].slice(0, 10);
+  const W = 340, cx = W / 2, R = 108, rowH = 26;
+  const H = Math.max(230, 90 + ring.length * 4);
+  const cy = H / 2;
+  const parts = [];
+  ring.forEach((n, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / ring.length;
+    const x = cx + R * Math.cos(a) * 1.28, y = cy + R * Math.sin(a) * 0.82;
+    n.x = x; n.y = y;
+    parts.push(`<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`);
+    const mx = cx + (x - cx) * 0.52, my = cy + (y - cy) * 0.52 - 3;
+    parts.push(`<text class="rel" x="${mx}" y="${my}">${esc(n.rels[0])}${n.rels.length > 1 ? '…' : ''}</text>`);
+  });
+  for (const n of ring) {
+    const w = Math.max(58, n.name.length * 11 + 14);
+    parts.push(
+      `<g class="nbg" data-id="${esc(n.id)}">` +
+      `<rect class="gn nb" x="${n.x - w / 2}" y="${n.y - rowH / 2}" width="${w}" height="${rowH}" rx="12"/>` +
+      `<text x="${n.x}" y="${n.y + 1}">${esc(n.name)}</text>` +
+      (n.sources ? `<text class="cnt" x="${n.x}" y="${n.y + 12}">${n.sources}</text>` : '') +
+      `</g>`);
+  }
+  const cw = Math.max(74, center.canonical_name.length * 12 + 18);
+  parts.push(`<rect class="gn center" x="${cx - cw / 2}" y="${cy - 17}" width="${cw}" height="34" rx="16"/>` +
+             `<text x="${cx}" y="${cy + 4}" style="font-weight:700">${esc(center.canonical_name)}</text>`);
+  $('#graph').innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="개념 관계 그래프">${parts.join('')}</svg>`;
+  $('#graph').querySelectorAll('.nbg').forEach((g) => {
+    g.querySelector('rect').onclick = () => {
+      $('#q').value = g.dataset.id;
+      search(g.dataset.id);
+    };
+  });
+}
+
 // ---------------------------------------------------------------- 좌측 ----
 async function search(q) {
   try {
@@ -114,9 +166,11 @@ async function search(q) {
       const s = res.sources[+el.dataset.i];
       jump(s.document_id, s.locator);
     });
+    renderGraph(res.concept, res.neighbors || []);
   } catch (e) {
     $('#srch2').textContent = '개념을 검색하면 문서 횡단 소스가 나옵니다';
     $('#sources').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    $('#graphcard').style.display = 'none';
   }
 }
 

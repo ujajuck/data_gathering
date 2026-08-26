@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from src.inspect.inspector import WorkbookInspector
 from src.mapping.concepts import normalize_label
 
-from kg.search import reverse_lookup
+from kg.search import concept_neighbors, reverse_lookup
 from kg.store import KgStore
 
 WEB_DIR = Path(__file__).parent / "web_kg"
@@ -144,6 +144,17 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 n = store.node(s.pop("node_id"))
                 s.pop("payload_id", None)
                 s["document_id"] = n["document_id"] if n else None
+            # 지식 그래프 1-hop 이웃 (이웃별 연결 소스 수 포함 — 탐색 단서)
+            neighbors = concept_neighbors(store, cid)
+            counts = {r["concept_id"]: r["n"] for r in store.conn.execute(
+                """SELECT concept_id, count(*) n FROM semantic_mapping
+                   WHERE is_active=1 AND status IN ('AUTO_APPROVED','APPROVED')
+                   GROUP BY concept_id""")}
+            for e in neighbors:
+                other = e["target_concept_id"] if e["source_concept_id"] == cid \
+                    else e["source_concept_id"]
+                e["other_sources"] = counts.get(other, 0)
+        res["neighbors"] = neighbors
         res["concept"] = {k: res["concept"][k] for k in
                           ("concept_id", "canonical_name", "description",
                            "canonical_unit") if k in res["concept"].keys()}
