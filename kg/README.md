@@ -35,7 +35,19 @@ python -m kg.cli --ws domains/financier project --config kg/examples/experiment_
 python -m kg.cli --ws domains/financier build --name experiment_result        # Custom RDBMS
 python -m kg.cli --ws domains/financier trace --build BLD-… --row 1 --field core_temp
 python -m kg.cli --ws domains/financier metrics                               # §16.1 지표
+
+python -m kg.webapp --ws domains/financier --port 8010                        # 웹 UI
 ```
+
+## 웹 UI (단일 화면)
+
+`kg/webapp.py` + `kg/web_kg/` — 화면 하나로 끝나는 경량 UI다:
+
+- **오른쪽: 웹 xlsx 뷰어** — 서버가 원본 workbook을 파싱해 병합/채움색/굵기를
+  유지한 그리드를 그린다 (외부 뷰어 라이브러리/CDN 없음). 시트 탭 전환.
+- **왼쪽: 개념 검색 + 검수** — 개념 이름/동의어로 역탐색(§8.1)하면 문서 횡단
+  소스 목록이 나오고, 클릭하면 뷰어가 해당 시트로 이동해 값 범위를
+  하이라이트한다. REVIEW_REQUIRED 큐는 그 자리에서 승인/반려.
 
 ## 핵심 성질
 

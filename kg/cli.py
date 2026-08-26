@@ -78,14 +78,14 @@ def cmd_seed(ws: Workspace, args) -> int:
     return 0
 
 
-def _ingest_file(ws: Workspace, path: Path) -> dict:
+def _ingest_file(ws: Workspace, path: Path, force: bool = False) -> dict:
     from src.inspect.inspector import PARSER_VERSION
     from kg.tree.builder import load_workbook_tree
     from kg.tree.diff import apply_tree
     document_id, drafts, file_hash = load_workbook_tree(
         ws.store, ws.root, path, ws.parser_rules, ws.units, ws.registry)
     prev = ws.store.latest_version(document_id)
-    if prev is not None and prev["file_hash"] == file_hash:
+    if prev is not None and prev["file_hash"] == file_hash and not force:
         return {"file": path.name, "skipped": "unchanged file hash"}
     diff = apply_tree(ws.store, document_id, Path(path).name, str(path),
                       file_hash, PARSER_VERSION, drafts)
@@ -101,7 +101,7 @@ def cmd_ingest(ws: Workspace, args) -> int:
     results = []
     for p in paths:
         try:
-            results.append(_ingest_file(ws, Path(p)))
+            results.append(_ingest_file(ws, Path(p), force=args.force))
         except Exception as e:
             results.append({"file": Path(p).name, "error": repr(e)})
     _emit(results)
@@ -261,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     pi.add_argument("--raw", default="data/raw", type=Path)
     pi.add_argument("--file", default=None, type=Path)
     pi.add_argument("--map", action="store_true", help="적재 후 바로 매핑")
+    pi.add_argument("--force", action="store_true", help="파일 해시 스킵 무시(파서 변경 후 재적재)")
 
     pm = sub.add_parser("map", help="미매핑 노드 Semantic Mapping")
     pm.add_argument("--retry-unmapped", action="store_true",

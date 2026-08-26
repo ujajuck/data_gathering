@@ -209,11 +209,13 @@ class KnowledgeTreeBuilder:
                 f"{table.tree_path}/{label}"
             addrs = [f.address for f in fields_sorted]
             label_addr = next((f.label_address for f in fields_sorted if f.label_address), None)
+            # locator는 값 구간 전체 — 역탐색/뷰어에서 이 범위를 하이라이트한다
+            loc = f"{addrs[0]}:{addrs[-1]}" if addrs else (label_addr or "")
             node = NodeDraft(
                 node_id=stable_id(document_id, hpath, label),
                 parent_node_id=parent.node_id, node_type="HEADER",
                 node_name=label, tree_path=hpath,
-                locator=f"{sheet_prefix}!{label_addr or (addrs[0] if addrs else '')}",
+                locator=f"{sheet_prefix}!{loc}",
                 data_type=_infer_dtype(rows), unit=unit,
                 representative_values=reprs,
                 metadata={

@@ -28,10 +28,13 @@ def stable_id(*parts: str) -> str:
 
 
 class KgStore:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, threadsafe: bool = False):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.db_path)
+        # threadsafe=True: 웹 서버(threadpool)에서 단일 커넥션 공유 — 호출측이
+        # Lock으로 직렬화한다 (kg/webapp.py)
+        self.conn = sqlite3.connect(self.db_path,
+                                    check_same_thread=not threadsafe)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(_SCHEMA.read_text(encoding="utf-8"))
