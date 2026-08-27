@@ -3,105 +3,181 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KG 뷰어</title>
+<title>Semantic Excel Integration</title>
 <style>
-  :root {
-    --bg: #f6f7f9; --panel: #ffffff; --line: #e3e6ea; --ink: #1f2937;
-    --sub: #6b7280; --accent: #2563eb; --accent-soft: #dbeafe;
-    --hl: #fde047; --ok: #16a34a; --bad: #dc2626;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; font: 13px/1.45 -apple-system, 'Malgun Gothic', sans-serif;
-         color: var(--ink); background: var(--bg); height: 100vh;
-         display: flex; flex-direction: column; }
-  header { display: flex; gap: 10px; align-items: center; padding: 8px 14px;
-           background: var(--panel); border-bottom: 1px solid var(--line); }
-  header h1 { font-size: 14px; margin: 0 8px 0 0; }
-  header input, header select { font: inherit; padding: 5px 8px;
-           border: 1px solid var(--line); border-radius: 6px; min-width: 220px; }
-  header .hint { color: var(--sub); font-size: 12px; }
-  main { flex: 1; display: flex; min-height: 0; }
-  #side { width: 360px; min-width: 300px; overflow-y: auto; padding: 10px;
-          display: flex; flex-direction: column; gap: 10px; }
-  .card { background: var(--panel); border: 1px solid var(--line);
-          border-radius: 8px; padding: 10px; }
-  .card h2 { font-size: 12px; margin: 0 0 6px; color: var(--sub);
-             text-transform: none; letter-spacing: .02em; }
-  .src { padding: 6px 8px; border-radius: 6px; cursor: pointer;
-         display: flex; justify-content: space-between; gap: 8px; }
-  .src:hover { background: var(--accent-soft); }
-  .src.on { background: var(--accent-soft); outline: 1px solid var(--accent); }
-  .src .h { font-weight: 600; }
-  .src .m { color: var(--sub); font-size: 12px; white-space: nowrap; }
-  .rev { border-top: 1px dashed var(--line); padding: 7px 2px; }
-  .rev .h { font-weight: 600; cursor: pointer; }
-  .rev .h:hover { color: var(--accent); }
-  .rev .m { color: var(--sub); font-size: 12px; margin: 2px 0 5px; }
-  .rev button { font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 5px;
-                border: 1px solid var(--line); background: #fff; cursor: pointer; }
-  .rev button.ok { color: var(--ok); border-color: var(--ok); }
-  .rev button.no { color: var(--bad); border-color: var(--bad); }
-  #viewer { flex: 1; min-width: 0; display: flex; flex-direction: column;
-            background: var(--panel); border-left: 1px solid var(--line); }
-  #tabs { display: flex; gap: 2px; padding: 6px 10px 0; overflow-x: auto;
-          border-bottom: 1px solid var(--line); flex: none; }
-  #tabs button { font: inherit; font-size: 12px; border: 1px solid var(--line);
-          border-bottom: none; background: var(--bg); padding: 4px 10px;
-          border-radius: 6px 6px 0 0; cursor: pointer; white-space: nowrap; }
-  #tabs button.on { background: var(--panel); font-weight: 700;
-          border-color: var(--accent); color: var(--accent); }
-  #gridwrap { flex: 1; overflow: auto; }
-  table.grid { border-collapse: collapse; margin: 8px; }
-  table.grid td { border: 1px solid #eceff3; padding: 2px 6px; min-width: 30px;
-          max-width: 260px; overflow: hidden; text-overflow: ellipsis;
-          white-space: nowrap; font-size: 12px; height: 20px; }
-  table.grid td.hd { background: #fafbfc; color: var(--sub); font-size: 10px;
-          text-align: center; min-width: 26px; position: sticky; }
-  table.grid td.hl { outline: 2px solid var(--accent); background: var(--hl) !important; }
-  #status { padding: 4px 12px; color: var(--sub); font-size: 12px;
-            border-top: 1px solid var(--line); flex: none; }
-  .empty { color: var(--sub); padding: 6px 2px; }
-  #graph svg { width: 100%; height: auto; display: block; }
-  #graph .gn { fill: #fff; stroke: var(--line); }
-  #graph .gn.center { fill: var(--accent-soft); stroke: var(--accent); }
-  #graph .gn.nb { cursor: pointer; }
-  #graph .gn.nb:hover { stroke: var(--accent); }
-  #graph text { font: 11px -apple-system, 'Malgun Gothic', sans-serif;
-                fill: var(--ink); text-anchor: middle; pointer-events: none; }
-  #graph text.rel { fill: var(--sub); font-size: 9.5px; }
-  #graph text.cnt { fill: var(--sub); font-size: 9.5px; }
-  #graph line { stroke: #c7ccd4; stroke-width: 1.2; }
+:root{--bg:#f7f8fa;--panel:#fff;--line:#dce0e6;--text:#20242a;--muted:#69717c;
+ --blue:#3768e5;--bluebg:#e8eeff;--green:#2d9780;--greenbg:#e3f4ef;
+ --orange:#d57b2f;--orangebg:#fceee1;--red:#c43d3d;--redbg:#fbe9e9}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 -apple-system,'Malgun Gothic','Noto Sans KR',sans-serif;
+ background:var(--bg);color:var(--text)}
+button,input,select{font:inherit}
+.top{background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;
+ justify-content:space-between;padding:12px 24px;gap:12px;flex-wrap:wrap}
+.brand{font-weight:800}.brand+div{font-size:12px}
+.tabs{display:flex;gap:8px}
+.tabs button,.btn{border:1px solid var(--line);background:#fff;border-radius:9px;
+ padding:9px 13px;cursor:pointer}
+.tabs button.active,.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+.btn:disabled{opacity:.5;cursor:default}
+main{padding:16px 24px}
+.screen{display:none}.screen.active{display:block}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px}
+.muted{color:var(--muted);font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+.stat{border:1px solid var(--line);border-radius:10px;padding:13px;background:#fff}
+.stat b{font-size:25px;display:block;margin-top:6px}
+table{border-collapse:collapse;width:100%}
+th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;font-size:13px}
+th{background:#f3f5f8;color:var(--muted);font-size:12px}
+.badge{display:inline-block;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:700}
+.b-ready{background:var(--greenbg);color:var(--green)}
+.b-review{background:var(--orangebg);color:var(--orange)}
+.b-error{background:var(--redbg);color:var(--red)}
+/* ---- 탐색 (S02+S03) ---- */
+.kgbar{display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+.kgbar input{padding:8px 11px;border:1px solid var(--line);border-radius:9px;min-width:250px}
+.pill{display:inline-block;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700}
+.pnode{background:var(--bluebg);color:var(--blue)}
+.pkey{background:var(--greenbg);color:var(--green)}
+.pvalue{background:var(--orangebg);color:var(--orange)}
+.pctx{background:var(--bluebg);color:var(--blue)}
+.layout3{display:grid;grid-template-columns:260px minmax(0,1fr) 300px;gap:14px}
+.sources{max-height:74vh;overflow-y:auto}
+.sources button{width:100%;text-align:left;border:1px solid var(--line);background:#fff;
+ border-radius:9px;padding:10px 11px;margin-bottom:8px;cursor:pointer}
+.sources button.on{border:2px solid var(--blue);background:var(--bluebg)}
+.viewer{overflow:hidden;display:flex;flex-direction:column;min-height:640px;max-height:78vh}
+.sheet-tabs{display:flex;gap:6px;margin:8px 0 10px;overflow-x:auto;flex:none}
+.sheet-tabs button{border:1px solid var(--line);background:#fff;border-radius:7px;
+ padding:6px 11px;cursor:pointer;white-space:nowrap}
+.sheet-tabs .on{background:var(--bluebg);border-color:var(--blue);color:var(--blue);font-weight:700}
+#gridwrap{flex:1;overflow:auto;border:1px solid var(--line);border-radius:8px}
+table.grid{border-collapse:collapse;margin:0}
+table.grid td{border:1px solid #edf0f4;padding:2px 6px;min-width:32px;max-width:250px;
+ overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;height:21px}
+table.grid td.hd{background:#f6f8fa;color:var(--muted);font-size:10px;text-align:center;min-width:28px}
+td.ov{cursor:pointer}
+td.ov-KEY{outline:2px solid var(--green);outline-offset:-2px;background:var(--greenbg)!important}
+td.ov-VALUE{outline:2px solid var(--orange);outline-offset:-2px;background:var(--orangebg)!important}
+td.ov-CONTEXT{outline:2px dashed var(--blue);outline-offset:-2px}
+td.sel{outline:3px solid var(--blue)!important;outline-offset:-3px}
+#vstatus{padding:5px 2px;color:var(--muted);font-size:12px;flex:none}
+.inspector{max-height:74vh;overflow-y:auto}
+.inspector h2{margin:2px 0 4px;font-size:19px}
+.inspector select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;margin-top:5px}
+.preview{display:grid;grid-template-columns:44px 1fr 44px;gap:6px;margin-top:8px;line-height:24px;font-size:13px}
+.preview b{text-align:right}
+.status{font-size:12px;color:var(--green);margin-top:8px;min-height:16px}
+/* ---- 통합 DB (S04+S05) ---- */
+.steps{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.step{border:1px solid var(--line);border-radius:99px;padding:7px 16px;font-size:13px}
+.step.on{border-color:var(--blue);background:var(--bluebg);color:var(--blue);font-weight:700}
+.buildgrid{display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px}
+.concept{border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin:8px 0;
+ display:flex;justify-content:space-between;align-items:center;gap:8px}
+.concept .x{border:none;background:none;color:var(--red);cursor:pointer;font-size:15px}
+.pipeline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.pipe{border:1px solid var(--line);border-radius:9px;padding:11px 13px;font-size:13px;background:#fff}
+.result{margin-top:18px;background:#fafbfc;border:1px solid var(--line);border-radius:10px;padding:14px}
+.result table td,.result table th{font-size:12px;padding:6px 8px}
+.warn{color:var(--orange);font-size:12px}
+.empty{color:var(--muted);padding:8px 2px}
+@media(max-width:1100px){.layout3,.buildgrid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
 <body>
-<header>
-  <h1>KG 뷰어</h1>
-  <input id="q" list="concepts" placeholder="개념 검색 (예: 심부온도, core T)">
-  <datalist id="concepts"></datalist>
-  <select id="docsel"></select>
-  <span class="hint" id="hint"></span>
+<header class="top">
+  <div><div class="brand">Semantic Excel Integration</div>
+    <div class="muted">Fixed Domain KG 기반 데이터 통합</div></div>
+  <nav class="tabs">
+    <button data-tab="files" class="active">1. 파일 분석</button>
+    <button data-tab="explore">2. KG 데이터 탐색</button>
+    <button data-tab="build">3. 통합 DB <span id="cartN"></span></button>
+  </nav>
 </header>
 <main>
-  <div id="side">
-    <div class="card" id="graphcard" style="display:none">
-      <h2>지식 그래프 — 관계 이웃 (클릭하면 그 개념으로 이동)</h2>
-      <div id="graph"></div>
+
+<!-- S01 파일 분석 -->
+<section id="files" class="screen active">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div><h2 style="margin:0">파일 분석</h2>
+        <div class="muted">KG 기준 탐색에 사용할 준비 상태를 확인합니다. 파일은 data/raw에 두고 ingest로 등록합니다.</div></div>
     </div>
-    <div class="card">
-      <h2 id="srch2">개념을 검색하면 문서 횡단 소스가 나옵니다</h2>
-      <div id="sources" style="max-height:340px;overflow-y:auto">
-        <div class="empty">← 위 검색창에 개념 이름</div></div>
+    <div class="stats" id="fileStats"></div>
+    <table><thead><tr><th>파일</th><th>상태</th><th>시트</th><th>KG 매핑</th><th>검토</th><th>작업</th></tr></thead>
+      <tbody id="fileRows"><tr><td colspan="6" class="empty">불러오는 중…</td></tr></tbody></table>
+  </div>
+</section>
+
+<!-- S02+S03 KG 데이터 탐색 + Excel Semantic Viewer -->
+<section id="explore" class="screen">
+  <div class="card kgbar">
+    <input id="q" list="concepts" placeholder="KG 노드 검색 (예: 심부온도, core T)">
+    <datalist id="concepts"></datalist>
+    <span id="kgctx" class="muted">노드를 검색하면 연결 위치·파일·값 개수가 표시됩니다</span>
+  </div>
+  <div class="layout3">
+    <aside class="card sources">
+      <h3 style="margin:2px 0 2px">연결된 원본 위치</h3>
+      <div class="muted" style="margin-bottom:8px">파일 / 시트 / 영역 / 신뢰도</div>
+      <div id="srcList"><div class="empty">← KG 노드를 먼저 검색</div></div>
+    </aside>
+    <div class="card viewer">
+      <div style="flex:none"><b id="vdoc">문서를 선택하세요</b>
+        <span class="muted" id="vsheetlbl"></span></div>
+      <div class="sheet-tabs" id="tabs"></div>
+      <div id="gridwrap"><div class="empty" style="padding:16px">
+        파일 분석 탭에서 '열어보기' 또는 좌측 원본 위치를 클릭하세요</div></div>
+      <div id="vstatus"></div>
     </div>
+    <aside class="card inspector" id="inspector">
+      <div class="empty">Overlay 영역(색 테두리 셀)이나 원본 위치를 클릭하면<br>
+        선택 영역의 역할·개념·값이 여기 표시됩니다</div>
+    </aside>
+  </div>
+</section>
+
+<!-- S04+S05 통합 DB Builder + 결과 -->
+<section id="build" class="screen">
+  <div class="steps">
+    <div class="step" id="st1">1 노드 선택</div><div class="step" id="st2">2 원본 확인</div>
+    <div class="step on" id="st3">3 통합 규칙</div><div class="step" id="st4">4 결과</div>
+  </div>
+  <div class="buildgrid">
+    <aside class="card">
+      <h3 style="margin:2px 0">선택된 데이터 묶음</h3>
+      <div class="muted">탐색 화면에서 '이 위치 포함'으로 담습니다</div>
+      <div id="cart"><div class="empty">아직 담긴 위치가 없습니다</div></div>
+      <div class="muted" style="margin-top:14px">원본 파일</div>
+      <div id="cartDocs" class="muted">—</div>
+      <button class="btn" style="width:100%;margin-top:12px" id="clearCart">전체 비우기</button>
+    </aside>
     <div class="card">
-      <h2>검수 대기 (REVIEW_REQUIRED)</h2>
-      <div id="review"><div class="empty">불러오는 중…</div></div>
+      <h2 style="margin:0">통합 스키마 제안</h2>
+      <div class="muted">같은 Row Context와 KG 관계를 이용해 시스템이 먼저 묶음을 제안합니다. 필드명은 수정할 수 있습니다.</div>
+      <table style="margin-top:12px"><thead><tr>
+        <th>필드</th><th>KG 개념</th><th>역할</th><th>원본</th><th>처리</th><th>상태</th></tr></thead>
+        <tbody id="schemaRows"><tr><td colspan="6" class="empty">묶음을 담으면 제안이 생성됩니다</td></tr></tbody></table>
+      <h3 style="margin:20px 0 4px">통합 규칙</h3>
+      <div class="pipeline">
+        <div class="pipe">SOURCE<br><span class="muted">검증된 원본</span></div>→
+        <div class="pipe">NORMALIZE<br><span class="muted">단위·타입</span></div>→
+        <div class="pipe">ALIGN<br><span class="muted">Row Context</span></div>→
+        <div class="pipe">MERGE<br><span class="muted">UNION</span></div>→
+        <div class="pipe">VALIDATE<br><span class="muted">중복·결측</span></div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:16px;flex-wrap:wrap">
+        <label class="muted">결과 이름
+          <input id="dbName" value="experiment_result" style="padding:8px;border:1px solid var(--line);border-radius:8px;margin-left:6px"></label>
+        <button class="btn primary" id="buildDb">DB 생성 및 반환</button>
+        <span class="status" id="buildStatus"></span>
+      </div>
+      <div class="result" id="result" style="display:none"></div>
     </div>
   </div>
-  <div id="viewer">
-    <div id="tabs"></div>
-    <div id="gridwrap"><div class="empty" style="padding:16px">문서를 선택하세요</div></div>
-    <div id="status"></div>
-  </div>
+</section>
 </main>
 <script type="module" src="./app.js"></script>
 </body>
