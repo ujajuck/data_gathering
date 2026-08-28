@@ -19,7 +19,6 @@ registry = ConceptRegistry.load(ws_root / "config" / "concepts.yaml") if (ws_roo
 
 # _inspect_via_com에서 렌더 캐시를 같은 DB에 저장하도록 경로 주입
 os.environ["_KG_DB_PATH"] = str(db_path.resolve())
-
 data_dir = Path(r'F:\재료데이터\data\MLCC조성Lab_유전체 개발_전장 재료_X7R_WS 평가_31B106KB_첨가제')
 files = sorted([f for f in data_dir.iterdir() if f.suffix in ('.xlsx', '.xls') and not f.name.startswith('~$')])
 
