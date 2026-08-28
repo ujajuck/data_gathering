@@ -16,7 +16,7 @@ from openpyxl.utils import get_column_letter
 from src.common.hashing import sha256_bytes, sha256_file
 from src.common.models import CellInfo, ImageInfo, SheetStructure, WorkbookStructure
 
-PARSER_VERSION = "1.0.0"
+PARSER_VERSION = "2.0.0"
 
 # A1-style references inside formulas, including ranges ("B10:D12") and
 # sheet-qualified refs ("Sheet1!A1" — sheet part captured separately).
@@ -72,6 +72,114 @@ def _repair_sheet_names(path: Path) -> Path:
     return tmp
 
 
+def _is_drm_file(path: Path) -> bool:
+    """Detect NASCA DRM-encrypted xlsx by file header (<## NASC)."""
+    try:
+        with open(path, 'rb') as f:
+            return f.read(8).startswith(b'<## NASC')
+    except Exception:
+        return False
+
+
+def _inspect_via_com(path: Path, relative_to: Path | None,
+                    parser_version: str) -> WorkbookStructure:
+    """Read workbook via Excel COM automation (for DRM-encrypted files).
+
+    원본 파일은 읽기만 하고 전혀 수정하지 않는다.
+    """
+    import win32com.client
+    import pythoncom
+
+    try:
+        pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
+    except Exception:
+        pass
+
+    excel = win32com.client.DispatchEx('Excel.Application')
+    try:
+        excel.Visible = False
+    except Exception:
+        pass
+    try:
+        excel.DisplayAlerts = False
+    except Exception:
+        pass
+
+    try:
+        wb = excel.Workbooks.Open(str(path.resolve()), 0, True)
+        rel = str(path.relative_to(relative_to)) if relative_to else path.name
+        stat = path.stat()
+        structure = WorkbookStructure(
+            file_name=path.name,
+            relative_path=rel,
+            sha256=sha256_file(path),
+            file_size=stat.st_size,
+            modified_time=stat.st_mtime,
+            parser_version=parser_version,
+        )
+
+        for idx in range(1, wb.Sheets.Count + 1):
+            ws = wb.Sheets(idx)
+            sheet_name = ws.Name
+            used = ws.UsedRange
+            max_row = used.Rows.Count if used else 0
+            max_col = used.Columns.Count if used else 0
+
+            sheet = SheetStructure(
+                sheet_name=sheet_name,
+                sheet_index=idx - 1,
+                max_row=max_row,
+                max_col=max_col,
+            )
+
+            # Read cell data — use range bulk read for performance
+            if max_row > 0 and max_col > 0:
+                row_limit = min(max_row, 2000)
+                col_limit = min(max_col, 100)
+
+                # Bulk read: values only (formulas/styles too slow per-cell)
+                try:
+                    data_range = ws.Range(ws.Cells(1, 1), ws.Cells(row_limit, col_limit))
+                    values = data_range.Value
+                except Exception:
+                    values = None
+
+                if values:
+                    for r_idx, row_data in enumerate(values, 1):
+                        if row_data is None:
+                            continue
+                        for c_idx, val in enumerate(row_data, 1):
+                            if val is None:
+                                continue
+                            addr = f"{get_column_letter(c_idx)}{r_idx}"
+                            info = CellInfo(
+                                address=addr,
+                                row=r_idx,
+                                col=c_idx,
+                                value=_jsonable_value(val),
+                                cached_value=None,
+                                is_formula=False,
+                                formula=None,
+                                formula_refs=[],
+                                fill_rgb=None,
+                                bold=False,
+                                number_format=None,
+                                merged_range=None,
+                                merged_into=None,
+                            )
+                            sheet.cells.append(info)
+
+            structure.sheets.append(sheet)
+
+        wb.Close(SaveChanges=False)
+        return structure
+    finally:
+        try:
+            excel.Quit()
+        except Exception:
+            pass
+
+
 class WorkbookInspector:
     """Extracts a WorkbookStructure from one xlsx file (all sheets)."""
 
@@ -80,6 +188,11 @@ class WorkbookInspector:
 
     def inspect(self, path: Path, relative_to: Path | None = None) -> WorkbookStructure:
         path = Path(path)
+
+        # DRM-encrypted files must be read via Excel COM
+        if _is_drm_file(path):
+            return _inspect_via_com(path, relative_to, self.parser_version)
+
         try:
             wb_f = openpyxl.load_workbook(path, data_only=False)
             wb_v = openpyxl.load_workbook(path, data_only=True)

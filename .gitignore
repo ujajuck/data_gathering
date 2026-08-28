@@ -2,13 +2,31 @@
 data/staging/
 data/canonical/
 data/quarantine/
-metadata/source_manifest.jsonl
+metadata/
 *.db
 
 # DVC 사용 시 raw는 DVC가 추적한다 (지금은 예시 3종을 git에 포함)
 # data/raw/
 
+# Virtual environment
+.venv/
+
+# Build artifacts
+src/excel_canonical.egg-info/
+
+# IDE / OS
 __pycache__/
 *.pyc
 .pytest_cache/
-.dvc/cache
+.dvc/cache/
+.idea/
+.vscode/
+*.swp
+
+# Domain workspace runtime data
+domains/*/data/
+domains/*/server.log
+domains/*/ingest_log.txt
+
+# KG reference (derived)
+data/kg_reference.json

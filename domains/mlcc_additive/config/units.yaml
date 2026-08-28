@@ -1,0 +1,46 @@
+version: '1'
+description: MLCC 첨가제 체크시트 도메인 단위 레지스트리
+
+aliases:
+  "℃": "°C"
+  "°": "°C"
+  "C": "°C"
+  "cPs": "cP"
+  "cps": "cP"
+  "mPa·s": "cP"
+  "g/cc": "g/cm³"
+  "g/mL": "g/cm³"
+  "㎡/g": "m²/g"
+  "㎡/g(BET)": "m²/g"
+  "rpm": "RPM"
+  "RPM": "RPM"
+  "psi": "psi"
+  "min": "min"
+  "s": "s"
+
+dimensions:
+  temperature:
+    "°C": 1.0
+    "K": {factor: 1.0, offset: -273.15}
+  mass:
+    "g": 1.0
+    "kg": 1000.0
+    "mg": 0.001
+  percentage:
+    "%": 1.0
+  viscosity:
+    "cP": 1.0
+  density:
+    "g/cm³": 1.0
+  specific_surface:
+    "m²/g": 1.0
+  pressure:
+    "psi": 1.0
+    "kgf/cm²": 14.2233
+    "MPa": 145.038
+  frequency:
+    "RPM": 1.0
+  time:
+    "s": 1.0
+    "min": 60.0
+    "h": 3600.0
