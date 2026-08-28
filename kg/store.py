@@ -166,3 +166,26 @@ class KgStore:
 
     def close(self) -> None:
         self.conn.close()
+
+    # -------------------------------------------------------- render cache ----
+    def save_render(self, document_id: str, sheet_name: str, render_json: str,
+                    file_hash: str) -> None:
+        self.conn.execute(
+            """INSERT INTO sheet_render (document_id, sheet_name, render_json, file_hash)
+               VALUES (?,?,?,?)
+               ON CONFLICT(document_id, sheet_name) DO UPDATE SET
+                 render_json=excluded.render_json, file_hash=excluded.file_hash,
+                 created_at=datetime('now')""",
+            (document_id, sheet_name, render_json, file_hash))
+
+    def load_render(self, document_id: str, sheet_name: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM sheet_render WHERE document_id=? AND sheet_name=?",
+            (document_id, sheet_name)).fetchone()
+
+    def render_hashes(self, document_id: str) -> dict[str, str]:
+        """{sheet_name: file_hash} for stale detection."""
+        rows = self.conn.execute(
+            "SELECT sheet_name, file_hash FROM sheet_render WHERE document_id=?",
+            (document_id,)).fetchall()
+        return {r["sheet_name"]: r["file_hash"] for r in rows}

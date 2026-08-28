@@ -199,7 +199,7 @@ CREATE TABLE IF NOT EXISTS lineage_edge (
 );
 
 -- ==================================================== KG2: DKG 멤버십 델타 --
--- DKG(=L1 root concept)의 '사람 델타'만 저장한다. AUTO 멤버십은 승인 매핑에서
+-- DKG(=L1 root concept)의 사람 델타만 저장한다. AUTO 멤버십은 승인 매핑에서
 -- 파생되며(kg/groups.py) 여기 저장되지 않는다.
 -- 최종 멤버 = 파생 ∪ INCLUDED − EXCLUDED. EXCLUDED는 파생 부활을 막는 tombstone.
 CREATE TABLE IF NOT EXISTS document_group_member (
@@ -255,4 +255,16 @@ CREATE TABLE IF NOT EXISTS drm_request (
     requested_at TEXT NOT NULL,
     released_at  TEXT,
     updated_at   TEXT NOT NULL
+);
+
+-- ============================================ Sheet Render Cache --
+-- 원본 충실 렌더 JSON을 ingest 시 저장, 웹에서 DB 조회만으로 즉시 응답.
+CREATE TABLE IF NOT EXISTS sheet_render (
+    document_id TEXT NOT NULL REFERENCES document(document_id),
+    sheet_name  TEXT NOT NULL,
+    render_json TEXT NOT NULL,            -- {sheet, sheets, max_row, max_col, cols, rows, cells, images, gridlines, truncated}
+    file_hash   TEXT NOT NULL,            -- 파일 변경 시 무효화
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (document_id, sheet_name)
+);
 );

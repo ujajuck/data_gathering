@@ -197,6 +197,15 @@ def _fmt_value(v, fmt: str) -> tuple[str, bool]:
     return str(v), False
 
 
+def _is_drm_file(path: Path) -> bool:
+    """Detect NASCA DRM-encrypted xlsx by file header."""
+    try:
+        with open(path, 'rb') as f:
+            return f.read(8).startswith(b'<## NASC')
+    except Exception:
+        return False
+
+
 def _load_render_wb(path: Path):
     import openpyxl
 
@@ -209,6 +218,90 @@ def _load_render_wb(path: Path):
             return openpyxl.load_workbook(repaired, data_only=True)
         finally:
             repaired.unlink(missing_ok=True)
+
+
+def _render_sheet_drm(path: Path, sheet_name: str | None) -> dict:
+    """Render sheet from DRM-encrypted file via Excel COM automation.
+
+    Returns the same dict structure as _render_sheet but reads via COM
+    since openpyxl cannot open DRM files. Uses bulk Value read for speed;
+    skips per-cell style/merge queries (too slow over COM).
+    """
+    import win32com.client
+    import pythoncom
+
+    try:
+        pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
+    except Exception:
+        pass
+
+    excel = win32com.client.DispatchEx('Excel.Application')
+    try:
+        excel.Visible = False
+    except Exception:
+        pass
+    try:
+        excel.DisplayAlerts = False
+    except Exception:
+        pass
+
+    try:
+        wb = excel.Workbooks.Open(str(path.resolve()), 0, True)
+        names = [wb.Sheets(i).Name for i in range(1, wb.Sheets.Count + 1)]
+        target = sheet_name or (names[0] if names else None)
+        if target is None or target not in names:
+            wb.Close(SaveChanges=False)
+            raise HTTPException(404, f"sheet not found: {sheet_name}")
+
+        ws = wb.Sheets(target)
+        used = ws.UsedRange
+        max_row = min(used.Rows.Count if used else 1, _SHEET_CAP_ROWS)
+        max_col = min(used.Columns.Count if used else 1, _SHEET_CAP_COLS)
+
+        # Default column widths / row heights (skip per-column COM calls)
+        col_px = [64] * max_col
+        row_px = [20] * max_row
+
+        # Bulk read values only — fast (~1s per sheet)
+        cells = []
+        if max_row > 0 and max_col > 0:
+            try:
+                data_range = ws.Range(ws.Cells(1, 1), ws.Cells(max_row, max_col))
+                values = data_range.Value
+            except Exception:
+                values = None
+
+            if values:
+                for r_idx, row_data in enumerate(values, 1):
+                    if row_data is None:
+                        continue
+                    for c_idx, val in enumerate(row_data, 1):
+                        if val is None:
+                            continue
+                        v_str, is_num = _fmt_value(val, "General")
+                        if v_str == "":
+                            continue
+                        d = {"r": r_idx, "c": c_idx, "v": v_str}
+                        if is_num:
+                            d["n"] = 1
+                        cells.append(d)
+
+        total_rows = used.Rows.Count if used else 1
+        total_cols = used.Columns.Count if used else 1
+        wb.Close(SaveChanges=False)
+        return {
+            "sheet": target, "sheets": names,
+            "max_row": max_row, "max_col": max_col,
+            "cols": col_px, "rows": row_px,
+            "cells": cells, "images": [],
+            "gridlines": True,
+            "truncated": total_rows > _SHEET_CAP_ROWS or total_cols > _SHEET_CAP_COLS,
+        }
+    finally:
+        try:
+            excel.Quit()
+        except Exception:
+            pass
 
 
 def _render_sheet(path: Path, sheet_name: str | None) -> dict:
@@ -509,12 +602,45 @@ def create_app(ws_root: str | Path) -> FastAPI:
 
     @app.get("/api/sheet")
     def sheet(doc: str, name: str | None = None):
+        # 1) DB 렌더 캐시 조회 (ingest 시 이미 추출됨)
+        if name:
+            row = store.load_render(doc, name)
+            if row and row["render_json"]:
+                import json as _json
+                cached = _json.loads(row["render_json"])
+                # sheets 목록 보완 (렌더 캐시에는 개별 시트만 저장)
+                if "sheets" not in cached:
+                    all_renders = store.conn.execute(
+                        "SELECT sheet_name FROM sheet_render WHERE document_id=?",
+                        (doc,)).fetchall()
+                    cached["sheets"] = [r["sheet_name"] for r in all_renders]
+                return {"document_id": doc, **cached}
+        else:
+            # 첫 시트 자동 선택
+            rows = store.conn.execute(
+                "SELECT sheet_name FROM sheet_render WHERE document_id=? ORDER BY rowid LIMIT 1",
+                (doc,)).fetchall()
+            if rows:
+                row = store.load_render(doc, rows[0]["sheet_name"])
+                if row and row["render_json"]:
+                    import json as _json
+                    cached = _json.loads(row["render_json"])
+                    all_renders = store.conn.execute(
+                        "SELECT sheet_name FROM sheet_render WHERE document_id=?",
+                        (doc,)).fetchall()
+                    cached["sheets"] = [r["sheet_name"] for r in all_renders]
+                    return {"document_id": doc, **cached}
+
+        # 2) DB에 없으면 파일에서 읽기 (비DRM만, DRM은 ingest 필요)
         path = _doc_path(doc)
         key = (str(path), path.stat().st_mtime, name or "")
         if key not in render_cache:
             if len(render_cache) > 24:
                 render_cache.clear()
-            render_cache[key] = _render_sheet(path, name)
+            if _is_drm_file(path):
+                render_cache[key] = _render_sheet_drm(path, name)
+            else:
+                render_cache[key] = _render_sheet(path, name)
         return {"document_id": doc, **render_cache[key]}
 
     # ---------------------------------------------- KG View Models (§8 v3) ----

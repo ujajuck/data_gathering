@@ -12,9 +12,13 @@ from src.units.converter import UnitRegistry
 from src.mapping.concepts import ConceptRegistry
 
 ws_root = Path("domains/mlcc_additive")
-store = KgStore(ws_root / "data" / "kg" / "kg.db")
+db_path = ws_root / "data" / "kg" / "kg.db"
+store = KgStore(db_path)
 units = UnitRegistry.load(ws_root / "config" / "units.yaml")
 registry = ConceptRegistry.load(ws_root / "config" / "concepts.yaml") if (ws_root / "config" / "concepts.yaml").exists() else None
+
+# _inspect_via_com에서 렌더 캐시를 같은 DB에 저장하도록 경로 주입
+os.environ["_KG_DB_PATH"] = str(db_path.resolve())
 
 data_dir = Path(r'F:\재료데이터\data\MLCC조성Lab_유전체 개발_전장 재료_X7R_WS 평가_31B106KB_첨가제')
 files = sorted([f for f in data_dir.iterdir() if f.suffix in ('.xlsx', '.xls') and not f.name.startswith('~$')])
