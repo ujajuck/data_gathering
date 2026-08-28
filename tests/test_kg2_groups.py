@@ -454,6 +454,102 @@ def test_webapp_kg_edit_endpoints(client):
     assert "테스트지표" in text
 
 
+# ----------------------------------------- 적대 리뷰 확정 결함 회귀 (KG2) ----
+class _RaceJudge:
+    """judge가 lock 밖에서 도는 사이 끼어드는 동시 편집을 재현한다."""
+
+    def __init__(self, inner, hook):
+        self.inner = inner
+        self.hook = hook
+        self.name = "race"
+        self.fired = False
+
+    def judge(self, ctx, candidates):
+        d = self.inner.judge(ctx, candidates)
+        if not self.fired and d.concept_id == "core_temperature":
+            self.fired = True
+            self.hook()
+        return d
+
+
+def test_staged_map_skips_concept_deprecated_during_judge(ws, tmp_path):
+    """리뷰 결함 1: judge 창에서 개념이 폐기되면 그 판정은 기록하지 않는다."""
+    doc_id, _ = ws.ingest(_mini(tmp_path / "a.xlsx"))
+
+    def deprecate():
+        ws.store.conn.execute(
+            "UPDATE domain_concept SET status='DEPRECATED' "
+            "WHERE concept_id='core_temperature'")
+        ws.store.commit()
+
+    stats = map_nodes_staged(ws.store, threading.Lock(), ws.retriever(),
+                             _RaceJudge(RuleJudge(), deprecate), doc_id)
+    assert stats["skipped_concurrent"] >= 1
+    bad = ws.store.conn.execute(
+        """SELECT count(*) FROM semantic_mapping m
+           JOIN domain_concept c ON c.concept_id=m.concept_id
+           WHERE m.is_active=1 AND c.status='DEPRECATED'""").fetchone()[0]
+    assert bad == 0                        # 폐기 개념을 가리키는 활성 매핑 없음
+
+
+def test_staged_map_skips_node_changed_during_judge(ws, tmp_path):
+    """리뷰 결함 2: judge 창에서 노드 내용(의미 지문)이 바뀌면 스킵한다."""
+    doc_id, _ = ws.ingest(_mini(tmp_path / "a.xlsx"))
+    node = _core_node(ws, doc_id)
+
+    def mutate():
+        ws.store.conn.execute(
+            "UPDATE tree_node SET semantic_fingerprint='changed!' WHERE node_id=?",
+            (node["node_id"],))
+        ws.store.commit()
+
+    stats = map_nodes_staged(ws.store, threading.Lock(), ws.retriever(),
+                             _RaceJudge(RuleJudge(), mutate), doc_id)
+    assert stats["skipped_concurrent"] >= 1
+    assert ws.store.active_mapping(node["node_id"]) is None   # 옛 판정 미기록
+
+
+def test_concept_save_does_not_resurrect_deleted_alias(client):
+    """리뷰 결함 11: 이름 그대로 저장할 때 지운 동명 alias가 부활하면 안 된다."""
+    r = client.post("/api/kg/concept",
+                    json={"canonical_name": "부활테스트", "domain_level": "L3"}).json()
+    cid = r["concept_id"]
+    assert client.delete("/api/kg/alias",
+                         params={"concept_id": cid, "alias": "부활테스트"}
+                         ).json()["ok"]
+    client.post("/api/kg/concept",
+                json={"concept_id": cid, "canonical_name": "부활테스트",
+                      "description": "설명만 수정"})
+    d = client.get(f"/api/kg/concept/{cid}").json()
+    assert "부활테스트" not in d["aliases"]              # 삭제 유지
+    client.post("/api/kg/concept",
+                json={"concept_id": cid, "canonical_name": "개명된이름"})
+    d = client.get(f"/api/kg/concept/{cid}").json()
+    assert "개명된이름" in d["aliases"]                  # 실제 개명 시에만 추가
+
+
+def test_isa_single_parent_and_multiparent_cycle_guard(client):
+    """리뷰 결함 8: IS_A 부모 1개 강제 + 다중 부모 경유 사이클 차단(BFS)."""
+    ids = []
+    for name in ("사이클A", "사이클B", "사이클C"):
+        ids.append(client.post("/api/kg/concept",
+                               json={"canonical_name": name,
+                                     "domain_level": "L3"}).json()["concept_id"])
+    a, b, c = ids
+    assert client.post("/api/kg/relation",
+                       json={"source": a, "target": b, "type": "IS_A"}).json()["ok"]
+    # 두 번째 IS_A 부모는 거부
+    assert client.post("/api/kg/relation",
+                       json={"source": a, "target": c, "type": "IS_A"}
+                       ).status_code == 400
+    assert client.post("/api/kg/relation",
+                       json={"source": b, "target": c, "type": "IS_A"}).json()["ok"]
+    # A→B→C 체인에서 C IS_A A는 사이클
+    r = client.post("/api/kg/relation",
+                    json={"source": c, "target": a, "type": "IS_A"})
+    assert r.status_code == 400 and "사이클" in r.json()["detail"]
+
+
 def test_webapp_member_override_and_bad_input(client):
     r = client.post("/api/ingest", json={"filename": "mini.xlsx"}).json()
     doc = r["document_id"]

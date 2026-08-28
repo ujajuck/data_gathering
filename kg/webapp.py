@@ -378,9 +378,28 @@ def _grid_json(structure, sheet_name: str) -> dict:
 
 def create_app(ws_root: str | Path) -> FastAPI:
     from kg.cli import Workspace
+    from contextlib import contextmanager
     root = Path(ws_root).resolve()
     store = KgStore(root / "data" / "kg" / "kg.db", threadsafe=True)
     lock = threading.Lock()
+
+    @contextmanager
+    def wlock():
+        """쓰기 구간용 lock — 예외 시 lock을 쥔 채 rollback 후 전파한다.
+
+        with 블록을 예외로 탈출하면 lock이 먼저 풀리므로, 미커밋 부분 쓰기가
+        경쟁 요청의 commit에 편승해 영구화되는 창이 생긴다(리뷰 확정 결함).
+        모든 쓰기 엔드포인트는 lock 대신 이것을 쓴다.
+        """
+        with lock:
+            try:
+                yield
+            except Exception:
+                try:
+                    store.conn.rollback()
+                except Exception:
+                    pass
+                raise
     ws = Workspace(root, store=store)     # parser_rules/units/registry 공유 컨텍스트
     inspector = WorkbookInspector()
     struct_cache: dict[tuple[str, float], object] = {}
@@ -773,7 +792,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
             raise HTTPException(400, "action must be approve|reject")
         if not re.match(r"^MAP-[0-9a-f]{12}$", body.mapping_id):
             raise HTTPException(400, "bad mapping id")
-        with lock:
+        with wlock():
             row = store.conn.execute(
                 "SELECT 1 FROM semantic_mapping WHERE mapping_id=? AND is_active=1",
                 (body.mapping_id,)).fetchone()
@@ -786,7 +805,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
     @app.post("/api/remap")
     def remap(body: RemapAction):
         """Inspector '매핑 수정' (§7.4): 사람이 개념을 확정 — APPROVED 매핑 생성."""
-        with lock:
+        with wlock():
             if store.node(body.node_id) is None:
                 raise HTTPException(404, "unknown node")
             if store.concept(body.concept_id) is None:
@@ -819,7 +838,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 {"op": "deduplicate"},
             ],
         }
-        with lock:
+        with wlock():
             from kg.integration.builder import delete_project
             iid = None
             try:
@@ -882,7 +901,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
         paths = sorted(p for p in raw_dir.glob("*.xlsx")
                        if not p.name.startswith("~$")) if raw_dir.exists() else []
         out = []
-        with lock:
+        with wlock():
             refresh_release_states(store, raw_dir)   # 해제본 도착 자동 감지
             known = {r["document_id"] for r in store.conn.execute(
                 "SELECT document_id FROM document")}
@@ -912,7 +931,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
         fn = body.filename
         if "/" in fn or "\\" in fn or ".." in fn or not fn.lower().endswith(".xlsx"):
             raise HTTPException(400, "bad filename")
-        with lock:
+        with wlock():
             try:
                 res = create_request(store, root / "data" / "raw", fn,
                                      note=(body.note or "")[:2000])
@@ -924,7 +943,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
 
     @app.get("/api/drm")
     def drm_list():
-        with lock:
+        with wlock():
             refresh_release_states(store, root / "data" / "raw")
             return list_requests(store)
 
@@ -959,7 +978,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
         except Exception as e:
             raise HTTPException(400, f"파싱 실패: {e}")
         rec_stats = None
-        with lock:
+        with wlock():
             try:
                 ing = apply_parsed(store, doc_id, path, file_hash,
                                    PARSER_VERSION, drafts, force=body.force)
@@ -978,7 +997,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
             retriever = _fresh_retriever() if body.map else None
         map_stats = (map_nodes_staged(store, lock, retriever, _judge(), doc_id)
                      if body.map else None)
-        with lock:
+        with wlock():
             suggestions = (None if body.group_id
                            else suggest_groups(store, doc_id))
             mark_ingested(store, fn)         # 해제 요청 이력이 있으면 완결로
@@ -995,7 +1014,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
             raise HTTPException(400, "state must be INCLUDED|EXCLUDED")
         if not _DOCID_RE.match(body.document_id):
             raise HTTPException(400, "bad document id")
-        with lock:
+        with wlock():
             _require_l1(root_id)
             if store.conn.execute("SELECT 1 FROM document WHERE document_id=?",
                                   (body.document_id,)).fetchone() is None:
@@ -1006,7 +1025,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
 
     @app.delete("/api/group/{root_id}/member/{document_id}")
     def group_member_clear(root_id: str, document_id: str):
-        with lock:
+        with wlock():
             _require_l1(root_id)
             n = clear_member_override(store, root_id, document_id)
             store.commit()
@@ -1016,7 +1035,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
 
     @app.post("/api/group/{root_id}/recipe")
     def recipe_snapshot(root_id: str, body: RecipeReq):
-        with lock:
+        with wlock():
             _require_l1(root_id)
             try:
                 res = snapshot_recipe(store, root_id, note=(body.note or "")[:2000],
@@ -1065,7 +1084,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
     def recipe_roll(root_id: str, recipe_id: str):
         if not _RCP_RE.match(recipe_id):
             raise HTTPException(400, "bad recipe id")
-        with lock:
+        with wlock():
             _require_l1(root_id)
             try:
                 rid = rollback_recipe(store, root_id, recipe_id)
@@ -1085,7 +1104,8 @@ def create_app(ws_root: str | Path) -> FastAPI:
             for d in body.document_ids:
                 if not _DOCID_RE.match(d):
                     raise HTTPException(400, "bad document id")
-        with lock:
+        judge = _judge()                 # 실패 가능 준비물은 busy 설정 전에
+        with wlock():
             _require_l1(root_id)
             if recrawl_state["busy"]:
                 raise HTTPException(
@@ -1099,11 +1119,10 @@ def create_app(ws_root: str | Path) -> FastAPI:
             if set(docs) - set(members):
                 raise HTTPException(400, "그룹 멤버가 아닌 문서가 포함됐습니다")
             rec = active_recipe(store, root_id)
+            retriever = _fresh_retriever()   # units YAML 파싱 실패 등도 이 앞에서
             run_id = start_run(store, root_id,
                                rec["recipe_id"] if rec else None, body.mode)
             recrawl_state["busy"], recrawl_state["run_id"] = True, run_id
-            retriever = _fresh_retriever()
-        judge = _judge()
 
         def _worker():
             try:
@@ -1123,7 +1142,18 @@ def create_app(ws_root: str | Path) -> FastAPI:
                     struct_cache.clear()
                     render_cache.clear()
 
-        threading.Thread(target=_worker, daemon=True, name=f"recrawl-{run_id}").start()
+        try:
+            threading.Thread(target=_worker, daemon=True,
+                             name=f"recrawl-{run_id}").start()
+        except Exception:
+            # 워커 기동 실패 시 busy/RUNNING이 영구 고착되지 않게 보상한다
+            with wlock():
+                recrawl_state["busy"], recrawl_state["run_id"] = False, None
+                store.conn.execute(
+                    "UPDATE recrawl_run SET status='FAILED', finished_at=? "
+                    "WHERE run_id=?", (now_iso(), run_id))
+                store.commit()
+            raise HTTPException(500, "재크롤링 워커 기동 실패")
         return {"ok": True, "run_id": run_id, "documents": len(docs)}
 
     @app.get("/api/recrawl/{run_id}")
@@ -1152,7 +1182,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
             raise HTTPException(400, "bad concept id")
         if body.domain_level is not None and body.domain_level not in ("L1", "L2", "L3"):
             raise HTTPException(400, "domain_level must be L1|L2|L3")
-        with lock:
+        with wlock():
             row = store.concept(cid) if cid else None
             if row is None:                                       # 생성
                 name = (body.canonical_name or "").strip()
@@ -1184,7 +1214,9 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 store.upsert_concept(
                     {k: merged[k] for k in
                      ("concept_id", "status", *_CONCEPT_FIELDS)})
-                if body.canonical_name:            # 개명 시 새 이름도 검색에 닿게
+                # 실제 개명일 때만 새 이름 alias 추가 — 이름 그대로 저장할 때마다
+                # 사용자가 지운 동명 alias가 부활하는 결함의 수정
+                if body.canonical_name and body.canonical_name != row["canonical_name"]:
                     store.add_alias(cid, body.canonical_name,
                                     normalize_label(body.canonical_name))
                 created = False
@@ -1216,7 +1248,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
     @app.post("/api/kg/concept/{cid}/deprecate")
     def concept_deprecate(cid: str):
         """소프트 삭제 — 활성 매핑이 참조 중이면 409 (먼저 재매핑 유도)."""
-        with lock:
+        with wlock():
             if store.concept(cid) is None:
                 raise HTTPException(404, "unknown concept")
             n = store.conn.execute(
@@ -1236,7 +1268,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
 
     @app.post("/api/kg/concept/{cid}/restore")
     def concept_restore(cid: str):
-        with lock:
+        with wlock():
             if store.concept(cid) is None:
                 raise HTTPException(404, "unknown concept")
             store.conn.execute(
@@ -1249,7 +1281,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
         alias = (body.alias or "").strip()
         if not alias:
             raise HTTPException(400, "alias 필수")
-        with lock:
+        with wlock():
             if store.concept(body.concept_id) is None:
                 raise HTTPException(404, "unknown concept")
             store.add_alias(body.concept_id, alias, normalize_label(alias))
@@ -1258,7 +1290,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
 
     @app.delete("/api/kg/alias")
     def alias_delete(concept_id: str, alias: str):
-        with lock:
+        with wlock():
             cur = store.conn.execute(
                 "DELETE FROM domain_alias WHERE concept_id=? AND alias_norm=?",
                 (concept_id, normalize_label(alias)))
@@ -1268,18 +1300,25 @@ def create_app(ws_root: str | Path) -> FastAPI:
         return JSONResponse({"ok": True})
 
     def _isa_would_cycle(src: str, dst: str) -> bool:
-        """src IS_A dst 추가 시 사이클 여부 — dst의 부모 체인에 src가 있으면."""
-        parents = {r["s"]: r["t"] for r in store.conn.execute(
-            "SELECT source_concept_id s, target_concept_id t FROM domain_relation "
-            "WHERE relation_type='IS_A'")}
-        cur = dst
-        for _ in range(8):
-            if cur == src:
+        """src IS_A dst 추가 시 사이클 여부 — dst에서 위로 가는 **모든** 부모
+        경로를 BFS로 탐색한다 (다중 부모가 있는 기존 데이터에서 마지막 행만
+        보던 가드가 우회되는 결함의 수정)."""
+        parents: dict[str, list[str]] = {}
+        for r in store.conn.execute(
+                "SELECT source_concept_id s, target_concept_id t "
+                "FROM domain_relation WHERE relation_type='IS_A'"):
+            parents.setdefault(r["s"], []).append(r["t"])
+        seen, frontier = {dst}, [dst]
+        for _ in range(16):
+            if src in seen:
                 return True
-            cur = parents.get(cur)
-            if cur is None:
+            nxt = [p for cur in frontier for p in parents.get(cur, [])
+                   if p not in seen]
+            if not nxt:
                 return False
-        return True                                 # 8홉 초과 = 이미 비정상 체인
+            seen.update(nxt)
+            frontier = nxt
+        return True                                 # 깊이 초과 = 비정상 체인 취급
 
     @app.post("/api/kg/relation")
     def relation_add(body: RelationReq):
@@ -1287,12 +1326,23 @@ def create_app(ws_root: str | Path) -> FastAPI:
             raise HTTPException(400, f"type must be one of {sorted(VALID_RELATIONS)}")
         if body.source == body.target:
             raise HTTPException(400, "self-loop 불가")
-        with lock:
+        with wlock():
             for c in (body.source, body.target):
                 if store.concept(c) is None:
                     raise HTTPException(404, f"unknown concept: {c}")
-            if body.type == "IS_A" and _isa_would_cycle(body.source, body.target):
-                raise HTTPException(400, "IS_A 사이클이 생깁니다")
+            if body.type == "IS_A":
+                if _isa_would_cycle(body.source, body.target):
+                    raise HTTPException(400, "IS_A 사이클이 생깁니다")
+                # IS_A 부모는 1개 — 루트 도출(isa_roots)이 단일 부모를 전제한다
+                prev = store.conn.execute(
+                    "SELECT target_concept_id FROM domain_relation "
+                    "WHERE source_concept_id=? AND relation_type='IS_A' "
+                    "AND target_concept_id != ?",
+                    (body.source, body.target)).fetchone()
+                if prev is not None:
+                    raise HTTPException(
+                        400, f"IS_A 부모는 1개입니다 — 기존 부모"
+                             f"({prev['target_concept_id']})를 먼저 삭제하세요")
             store.add_relation(body.source, body.target, body.type)
             store.commit()
         warning = ("IS_A 변경은 Document KG(문서군) 재편성에 영향을 줍니다"
@@ -1301,7 +1351,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
 
     @app.delete("/api/kg/relation")
     def relation_delete(source: str, target: str, type: str):
-        with lock:
+        with wlock():
             cur = store.conn.execute(
                 "DELETE FROM domain_relation WHERE source_concept_id=? "
                 "AND target_concept_id=? AND relation_type=?",
