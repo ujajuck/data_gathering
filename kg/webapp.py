@@ -258,9 +258,21 @@ def _render_sheet_drm(path: Path, sheet_name: str | None) -> dict:
         max_row = min(used.Rows.Count if used else 1, _SHEET_CAP_ROWS)
         max_col = min(used.Columns.Count if used else 1, _SHEET_CAP_COLS)
 
-        # Default column widths / row heights (skip per-column COM calls)
-        col_px = [64] * max_col
-        row_px = [20] * max_row
+        # 실제 열 너비 / 행 높이 읽기
+        col_px = []
+        for c in range(1, max_col + 1):
+            try:
+                w = ws.Columns(c).ColumnWidth
+                col_px.append(max(14, round((w or 8.43) * 7 + 5)))
+            except Exception:
+                col_px.append(64)
+        row_px = []
+        for r in range(1, max_row + 1):
+            try:
+                h = ws.Rows(r).RowHeight
+                row_px.append(max(12, round((h or 15.0) * 4 / 3)))
+            except Exception:
+                row_px.append(20)
 
         # Bulk read values only — fast (~1s per sheet)
         cells = []
