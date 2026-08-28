@@ -267,4 +267,3 @@ CREATE TABLE IF NOT EXISTS sheet_render (
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (document_id, sheet_name)
 );
-);

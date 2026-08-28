@@ -6,10 +6,11 @@
   3) 해제본(같은 파일명, 읽기 가능)이 도착하면 자동 감지해 등록 흐름에 넘긴다
 
 컨테이너 판별:
-  xlsx_zip : PK\\x03\\x04     — 일반 xlsx, 그대로 처리 가능
-  ole_cfb  : D0 CF 11 E0    — 표준 오피스 암호화(비밀번호), MIP/AIP 라벨,
-                              구형 .xls, 일부 국산 DRM의 CFB 래퍼
-  unknown  : 그 외           — 벤더 전용 DRM 컨테이너 등
+  xlsx_zip  : PK\\x03\\x04     — 일반 xlsx, 그대로 처리 가능
+  nasca_drm : <## NASC       — NASCA DRM (한국 벤더), Excel COM으로 읽기 가능
+  ole_cfb   : D0 CF 11 E0    — 표준 오피스 암호화(비밀번호), MIP/AIP 라벨,
+                               구형 .xls, 일부 국산 DRM의 CFB 래퍼
+  unknown   : 그 외           — 벤더 전용 DRM 컨테이너 등
 """
 from __future__ import annotations
 
@@ -19,21 +20,30 @@ from kg.store import KgStore, new_id, now_iso
 
 _MAGIC_ZIP = b"PK\x03\x04"
 _MAGIC_OLE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_MAGIC_NASCA = b"<## NASC"
 
 _CONTAINER_LABEL = {
+    "nasca_drm": "NASCA DRM — Excel COM 자동 판독 가능 (Windows 전용)",
     "ole_cfb": "OLE/CFB — 암호화된 Office 문서 또는 DRM 래퍼",
     "unknown": "알 수 없는 컨테이너 — 벤더 전용 DRM 추정",
 }
 
 
 def sniff_container(path: Path) -> dict:
-    """확장자가 아니라 실제 바이트로 판별한다. locked=True면 파싱 불가."""
+    """확장자가 아니라 실제 바이트로 판별한다.
+
+    locked=True면 openpyxl 파싱 불가. com_readable=True면 Excel COM으로
+    읽기 가능(Windows + Excel 설치 환경에서만).
+    """
     try:
         head = Path(path).open("rb").read(8)
     except OSError as e:
         return {"container": "unreadable", "locked": True, "detail": str(e)}
     if head.startswith(_MAGIC_ZIP):
         return {"container": "xlsx_zip", "locked": False}
+    if head.startswith(_MAGIC_NASCA):
+        return {"container": "nasca_drm", "locked": True, "com_readable": True,
+                "detail": _CONTAINER_LABEL["nasca_drm"]}
     if head.startswith(_MAGIC_OLE):
         return {"container": "ole_cfb", "locked": True,
                 "detail": _CONTAINER_LABEL["ole_cfb"]}

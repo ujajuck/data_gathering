@@ -49,12 +49,16 @@ def apply_parsed(store: KgStore, document_id: str, path: Path, file_hash: str,
 
 def ingest_file(store: KgStore, ws_root: Path, path: Path, parser_rules: dict,
                 units, registry, force: bool = False) -> dict:
-    """parse + apply 일괄 (CLI 경로). 잠긴(암호화/DRM) 파일은 우회하지 않고
-    명시적으로 건너뛴다 — 웹 파일 탭에서 해제 요청을 만들 수 있다."""
+    """parse + apply 일괄 (CLI 경로).
+
+    NASCA DRM 파일은 Excel COM으로 자동 판독한다(com_readable).
+    그 외 잠긴 파일은 우회하지 않고 명시적으로 건너뛴다 —
+    웹 파일 탭에서 해제 요청을 만들 수 있다.
+    """
     from kg.acquisition import sniff_container
     from src.inspect.inspector import PARSER_VERSION
     sniff = sniff_container(Path(path))
-    if sniff["locked"]:
+    if sniff["locked"] and not sniff.get("com_readable"):
         return {"file": Path(path).name, "locked": True,
                 "error": f"잠긴 파일({sniff.get('detail') or sniff['container']}) "
                          "— DRM 해제 요청 필요"}
@@ -62,4 +66,7 @@ def ingest_file(store: KgStore, ws_root: Path, path: Path, parser_rules: dict,
         store, ws_root, path, parser_rules, units, registry)
     res = apply_parsed(store, document_id, path, file_hash, PARSER_VERSION,
                        drafts, force=force)
-    return {"file": Path(path).name, "document_id": document_id, **res}
+    result = {"file": Path(path).name, "document_id": document_id, **res}
+    if sniff.get("com_readable"):
+        result["drm_com"] = True
+    return result

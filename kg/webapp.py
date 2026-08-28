@@ -1021,6 +1021,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
                     "filename": p.name,
                     "document_id": document_id_for(root, p),
                     "locked": sniff["locked"],
+                    "com_readable": sniff.get("com_readable", False),
                     "container": sniff["container"],
                     "container_detail": sniff.get("detail"),
                     "drm": ({"request_id": row["request_id"],
@@ -1070,7 +1071,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
         if not path.exists():
             raise HTTPException(404, f"file not found: {fn}")
         sniff = sniff_container(path)
-        if sniff["locked"]:
+        if sniff["locked"] and not sniff.get("com_readable"):
             raise HTTPException(
                 400, f"파일이 잠겨 있습니다({sniff.get('detail') or sniff['container']}) "
                      "— DRM 해제 요청 후 해제본이 도착하면 등록할 수 있습니다")
