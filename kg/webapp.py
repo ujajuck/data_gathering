@@ -614,33 +614,29 @@ def create_app(ws_root: str | Path) -> FastAPI:
 
     @app.get("/api/sheet")
     def sheet(doc: str, name: str | None = None):
+        # sheets 목록은 항상 tree_node에서 (render 캐시 유무 무관)
+        all_sheets = [r["node_name"] for r in store.conn.execute(
+            """SELECT node_name FROM tree_node
+               WHERE document_id=? AND status='ACTIVE' AND node_type='SHEET'
+               ORDER BY tree_path""", (doc,)).fetchall()]
+
         # 1) DB 렌더 캐시 조회 (ingest 시 이미 추출됨)
         if name:
             row = store.load_render(doc, name)
             if row and row["render_json"]:
                 import json as _json
                 cached = _json.loads(row["render_json"])
-                # sheets 목록 보완 (렌더 캐시에는 개별 시트만 저장)
-                if "sheets" not in cached:
-                    all_renders = store.conn.execute(
-                        "SELECT sheet_name FROM sheet_render WHERE document_id=?",
-                        (doc,)).fetchall()
-                    cached["sheets"] = [r["sheet_name"] for r in all_renders]
+                cached["sheets"] = all_sheets
                 return {"document_id": doc, **cached}
         else:
             # 첫 시트 자동 선택
-            rows = store.conn.execute(
-                "SELECT sheet_name FROM sheet_render WHERE document_id=? ORDER BY rowid LIMIT 1",
-                (doc,)).fetchall()
-            if rows:
-                row = store.load_render(doc, rows[0]["sheet_name"])
+            if all_sheets:
+                first = all_sheets[0]
+                row = store.load_render(doc, first)
                 if row and row["render_json"]:
                     import json as _json
                     cached = _json.loads(row["render_json"])
-                    all_renders = store.conn.execute(
-                        "SELECT sheet_name FROM sheet_render WHERE document_id=?",
-                        (doc,)).fetchall()
-                    cached["sheets"] = [r["sheet_name"] for r in all_renders]
+                    cached["sheets"] = all_sheets
                     return {"document_id": doc, **cached}
 
         # 2) DB에 없으면 파일에서 읽기 (비DRM만, DRM은 ingest 필요)
