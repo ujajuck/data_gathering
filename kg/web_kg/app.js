@@ -431,7 +431,7 @@ function jumpTo(documentId, locator, nodeId) {
 // ---- Excel 렌더 + Semantic Overlay
 function colName(n) {
   let s = '';
-  while (n > 0) { s = String.fromCharCode(64 + ((n - 1) % 26)) + s; n = Math.floor((n - 1) / 26); }
+  while (n > 0) { s = String.fromCharCode(65 + ((n - 1) % 26)) + s; n = Math.floor((n - 1) / 26); }
   return s;
 }
 function parseRange(range) {
@@ -483,15 +483,21 @@ async function loadSheet(doc, sheet, focusNode) {
   for (const c of data.cells) byPos.set(`${c.r},${c.c}`, c);
   const covered = new Set();
   for (const c of data.cells)
-    for (let r = c.r; r < c.r + c.rs; r++)
-      for (let k = c.c; k < c.c + c.cs; k++)
+    for (let r = c.r; r < c.r + (c.rs || 1); r++)
+      for (let k = c.c; k < c.c + (c.cs || 1); k++)
         if (r !== c.r || k !== c.c) covered.add(`${r},${k}`);
 
-  let html = '<table class="grid"><tr><td class="hd"></td>';
+  // 원본 충실 렌더: 열폭/행고/테두리/폰트/정렬/이미지를 그대로 재현한다 (§10.1)
+  const HDRW = 34, HDRH = 22;
+  const grid = data.gridlines ? '1px solid #e9edf2' : '1px solid transparent';
+  let html = `<table class="grid" style="table-layout:fixed;border-collapse:collapse">
+    <colgroup><col style="width:${HDRW}px">` +
+    data.cols.map((w) => `<col style="width:${w}px">`).join('') + '</colgroup>';
+  html += `<tr style="height:${HDRH}px"><td class="hd"></td>`;
   for (let c = 1; c <= data.max_col; c++) html += `<td class="hd">${colName(c)}</td>`;
   html += '</tr>';
   for (let r = 1; r <= data.max_row; r++) {
-    html += `<tr><td class="hd">${r}</td>`;
+    html += `<tr style="height:${data.rows[r - 1]}px"><td class="hd">${r}</td>`;
     for (let c = 1; c <= data.max_col; c++) {
       if (covered.has(`${r},${c}`)) continue;
       const cell = byPos.get(`${r},${c}`);
@@ -500,21 +506,41 @@ async function loadSheet(doc, sheet, focusNode) {
                       c >= focusRange.c1 && c <= focusRange.c2;
       const cls = (ov && ov.role !== 'IGNORE' ? ` ov ov-${ov.role}` : (ov ? ' ov' : '')) +
                   (inFocus ? ' selc' : '');
-      const style = [];
-      if (cell && cell.f) style.push(`background:${esc(cell.f)}`);
-      if (cell && cell.b) style.push('font-weight:700');
+      const st = [`border:${grid}`];
+      if (cell) {
+        if (cell.f) st.push(`background:${esc(cell.f)}`);
+        if (cell.b) st.push('font-weight:700');
+        if (cell.i) st.push('font-style:italic');
+        if (cell.sz) st.push(`font-size:${cell.sz}px`);
+        if (cell.fc) st.push(`color:${esc(cell.fc)}`);
+        if (cell.ha) st.push(`text-align:${{ l: 'left', c: 'center', r: 'right' }[cell.ha]}`);
+        else if (cell.n) st.push('text-align:right');
+        if (cell.wr) st.push('white-space:normal;word-break:break-all');
+        if (cell.bd) {
+          if (cell.bd.t) st.push(`border-top:${esc(cell.bd.t)}`);
+          if (cell.bd.r) st.push(`border-right:${esc(cell.bd.r)}`);
+          if (cell.bd.b) st.push(`border-bottom:${esc(cell.bd.b)}`);
+          if (cell.bd.l) st.push(`border-left:${esc(cell.bd.l)}`);
+        }
+      }
       html += `<td${cls.trim() ? ` class="${cls.trim()}"` : ''}` +
         `${ov ? ` data-node="${esc(ov.node_id)}"` : ''}` +
-        `${cell && cell.rs > 1 ? ` rowspan="${cell.rs}"` : ''}` +
-        `${cell && cell.cs > 1 ? ` colspan="${cell.cs}"` : ''}` +
-        `${style.length ? ` style="${style.join(';')}"` : ''}` +
+        `${cell && cell.rs ? ` rowspan="${cell.rs}"` : ''}` +
+        `${cell && cell.cs ? ` colspan="${cell.cs}"` : ''}` +
+        ` style="${st.join(';')}"` +
         ` title="${colName(c)}${r}${ov ? ` · ${esc(ov.concept_name || ov.header)} [${esc(ov.role)}]` : ''}">` +
         `${cell ? esc(cell.v) : ''}</td>`;
     }
     html += '</tr>';
   }
   html += '</table>';
-  $('#gridwrap').innerHTML = html;
+  // 이미지 오버레이 — 앵커 px 좌표에 절대 배치 (원본 도형/사진 보존)
+  const imgs = (data.images || []).map((im) =>
+    `<img src="${im.src}" style="position:absolute;left:${HDRW + im.x}px;` +
+    `top:${HDRH + im.y}px;width:${im.w}px;height:${im.h}px;` +
+    `box-shadow:0 1px 4px rgba(20,30,50,.18);pointer-events:none">`).join('');
+  $('#gridwrap').innerHTML =
+    `<div style="position:relative;display:inline-block">${html}${imgs}</div>`;
   $('#gridwrap').querySelectorAll('td.ov').forEach((td) =>
     td.onclick = () => openInspector(td.dataset.node));
   const roles = {};

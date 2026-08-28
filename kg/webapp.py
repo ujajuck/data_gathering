@@ -69,6 +69,210 @@ def _node_role(node_meta: dict, data_type: str | None, concept_type: str | None)
     return "CONTEXT"
 
 
+# ------------------------------------------------------ 원본 충실 렌더 ----
+# §10.1: 병합/색/테두리/글꼴/열폭/행고/이미지를 보존한 서버측 렌더 모델.
+# 렌더와 값 추출(파서)은 분리 — 이 모델은 화면 전용이다.
+_EMU_PX = 9525.0
+_BORDER_W = {"thin": 1, "hair": 1, "dotted": 1, "dashed": 1, "mediumDashed": 2,
+             "medium": 2, "thick": 3, "double": 3}
+_BORDER_STYLE = {"dotted": "dotted", "dashed": "dashed", "mediumDashed": "dashed",
+                 "double": "double"}
+
+
+def _rgb(color) -> str | None:
+    if color is None or getattr(color, "type", None) != "rgb":
+        return None
+    v = color.rgb
+    if not isinstance(v, str) or len(v) != 8 or v == "00000000":
+        return None
+    return "#" + v[-6:]
+
+
+def _border_css(side) -> str | None:
+    if side is None or side.style is None:
+        return None
+    w = _BORDER_W.get(side.style, 1)
+    st = _BORDER_STYLE.get(side.style, "solid")
+    return f"{w}px {st} {_rgb(side.color) or '#8d97a5'}"
+
+
+def _fmt_value(v, fmt: str) -> tuple[str, bool]:
+    """(표시 문자열, 숫자 여부) — Excel number_format의 흔한 경우를 근사한다."""
+    import datetime as _dt
+    if v is None:
+        return "", False
+    if isinstance(v, bool):
+        return str(v), False
+    if isinstance(v, _dt.datetime):
+        return (v.strftime("%Y-%m-%d") if (v.hour, v.minute, v.second) == (0, 0, 0)
+                else v.strftime("%Y-%m-%d %H:%M")), False
+    if isinstance(v, (_dt.date, _dt.time)):
+        return str(v), False
+    if isinstance(v, (int, float)):
+        f = fmt or "General"
+        dec = 0
+        if "." in f:
+            dec = sum(1 for ch in f.split(".", 1)[1] if ch in "0#")
+        try:
+            if "%" in f:
+                return f"{v * 100:.{dec}f}%", True
+            if "#,##" in f or "#,#" in f:
+                return f"{v:,.{dec}f}", True
+            if f != "General" and any(ch in f for ch in "0#"):
+                return f"{v:.{dec}f}", True
+        except (ValueError, OverflowError):
+            pass
+        if isinstance(v, float):
+            s = f"{v:.6f}".rstrip("0").rstrip(".")
+            return (s if s else "0"), True
+        return str(v), True
+    return str(v), False
+
+
+def _load_render_wb(path: Path):
+    import openpyxl
+
+    from src.inspect.inspector import _repair_sheet_names
+    try:
+        return openpyxl.load_workbook(path, data_only=True)
+    except ValueError:
+        repaired = _repair_sheet_names(path)
+        try:
+            return openpyxl.load_workbook(repaired, data_only=True)
+        finally:
+            repaired.unlink(missing_ok=True)
+
+
+def _render_sheet(path: Path, sheet_name: str | None) -> dict:
+    import base64
+
+    from openpyxl.utils import get_column_letter, range_boundaries
+    wb = _load_render_wb(path)
+    names = wb.sheetnames
+    target = sheet_name or (names[0] if names else None)
+    if target is None or target not in names:
+        raise HTTPException(404, f"sheet not found: {sheet_name}")
+    ws = wb[target]
+    max_r = min(ws.max_row or 1, _SHEET_CAP_ROWS)
+    max_c = min(ws.max_column or 1, _SHEET_CAP_COLS)
+
+    # 열 너비(문자폭→px) / 행 높이(pt→px) — 원본 레이아웃의 뼈대
+    col_px = []
+    for c in range(1, max_c + 1):
+        dim = ws.column_dimensions.get(get_column_letter(c))
+        w = dim.width if dim is not None and dim.width else 8.43
+        col_px.append(max(14, round(w * 7 + 5)))
+    row_px = []
+    for r in range(1, max_r + 1):
+        dim = ws.row_dimensions.get(r)
+        h = dim.height if dim is not None and dim.height else 15.0
+        row_px.append(max(12, round(h * 4 / 3)))
+
+    spans: dict[str, tuple[int, int]] = {}
+    covered: set[tuple[int, int]] = set()
+    for m in ws.merged_cells.ranges:
+        a, b, c2, d = range_boundaries(str(m))
+        spans[f"{b},{a}"] = (min(d, max_r) - b + 1, min(c2, max_c) - a + 1)
+        for rr in range(b, min(d, max_r) + 1):
+            for cc in range(a, min(c2, max_c) + 1):
+                if (rr, cc) != (b, a):
+                    covered.add((rr, cc))
+
+    cells = []
+    for row in ws.iter_rows(min_row=1, max_row=max_r, min_col=1, max_col=max_c):
+        for cell in row:
+            key = (cell.row, cell.column)
+            if key in covered:
+                continue
+            v, is_num = _fmt_value(cell.value, cell.number_format)
+            fill = None
+            if cell.fill is not None and cell.fill.patternType == "solid":
+                fill = _rgb(cell.fill.fgColor)
+            fnt = cell.font
+            bd = {}
+            for side, name in ((cell.border.top, "t"), (cell.border.right, "r"),
+                               (cell.border.bottom, "b"), (cell.border.left, "l")):
+                css = _border_css(side)
+                if css:
+                    bd[name] = css
+            al = cell.alignment
+            if v == "" and not fill and not bd and key not in \
+                    {tuple(map(int, k.split(","))) for k in spans}:
+                continue
+            rs, cs = spans.get(f"{cell.row},{cell.column}", (1, 1))
+            d = {"r": cell.row, "c": cell.column, "v": v}
+            if rs > 1 or cs > 1:
+                d["rs"], d["cs"] = rs, cs
+            if is_num:
+                d["n"] = 1
+            if fill:
+                d["f"] = fill
+            if fnt is not None:
+                if fnt.bold:
+                    d["b"] = 1
+                if fnt.italic:
+                    d["i"] = 1
+                if fnt.size and abs(float(fnt.size) - 11.0) > 0.1:
+                    d["sz"] = round(float(fnt.size) * 4 / 3)
+                fc = _rgb(fnt.color)
+                if fc and fc != "#000000":
+                    d["fc"] = fc
+            if bd:
+                d["bd"] = bd
+            if al is not None:
+                if al.horizontal in ("center", "right", "left"):
+                    d["ha"] = al.horizontal[0]
+                if al.wrap_text:
+                    d["wr"] = 1
+            cells.append(d)
+
+    # 이미지 — 앵커 좌표(EMU)를 px로 환산해 그리드 위에 겹친다
+    cum_x = [0]
+    for w in col_px:
+        cum_x.append(cum_x[-1] + w)
+    cum_y = [0]
+    for h in row_px:
+        cum_y.append(cum_y[-1] + h)
+    images = []
+    total_img = 0
+    for img in getattr(ws, "_images", []):
+        try:
+            data = img._data()
+        except Exception:
+            continue
+        if len(data) > 1_500_000 or total_img + len(data) > 4_000_000:
+            continue
+        frm = getattr(img.anchor, "_from", None)
+        if frm is None:
+            continue
+        col0 = min(frm.col, max_c - 1)
+        row0 = min(frm.row, max_r - 1)
+        x = cum_x[col0] + frm.colOff / _EMU_PX
+        y = cum_y[row0] + frm.rowOff / _EMU_PX
+        to = getattr(img.anchor, "to", None)
+        ext = getattr(img.anchor, "ext", None)
+        if to is not None:
+            w = cum_x[min(to.col, max_c)] + to.colOff / _EMU_PX - x
+            h = cum_y[min(to.row, max_r)] + to.rowOff / _EMU_PX - y
+        elif ext is not None:
+            w, h = ext.cx / _EMU_PX, ext.cy / _EMU_PX
+        else:
+            w, h = 160, 120
+        if w <= 4 or h <= 4:
+            continue
+        total_img += len(data)
+        mt = (getattr(img, "format", None) or "png").lower()
+        images.append({"x": round(x), "y": round(y), "w": round(w), "h": round(h),
+                       "src": f"data:image/{mt};base64,"
+                              f"{base64.b64encode(data).decode()}"})
+
+    return {"sheet": target, "sheets": names, "max_row": max_r, "max_col": max_c,
+            "cols": col_px, "rows": row_px, "cells": cells, "images": images,
+            "gridlines": bool(ws.sheet_view.showGridLines),
+            "truncated": (ws.max_row or 1) > _SHEET_CAP_ROWS or
+                         (ws.max_column or 1) > _SHEET_CAP_COLS}
+
+
 def _grid_json(structure, sheet_name: str) -> dict:
     sheet = next((s for s in structure.sheets if s.sheet_name == sheet_name), None)
     if sheet is None:
@@ -217,15 +421,17 @@ def create_app(ws_root: str | Path) -> FastAPI:
                     ORDER BY m.confidence DESC LIMIT ?""", params).fetchall()
         return [dict(r) for r in rows]
 
+    render_cache: dict[tuple, dict] = {}
+
     @app.get("/api/sheet")
     def sheet(doc: str, name: str | None = None):
         path = _doc_path(doc)
-        structure = _structure(path)
-        names = [s.sheet_name for s in structure.sheets]
-        target = name or (names[0] if names else None)
-        if target is None:
-            raise HTTPException(404, "empty workbook")
-        return {"document_id": doc, "sheets": names, **_grid_json(structure, target)}
+        key = (str(path), path.stat().st_mtime, name or "")
+        if key not in render_cache:
+            if len(render_cache) > 24:
+                render_cache.clear()
+            render_cache[key] = _render_sheet(path, name)
+        return {"document_id": doc, **render_cache[key]}
 
     # ---------------------------------------------- KG View Models (§8 v3) ----
     def _isa_roots():
