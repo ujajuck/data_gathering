@@ -23,6 +23,9 @@ from pydantic import BaseModel
 from src.inspect.inspector import WorkbookInspector
 from src.mapping.concepts import normalize_label
 
+from kg.acquisition import (create_request, list_requests, mark_ingested,
+                            refresh_release_states, request_row,
+                            sniff_container)
 from kg.domain.loader import VALID_RELATIONS
 from kg.groups import (clear_member_override, document_kgs, group_documents,
                        is_l1_concept, isa_roots, member_overrides,
@@ -104,6 +107,11 @@ class ConceptReq(BaseModel):
 class AliasReq(BaseModel):
     concept_id: str
     alias: str
+
+
+class DrmReq(BaseModel):
+    filename: str
+    note: str = ""
 
 
 class RelationReq(BaseModel):
@@ -869,15 +877,56 @@ def create_app(ws_root: str | Path) -> FastAPI:
 
     @app.get("/api/raw-files")
     def raw_files():
-        """data/raw의 미등록 xlsx — 등록(ingest) 후보 목록."""
+        """data/raw의 미등록 xlsx — 등록 후보 + 잠금(DRM/암호화)·해제 요청 상태."""
         raw_dir = root / "data" / "raw"
         paths = sorted(p for p in raw_dir.glob("*.xlsx")
                        if not p.name.startswith("~$")) if raw_dir.exists() else []
+        out = []
         with lock:
+            refresh_release_states(store, raw_dir)   # 해제본 도착 자동 감지
             known = {r["document_id"] for r in store.conn.execute(
                 "SELECT document_id FROM document")}
-        return [{"filename": p.name, "document_id": document_id_for(root, p)}
-                for p in paths if document_id_for(root, p) not in known]
+            for p in paths:
+                if document_id_for(root, p) in known:
+                    continue
+                sniff = sniff_container(p)
+                row = request_row(store, p.name)
+                out.append({
+                    "filename": p.name,
+                    "document_id": document_id_for(root, p),
+                    "locked": sniff["locked"],
+                    "container": sniff["container"],
+                    "container_detail": sniff.get("detail"),
+                    "drm": ({"request_id": row["request_id"],
+                             "status": row["status"],
+                             "requested_at": row["requested_at"],
+                             "released_at": row["released_at"],
+                             "note": row["note"] or ""}
+                            if row is not None else None),
+                })
+        return out
+
+    @app.post("/api/drm/request")
+    def drm_request(body: DrmReq):
+        """잠긴 파일의 정식 해제 요청 기록 + 결재용 요청서 텍스트 생성."""
+        fn = body.filename
+        if "/" in fn or "\\" in fn or ".." in fn or not fn.lower().endswith(".xlsx"):
+            raise HTTPException(400, "bad filename")
+        with lock:
+            try:
+                res = create_request(store, root / "data" / "raw", fn,
+                                     note=(body.note or "")[:2000])
+            except FileNotFoundError:
+                raise HTTPException(404, f"file not found: {fn}")
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        return {"ok": True, **res}
+
+    @app.get("/api/drm")
+    def drm_list():
+        with lock:
+            refresh_release_states(store, root / "data" / "raw")
+            return list_requests(store)
 
     @app.post("/api/ingest")
     def ingest_document(body: IngestReq):
@@ -894,6 +943,11 @@ def create_app(ws_root: str | Path) -> FastAPI:
             raise HTTPException(400, "bad filename")
         if not path.exists():
             raise HTTPException(404, f"file not found: {fn}")
+        sniff = sniff_container(path)
+        if sniff["locked"]:
+            raise HTTPException(
+                400, f"파일이 잠겨 있습니다({sniff.get('detail') or sniff['container']}) "
+                     "— DRM 해제 요청 후 해제본이 도착하면 등록할 수 있습니다")
         with lock:
             if body.group_id is not None:
                 _require_l1(body.group_id)
@@ -927,6 +981,8 @@ def create_app(ws_root: str | Path) -> FastAPI:
         with lock:
             suggestions = (None if body.group_id
                            else suggest_groups(store, doc_id))
+            mark_ingested(store, fn)         # 해제 요청 이력이 있으면 완결로
+            store.commit()
             struct_cache.clear()
         return {"ok": True, "document_id": doc_id, "ingest": ing,
                 "recipe": rec_stats, "map": map_stats,

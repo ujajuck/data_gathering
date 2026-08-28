@@ -240,3 +240,19 @@ CREATE TABLE IF NOT EXISTS recrawl_run (
     summary_json    TEXT                            -- 문서별 진행/결과 JSON 배열
 );
 CREATE INDEX IF NOT EXISTS idx_recrawl_root ON recrawl_run(root_concept_id, started_at);
+
+-- ==================================================== KG2: DRM 해제 요청 ---
+-- 파싱 불가(암호화/DRM) 파일의 정식 해제 요청 추적. 시스템은 우회하지 않는다:
+-- 요청서를 만들어 주고, 해제본(같은 파일명, 읽기 가능)이 도착하면 자동 감지한다.
+--     REQUESTED → RELEASED(해제본 감지) → INGESTED(등록 완료)
+CREATE TABLE IF NOT EXISTS drm_request (
+    request_id   TEXT PRIMARY KEY,       -- DRM-12hex
+    filename     TEXT NOT NULL UNIQUE,   -- data/raw 기준 파일명 (파일당 1건)
+    locked_hash  TEXT NOT NULL,          -- 잠긴 상태의 SHA-256 (요청서/감사용)
+    container    TEXT,                   -- ole_cfb / unknown ...
+    status       TEXT NOT NULL,          -- REQUESTED / RELEASED / INGESTED
+    note         TEXT,                   -- 요청 사유/결재 참조
+    requested_at TEXT NOT NULL,
+    released_at  TEXT,
+    updated_at   TEXT NOT NULL
+);

@@ -102,16 +102,46 @@ async function loadFiles() {
 }
 
 // ---- 미등록 파일: 분석(map=false) → 같은 형식 DKG 제안 → 배정 등록 (KG2)
+//      잠긴 파일(암호화/DRM)은 우회 없이 정식 해제 요청 → 해제본 도착 감지.
 async function loadRawFiles() {
   try { state.raw = await api('/api/raw-files'); } catch { state.raw = []; }
   // '분석'으로 구조만 적재된 파일은 서버 목록에서 빠지므로 rawInfo 쪽을 합친다
   const names = [...new Set([...state.raw.map((f) => f.filename),
                              ...Object.keys(state.rawInfo)])].sort();
+  const byName = Object.fromEntries(state.raw.map((f) => [f.filename, f]));
+  state.drmText = state.drmText || {};
   $('#rawPanel').style.display = names.length ? '' : 'none';
   $('#rawRows').innerHTML = names.map((fn) => {
+    const f = byName[fn] || {};
     const info = state.rawInfo[fn];
+    let badge = '';
     let inner;
-    if (info) {
+    if (f.locked) {
+      const drm = f.drm;
+      if (drm && drm.status === 'REQUESTED') {
+        badge = ` <span class="badge amber">해제 요청됨 · ${esc((drm.requested_at || '').slice(0, 10))}</span>`;
+        inner = `<div class="sub" style="font-size:11px;margin-top:4px">
+            ${esc(f.container_detail || '')} — 해제본이 data/raw에 같은 파일명으로
+            도착하면 자동 감지되어 등록 가능해집니다.</div>
+          <button class="secondary" style="margin-top:6px" data-drmtext="${esc(fn)}"
+            data-note="${esc(drm.note || '')}">요청서 재발급·복사</button>`;
+      } else {
+        badge = ' <span class="badge red">🔒 잠김 (암호화/DRM)</span>';
+        inner = `<div class="sub" style="font-size:11px;margin-top:4px">
+            ${esc(f.container_detail || '')} — 파싱·뷰어 모두 불가.
+            정식 해제 요청서를 만들어 결재/그룹웨어에 첨부하세요.</div>
+          <div style="display:flex;gap:6px;margin-top:6px" class="editForm">
+            <input data-notein="${esc(fn)}" placeholder="요청 사유 (선택)" style="flex:1;margin-top:0">
+            <button class="primary" data-drmreq="${esc(fn)}">정식 해제 요청</button></div>`;
+      }
+      if (state.drmText[fn]) {
+        inner += `<pre style="margin-top:7px;padding:9px;border:1px solid var(--line);
+            border-radius:8px;font-size:11px;white-space:pre-wrap;background:#fff"
+            data-pre="${esc(fn)}">${esc(state.drmText[fn])}</pre>
+          <button class="secondary" data-copy="${esc(fn)}">요청서 복사</button>
+          <button class="secondary" data-closepre="${esc(fn)}">닫기</button>`;
+      }
+    } else if (info) {
       const chips = [
         ...(info.suggestions || []).map((s) =>
           `<span class="chip pick${info.picked === s.root_concept_id ? ' sel' : ''}"
@@ -125,12 +155,51 @@ async function loadRawFiles() {
         <button class="primary" style="margin-top:7px" data-reg="${esc(fn)}">
           ${info.picked ? '선택한 DKG로 등록' : '등록 (자동 판정)'}</button>`;
     } else {
+      if (f.drm && f.drm.status === 'RELEASED')
+        badge = ' <span class="badge green">✓ 해제본 도착 — 등록 가능</span>';
       inner = `<div><button class="secondary" style="margin-top:5px"
         data-an="${esc(fn)}">분석 · DKG 제안</button></div>`;
     }
-    return `<div class="fileRow" style="cursor:default"><b>${esc(fn)}</b>${inner}
+    return `<div class="fileRow" style="cursor:default"><b>${esc(fn)}</b>${badge}${inner}
       <div class="status" data-st="${esc(fn)}"></div></div>`;
   }).join('');
+  // DRM 요청/재발급/복사
+  const drmPost = async (fn, note) => {
+    const r = await post('/api/drm/request', { filename: fn, note });
+    state.drmText[fn] = r.request_text;
+    await loadRawFiles();
+  };
+  $('#rawRows').querySelectorAll('[data-drmreq]').forEach((b) => b.onclick = async () => {
+    const fn = b.dataset.drmreq;
+    const noteEl = $('#rawRows').querySelector(`[data-notein="${CSS.escape(fn)}"]`);
+    b.disabled = true;
+    try { await drmPost(fn, noteEl ? noteEl.value.trim() : ''); }
+    catch (e) {
+      const st0 = $('#rawRows').querySelector(`[data-st="${CSS.escape(fn)}"]`);
+      if (st0) st0.textContent = e.message;
+      b.disabled = false;
+    }
+  });
+  $('#rawRows').querySelectorAll('[data-drmtext]').forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    try { await drmPost(b.dataset.drmtext, b.dataset.note || ''); }
+    catch (e) { b.disabled = false; }
+  });
+  $('#rawRows').querySelectorAll('[data-copy]').forEach((b) => b.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(state.drmText[b.dataset.copy] || '');
+      b.textContent = '✓ 복사됨';
+    } catch {
+      const pre = $('#rawRows').querySelector(`[data-pre="${CSS.escape(b.dataset.copy)}"]`);
+      if (pre) { const r = document.createRange(); r.selectNodeContents(pre);
+        const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+      b.textContent = '선택됨 — Ctrl+C';
+    }
+  });
+  $('#rawRows').querySelectorAll('[data-closepre]').forEach((b) => b.onclick = () => {
+    delete state.drmText[b.dataset.closepre];
+    loadRawFiles();
+  });
   const st = (fn) => $('#rawRows').querySelector(`[data-st="${CSS.escape(fn)}"]`);
   $('#rawRows').querySelectorAll('[data-an]').forEach((b) => b.onclick = async () => {
     b.disabled = true;
