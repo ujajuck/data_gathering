@@ -764,15 +764,15 @@ def create_app(ws_root: str | Path) -> FastAPI:
         with lock:
             rows = store.conn.execute(
                 """SELECT n.node_id, n.node_name, n.locator, n.tree_path,
-                          n.data_type, n.metadata,
+                          n.data_type, n.metadata, n.node_type,
                           m.concept_id, m.confidence, m.status,
                           c.canonical_name, c.concept_type
                    FROM tree_node n
                    JOIN semantic_mapping m ON m.tree_node_id=n.node_id AND m.is_active=1
                    LEFT JOIN domain_concept c ON c.concept_id=m.concept_id
-                   WHERE n.document_id=? AND n.status='ACTIVE' AND n.node_type='HEADER'
-                     AND m.status IN ('AUTO_APPROVED','APPROVED','REVIEW_REQUIRED',
-                                      'UNMAPPED')""", (doc,)).fetchall()
+                   WHERE n.document_id=? AND n.status='ACTIVE'
+                     AND n.node_type IN ('HEADER','VALUE')
+                     AND m.status IN ('AUTO_APPROVED','APPROVED','REVIEW_REQUIRED')""", (doc,)).fetchall()
         out = []
         for r in rows:
             loc = r["locator"] or ""
