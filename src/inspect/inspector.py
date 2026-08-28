@@ -110,12 +110,45 @@ def _extract_render(ws, excel_app, cap_row: int, cap_col: int) -> dict | None:
             ows = owb[owb.sheetnames[0]]
             render = _render_from_openpyxl(ows, cap_row, cap_col)
             owb.close()
-            return render
         finally:
             try:
                 os.unlink(tmp)
             except OSError:
                 pass
+
+        # ── Shape/TextBox 추출 (COM에서만 가능, openpyxl은 미지원) ──
+        shapes = []
+        try:
+            for i in range(1, ws.Shapes.Count + 1):
+                sh = ws.Shapes.Item(i)
+                si = {"name": sh.Name}
+                try:
+                    tf = sh.TextFrame2
+                    if tf.HasText == -1:  # msoTrue
+                        si["text"] = tf.TextRange.Text
+                except Exception:
+                    pass
+                if "text" not in si:
+                    try:
+                        tf1 = sh.TextFrame
+                        si["text"] = tf1.Characters().Text
+                    except Exception:
+                        pass
+                try:
+                    si["left"] = round(sh.Left)
+                    si["top"] = round(sh.Top)
+                    si["width"] = round(sh.Width)
+                    si["height"] = round(sh.Height)
+                except Exception:
+                    pass
+                if "text" in si and si["text"].strip():
+                    shapes.append(si)
+        except Exception:
+            pass
+        if shapes:
+            render["shapes"] = shapes
+
+        return render
     except Exception:
         pass  # Copy 실패 → 폴백
 
@@ -352,10 +385,42 @@ def _extract_render_com_fallback(ws, used, max_row: int, max_col: int,
 
     total_rows = used.Rows.Count if used else 1
     total_cols = used.Columns.Count if used else 1
+
+    # ── Shape/TextBox 추출 ──
+    shapes = []
+    try:
+        for i in range(1, ws.Shapes.Count + 1):
+            sh = ws.Shapes.Item(i)
+            si = {"name": sh.Name}
+            try:
+                tf = sh.TextFrame2
+                if tf.HasText == -1:  # msoTrue
+                    si["text"] = tf.TextRange.Text
+            except Exception:
+                pass
+            if "text" not in si:
+                try:
+                    tf1 = sh.TextFrame
+                    si["text"] = tf1.Characters().Text
+                except Exception:
+                    pass
+            try:
+                si["left"] = round(sh.Left)
+                si["top"] = round(sh.Top)
+                si["width"] = round(sh.Width)
+                si["height"] = round(sh.Height)
+            except Exception:
+                pass
+            if "text" in si and si["text"].strip():
+                shapes.append(si)
+    except Exception:
+        pass
+
     return {
         "max_row": cap_row, "max_col": cap_col,
         "cols": col_px, "rows": row_px,
         "cells": cells, "images": [],
+        "shapes": shapes,
         "gridlines": True,
         "truncated": total_rows > cap_row or total_cols > cap_col,
     }

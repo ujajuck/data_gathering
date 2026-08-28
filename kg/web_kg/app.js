@@ -967,8 +967,16 @@ async function loadSheet(doc, sheet, focusNode) {
     `<img src="${im.src}" style="position:absolute;left:${HDRW + im.x}px;` +
     `top:${HDRH + im.y}px;width:${im.w}px;height:${im.h}px;` +
     `box-shadow:0 1px 4px rgba(20,30,50,.18);pointer-events:none">`).join('');
+  // Shape/TextBox 오버레이 — DRM 파일의 텍스트박스 표시
+  const shapeHtml = (data.shapes || []).map((sh) =>
+    `<div style="position:absolute;left:${HDRW + (sh.left || 0) / 7}px;` +
+    `top:${HDRH + (sh.top || 0) / 1.33}px;` +
+    `width:${(sh.width || 100) / 7}px;height:${(sh.height || 30) / 1.33}px;` +
+    `font-size:11px;white-space:pre-wrap;overflow:hidden;` +
+    `background:rgba(255,255,230,.85);border:1px solid #ccc;border-radius:2px;` +
+    `padding:2px 4px;pointer-events:none;z-index:2">${esc(sh.text || '')}</div>`).join('');
   $('#gridwrap').innerHTML =
-    `<div style="position:relative;display:inline-block">${html}${imgs}</div>`;
+    `<div style="position:relative;display:inline-block">${html}${imgs}${shapeHtml}</div>`;
   $('#gridwrap').querySelectorAll('td.ov').forEach((td) =>
     td.onclick = () => openInspector(td.dataset.node));
   const roles = {};
