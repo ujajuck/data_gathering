@@ -899,10 +899,20 @@ async function loadSheet(doc, sheet, focusNode) {
   const ovAt = new Map();
   for (const o of overlay) {
     const rg = parseRange(o.range);
-    if (!rg) continue;
-    for (let r = rg.r1; r <= rg.r2; r++)
-      for (let c = rg.c1; c <= rg.c2; c++)
-        if (!ovAt.has(`${r},${c}`)) ovAt.set(`${r},${c}`, o);
+    if (rg) {
+      for (let r = rg.r1; r <= rg.r2; r++)
+        for (let c = rg.c1; c <= rg.c2; c++)
+          if (!ovAt.has(`${r},${c}`)) ovAt.set(`${r},${c}`, o);
+    } else if (o.header) {
+      // range 없으면 node_name으로 셀 찾기
+      const hdr = o.header.trim();
+      for (const c of data.cells) {
+        if (c.v && c.v.trim() === hdr && !ovAt.has(`${c.r},${c.c}`)) {
+          ovAt.set(`${c.r},${c.c}`, o);
+          break;
+        }
+      }
+    }
   }
   const focus = focusNode ? overlay.find((o) => o.node_id === focusNode) : null;
   const focusRange = focus ? parseRange(focus.range) : null;

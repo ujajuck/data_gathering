@@ -767,7 +767,8 @@ def create_app(ws_root: str | Path) -> FastAPI:
         """활성 시트의 Semantic Overlay (§4.2): 매핑된 영역의 role/개념/범위."""
         with lock:
             rows = store.conn.execute(
-                """SELECT n.node_id, n.node_name, n.locator, n.data_type, n.metadata,
+                """SELECT n.node_id, n.node_name, n.locator, n.tree_path,
+                          n.data_type, n.metadata,
                           m.concept_id, m.confidence, m.status,
                           c.canonical_name, c.concept_type
                    FROM tree_node n
@@ -779,10 +780,15 @@ def create_app(ws_root: str | Path) -> FastAPI:
         out = []
         for r in rows:
             loc = r["locator"] or ""
-            # 시트 부분 완전일치 — LIKE의 '_'/'%' 와일드카드 과매칭을 배제한다
-            if loc.rsplit("!", 1)[0] != name:
+            # 시트 필터링: locator 또는 tree_path에서 시트명 추출
+            loc_sheet = loc.rsplit("!", 1)[0] if "!" in loc else ""
+            if not loc_sheet and r["tree_path"]:
+                parts = r["tree_path"].split("/")
+                if len(parts) >= 3:
+                    loc_sheet = parts[2]
+            if loc_sheet != name:
                 continue
-            rng = loc.rsplit("!", 1)[-1]
+            rng = loc.rsplit("!", 1)[-1] if "!" in loc else ""
             meta = json.loads(r["metadata"] or "{}")
             role = "IGNORE" if r["status"] == "UNMAPPED" else \
                 _node_role(meta, r["data_type"], r["concept_type"])
