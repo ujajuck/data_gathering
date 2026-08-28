@@ -27,12 +27,13 @@ from kg.store import KgStore
 
 
 class Workspace:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, store: KgStore | None = None):
         self.root = Path(root)
         self.config = self.root / "config"
         self.db_path = self.root / "data" / "kg" / "kg.db"
         self.builds = self.root / "data" / "kg" / "builds"
-        self.store = KgStore(self.db_path)
+        # store 주입 시 재사용 — 웹앱이 자기 커넥션을 공유한다 (이중 커넥션 방지)
+        self.store = store if store is not None else KgStore(self.db_path)
         self._units = None
         self._registry = None
         self._rules = None
@@ -71,25 +72,35 @@ def _emit(data) -> None:
 
 
 def cmd_seed(ws: Workspace, args) -> int:
+    """Domain KG 시드 — 3-모드 (KG2: "DB가 비면 seed, 그 후 진실은 DB").
+
+    기본       : domain_concept가 비어 있을 때만 동작 (부트스트랩).
+    --merge-new: YAML 개념 중 DB에 없는 것만 추가 — 기존 개념·alias·관계는
+                 일절 건드리지 않아 DB 편집(삭제 포함)이 부활하지 않는다.
+    --force    : 전체 재시드 — YAML이 개념 필드를 덮어쓰고 DB에서 지운
+                 alias/관계가 부활한다. 먼저 /api/kg/export 백업 권장.
+    """
     from kg.domain.loader import load_domain_kg
+    n_existing = ws.store.conn.execute(
+        "SELECT count(*) FROM domain_concept").fetchone()[0]
+    if n_existing and not (args.force or args.merge_new):
+        print("seed: 이미 시드됨 — 이후 진실은 DB입니다. 신규 개념만 추가하려면 "
+              "--merge-new, YAML로 전체를 다시 쓰려면 --force "
+              "(개념 필드를 덮어쓰고 지운 alias/관계가 부활합니다. "
+              "먼저 GET /api/kg/export 백업 권장)", file=sys.stderr)
+        return 2
+    only_new = bool(n_existing and args.merge_new and not args.force)
     info = load_domain_kg(ws.store, ws.config / "domain_kg.yaml",
-                          ws.config / "units.yaml")
-    _emit({k: v for k, v in info.items() if k != "units"})
+                          ws.config / "units.yaml", only_new_concepts=only_new)
+    _emit({"mode": "merge_new" if only_new else ("force" if n_existing else "bootstrap"),
+           **{k: v for k, v in info.items() if k != "units"}})
     return 0
 
 
 def _ingest_file(ws: Workspace, path: Path, force: bool = False) -> dict:
-    from src.inspect.inspector import PARSER_VERSION
-    from kg.tree.builder import load_workbook_tree
-    from kg.tree.diff import apply_tree
-    document_id, drafts, file_hash = load_workbook_tree(
-        ws.store, ws.root, path, ws.parser_rules, ws.units, ws.registry)
-    prev = ws.store.latest_version(document_id)
-    if prev is not None and prev["file_hash"] == file_hash and not force:
-        return {"file": path.name, "skipped": "unchanged file hash"}
-    diff = apply_tree(ws.store, document_id, Path(path).name, str(path),
-                      file_hash, PARSER_VERSION, drafts)
-    return {"file": path.name, **diff.summary()}
+    from kg.ingest import ingest_file
+    return ingest_file(ws.store, ws.root, path, ws.parser_rules, ws.units,
+                       ws.registry, force=force)
 
 
 def cmd_ingest(ws: Workspace, args) -> int:
@@ -255,7 +266,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ws", default=".", type=Path, help="워크스페이스 루트")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("seed", help="Domain KG YAML → DB 시드")
+    psd = sub.add_parser("seed", help="Domain KG YAML → DB 시드 (빈 DB 부트스트랩)")
+    psd.add_argument("--merge-new", action="store_true",
+                     help="YAML 개념 중 DB에 없는 것만 추가 (기존/삭제 이력 보존)")
+    psd.add_argument("--force", action="store_true",
+                     help="전체 재시드 — DB 편집을 YAML로 덮어쓴다")
 
     pi = sub.add_parser("ingest", help="Excel → Knowledge Tree (버전/diff 반영)")
     pi.add_argument("--raw", default="data/raw", type=Path)

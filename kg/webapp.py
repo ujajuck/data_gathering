@@ -16,15 +16,24 @@ from pathlib import Path
 import json
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.inspect.inspector import WorkbookInspector
 from src.mapping.concepts import normalize_label
 
+from kg.domain.loader import VALID_RELATIONS
+from kg.groups import (clear_member_override, document_kgs, group_documents,
+                       is_l1_concept, isa_roots, member_overrides,
+                       set_member_override)
+from kg.ingest import apply_parsed, document_id_for, parse_workbook
+from kg.mapping.mapper import map_nodes_staged
+from kg.mapping.recipe import (active_recipe, apply_recipe, preview_recipe,
+                               rollback_recipe, snapshot_recipe, suggest_groups)
+from kg.recrawl import MODES, recover_interrupted_runs, run_recrawl, start_run
 from kg.search import concept_neighbors, reverse_lookup
-from kg.store import KgStore
+from kg.store import KgStore, new_id, now_iso
 
 WEB_DIR = Path(__file__).parent / "web_kg"
 _SHEET_CAP_ROWS = 300
@@ -56,6 +65,57 @@ class BuildReq(BaseModel):
     name: str
     fields: list[BuildField]
     include_nodes: dict[str, list[str]] = {}
+
+
+class IngestReq(BaseModel):
+    filename: str
+    group_id: str | None = None      # DKG(=L1 root concept) 배정
+    force: bool = False
+    map: bool = True                 # False = 구조 분석+DKG 제안만 (매핑 보류)
+                                     # — 배정 확정 후 레시피→judge 순서 보장용
+
+
+class MemberReq(BaseModel):
+    document_id: str
+    state: str                       # INCLUDED / EXCLUDED
+
+
+class RecipeReq(BaseModel):
+    note: str = ""
+
+
+class RecrawlReq(BaseModel):
+    mode: str = "fill"               # fill / reset_auto
+    document_ids: list[str] | None = None
+
+
+class ConceptReq(BaseModel):
+    concept_id: str | None = None
+    canonical_name: str | None = None
+    canonical_name_en: str | None = None
+    description: str | None = None
+    concept_type: str | None = None
+    data_type: str | None = None
+    domain_level: str | None = None
+    canonical_unit: str | None = None
+    unit_dimension: str | None = None
+
+
+class AliasReq(BaseModel):
+    concept_id: str
+    alias: str
+
+
+class RelationReq(BaseModel):
+    source: str
+    target: str
+    type: str
+
+
+_CID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+_DOCID_RE = re.compile(r"^[0-9a-f]{16}$")
+_RCP_RE = re.compile(r"^RCP-[0-9a-f]{12}$")
+_RCL_RE = re.compile(r"^RCL-[0-9a-f]{12}$")
 
 
 def _node_role(node_meta: dict, data_type: str | None, concept_type: str | None) -> str:
@@ -309,13 +369,27 @@ def _grid_json(structure, sheet_name: str) -> dict:
 
 
 def create_app(ws_root: str | Path) -> FastAPI:
+    from kg.cli import Workspace
     root = Path(ws_root).resolve()
     store = KgStore(root / "data" / "kg" / "kg.db", threadsafe=True)
     lock = threading.Lock()
+    ws = Workspace(root, store=store)     # parser_rules/units/registry 공유 컨텍스트
     inspector = WorkbookInspector()
     struct_cache: dict[tuple[str, float], object] = {}
+    recover_interrupted_runs(store)       # RUNNING 잔류 → FAILED (전역 409 해제)
+    recrawl_state = {"busy": False, "run_id": None}
 
     app = FastAPI(title="KG viewer", docs_url=None, redoc_url=None)
+
+    def _fresh_retriever():
+        """생성 시점 캐시 — KG 편집 반영을 위해 매 작업마다 새로 만든다.
+        (호출측이 lock을 잡고 부른다)"""
+        from kg.mapping.retriever import DomainRetriever
+        return DomainRetriever(store, units=ws.units)
+
+    def _judge():
+        from kg.mapping.judge import get_judge
+        return get_judge()
 
     def _doc_path(document_id: str) -> Path:
         with lock:
@@ -372,7 +446,9 @@ def create_app(ws_root: str | Path) -> FastAPI:
             cid = concept
             if store.concept(cid) is None:            # 이름/동의어로도 검색
                 row = store.conn.execute(
-                    "SELECT concept_id FROM domain_alias WHERE alias_norm=? LIMIT 1",
+                    """SELECT a.concept_id FROM domain_alias a
+                       JOIN domain_concept c ON c.concept_id=a.concept_id
+                       WHERE a.alias_norm=? AND c.status='ACTIVE' LIMIT 1""",
                     (normalize_label(concept),)).fetchone()
                 if row is None:
                     raise HTTPException(404, f"unknown concept: {concept}")
@@ -434,78 +510,40 @@ def create_app(ws_root: str | Path) -> FastAPI:
         return {"document_id": doc, **render_cache[key]}
 
     # ---------------------------------------------- KG View Models (§8 v3) ----
-    def _isa_roots():
-        """concept → L1 루트 (IS_A 체인). Document KG의 묶음 축이 된다."""
-        levels = {}
-        parents = {}
-        for r in store.conn.execute("SELECT concept_id, domain_level FROM domain_concept"):
-            levels[r["concept_id"]] = r["domain_level"]
-        for r in store.conn.execute(
-                "SELECT source_concept_id s, target_concept_id t FROM domain_relation "
-                "WHERE relation_type='IS_A'"):
-            parents[r["s"]] = r["t"]
-        roots = {}
-        for cid in levels:
-            cur, hops = cid, 0
-            while levels.get(cur) != "L1" and cur in parents and hops < 6:
-                cur = parents[cur]
-                hops += 1
-            roots[cid] = cur if levels.get(cur) == "L1" else None
-        return roots, levels, parents
-
+    # DKG 파생은 kg/groups.py로 이관 — 사람 델타(INCLUDED/EXCLUDED) 반영 포함.
     def _document_kgs():
-        """Document KG 도출(§4.3): L1 도메인 그룹별로, 그 그룹 개념에 매핑을
-        제공하는 문서군 + 커버 노드 + 위치/값 수. Core 파생 View Model."""
-        roots, levels, _ = _isa_roots()
-        rows = store.conn.execute(
-            """SELECT m.concept_id, n.document_id, d.filename, n.node_id,
-                      n.locator, n.tree_path, c.canonical_name,
-                      (SELECT p.row_count FROM data_payload p
-                       WHERE p.tree_node_id=n.node_id AND p.is_current=1) rowc
-               FROM semantic_mapping m
-               JOIN tree_node n ON n.node_id=m.tree_node_id AND n.status='ACTIVE'
-               JOIN document d ON d.document_id=n.document_id
-               JOIN domain_concept c ON c.concept_id=m.concept_id
-               WHERE m.is_active=1 AND m.status IN ('AUTO_APPROVED','APPROVED')
-            """).fetchall()
-        kgs: dict[str, dict] = {}
-        for r in rows:
-            root = roots.get(r["concept_id"])
-            if root is None:
-                continue
-            g = kgs.setdefault(root, {"id": root, "nodes": {}, "docs": {},
-                                      "sources": 0, "values": 0})
-            g["nodes"].setdefault(r["concept_id"], 0)
-            g["nodes"][r["concept_id"]] += 1
-            doc = g["docs"].setdefault(r["document_id"], {
-                "document_id": r["document_id"], "filename": r["filename"],
-                "nodes": set(), "first_locator": r["locator"], "sources": 0})
-            doc["nodes"].add(r["canonical_name"])
-            doc["sources"] += 1
-            g["sources"] += 1
-            g["values"] += r["rowc"] or 0
-        out = []
-        for root, g in kgs.items():
-            c = store.concept(root)
-            out.append({
-                "id": root,
-                "name": (c["canonical_name"] if c else root) + " KG",
-                "domain_node_ids": sorted(g["nodes"], key=lambda k: -g["nodes"][k]),
-                "member_document_count": len(g["docs"]),
-                "member_documents": sorted(
-                    ({**d, "nodes": sorted(d["nodes"])} for d in g["docs"].values()),
-                    key=lambda d: -d["sources"]),
-                "source_location_count": g["sources"],
-                "value_count": g["values"],
-            })
-        out.sort(key=lambda k: -k["source_location_count"])
-        return out
+        return document_kgs(store)
+
+    def _attach_group_meta(g: dict) -> dict:
+        """DKG에 활성 레시피 요약 + 최근 재크롤링 상태를 붙인다 (lock 안 호출)."""
+        rec = active_recipe(store, g["id"])
+        if rec is not None:
+            spec = json.loads(rec["spec_json"])
+            stale = sum(1 for e in spec["template"]
+                        if (store.concept(e["concept_id"]) or
+                            {"status": None})["status"] != "ACTIVE")
+            g["recipe"] = {
+                "recipe_id": rec["recipe_id"], "created_at": rec["created_at"],
+                "note": rec["note"] or "",
+                "template": len(spec["template"]),
+                "conflicts": len(spec.get("conflicts") or []),
+                "dropped": len(spec.get("dropped") or []),
+                "stale_entries": stale,
+            }
+        else:
+            g["recipe"] = None
+        run = store.conn.execute(
+            "SELECT run_id, mode, status, started_at, finished_at "
+            "FROM recrawl_run WHERE root_concept_id=? "
+            "ORDER BY started_at DESC LIMIT 1", (g["id"],)).fetchone()
+        g["last_recrawl"] = dict(run) if run else None
+        return g
 
     @app.get("/api/kg/domain")
     def kg_domain():
         """전체 Domain KG Snapshot (§8): 노드(레벨/그룹/소스수) + IS_A 엣지."""
         with lock:
-            roots, levels, parents = _isa_roots()
+            roots, levels, parents = isa_roots(store)
             src_counts = {r["concept_id"]: r["n"] for r in store.conn.execute(
                 """SELECT concept_id, count(*) n FROM semantic_mapping
                    WHERE is_active=1 AND status IN ('AUTO_APPROVED','APPROVED')
@@ -522,7 +560,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
     @app.get("/api/kg/document")
     def kg_document_list():
         with lock:
-            kgs = _document_kgs()
+            kgs = [_attach_group_meta(g) for g in _document_kgs()]
         for g in kgs:                      # 목록은 요약만 (§7.3 데이터 많은 경우)
             g["member_document_ids"] = [d["document_id"] for d in g["member_documents"]]
             g["member_documents"] = g["member_documents"][:4]
@@ -532,9 +570,16 @@ def create_app(ws_root: str | Path) -> FastAPI:
     def kg_document_detail(dkg_id: str):
         with lock:
             kgs = {g["id"]: g for g in _document_kgs()}
+            if dkg_id in kgs:
+                _attach_group_meta(kgs[dkg_id])
+                overrides = {d: s for (rt, d), s in member_overrides(store).items()
+                             if rt == dkg_id}
         if dkg_id not in kgs:
             raise HTTPException(404, "unknown document kg")
-        return kgs[dkg_id]
+        g = kgs[dkg_id]
+        for d in g["member_documents"]:
+            d["override"] = overrides.get(d["document_id"])
+        return g
 
     @app.get("/api/files")
     def files():
@@ -613,7 +658,8 @@ def create_app(ws_root: str | Path) -> FastAPI:
             m = store.active_mapping(node_id)
             concept = store.concept(m["concept_id"]) if m and m["concept_id"] else None
             ev = store.conn.execute(
-                "SELECT candidates_json FROM mapping_evidence WHERE mapping_id=?",
+                "SELECT candidates_json, reason FROM mapping_evidence "
+                "WHERE mapping_id=?",
                 (m["mapping_id"],)).fetchone() if m else None
             pv = store.conn.execute(
                 """SELECT pv.row_key, pv.value_num, pv.value_text, pv.cell_address
@@ -636,6 +682,8 @@ def create_app(ws_root: str | Path) -> FastAPI:
             "mapping": {
                 "mapping_id": m["mapping_id"], "concept_id": m["concept_id"],
                 "confidence": round(m["confidence"], 2), "status": m["status"],
+                "method": m["method"],
+                "reason": (ev["reason"] if ev else None),
             } if m else None,
             "concept_name": concept["canonical_name"] if concept else None,
             "candidates": json.loads(ev["candidates_json"])[:5] if ev else [],
@@ -810,6 +858,442 @@ def create_app(ws_root: str | Path) -> FastAPI:
             "build_report": {"frames": result["frames"], "warnings": warnings},
             "preview": preview,
         }
+
+    # ==================================================== KG2: DKG/레시피 ----
+    def _require_l1(root_id: str) -> None:
+        """lock 안에서 호출 — DKG 식별자는 L1 개념이어야 한다."""
+        if not _CID_RE.match(root_id):
+            raise HTTPException(400, "bad concept id")
+        if not is_l1_concept(store, root_id):
+            raise HTTPException(400, "DKG는 L1 개념이어야 합니다")
+
+    @app.get("/api/raw-files")
+    def raw_files():
+        """data/raw의 미등록 xlsx — 등록(ingest) 후보 목록."""
+        raw_dir = root / "data" / "raw"
+        paths = sorted(p for p in raw_dir.glob("*.xlsx")
+                       if not p.name.startswith("~$")) if raw_dir.exists() else []
+        with lock:
+            known = {r["document_id"] for r in store.conn.execute(
+                "SELECT document_id FROM document")}
+        return [{"filename": p.name, "document_id": document_id_for(root, p)}
+                for p in paths if document_id_for(root, p) not in known]
+
+    @app.post("/api/ingest")
+    def ingest_document(body: IngestReq):
+        """단건 등록: parse(lock 밖) → apply → (그룹 지정 시) INCLUDED+레시피
+        → 잔여 judge. 그룹 미지정 시 '같은 형식' DKG 후보를 제안한다."""
+        from src.inspect.inspector import PARSER_VERSION
+        fn = body.filename
+        if ("/" in fn or "\\" in fn or ".." in fn or fn.startswith("~$")
+                or not fn.lower().endswith(".xlsx")):
+            raise HTTPException(400, "bad filename")
+        raw_dir = (root / "data" / "raw").resolve()
+        path = (raw_dir / fn).resolve()
+        if path.parent != raw_dir:
+            raise HTTPException(400, "bad filename")
+        if not path.exists():
+            raise HTTPException(404, f"file not found: {fn}")
+        with lock:
+            if body.group_id is not None:
+                _require_l1(body.group_id)
+            if not store.concepts():
+                raise HTTPException(503, "Domain KG가 비어 있습니다 — 먼저 seed를 실행하세요")
+        try:
+            doc_id, drafts, file_hash = parse_workbook(       # lock 밖 — 파싱
+                store, root, path, ws.parser_rules, ws.units, ws.registry)
+        except Exception as e:
+            raise HTTPException(400, f"파싱 실패: {e}")
+        rec_stats = None
+        with lock:
+            try:
+                ing = apply_parsed(store, doc_id, path, file_hash,
+                                   PARSER_VERSION, drafts, force=body.force)
+                if body.group_id:
+                    set_member_override(store, body.group_id, doc_id, "INCLUDED")
+                    store.commit()
+                    if body.map:
+                        rec = active_recipe(store, body.group_id)
+                        if rec is not None:
+                            rec_stats = apply_recipe(store, rec, doc_id)
+            except HTTPException:
+                raise
+            except Exception as e:
+                store.conn.rollback()
+                raise HTTPException(400, str(e))
+            retriever = _fresh_retriever() if body.map else None
+        map_stats = (map_nodes_staged(store, lock, retriever, _judge(), doc_id)
+                     if body.map else None)
+        with lock:
+            suggestions = (None if body.group_id
+                           else suggest_groups(store, doc_id))
+            struct_cache.clear()
+        return {"ok": True, "document_id": doc_id, "ingest": ing,
+                "recipe": rec_stats, "map": map_stats,
+                "suggestions": suggestions}
+
+    @app.post("/api/group/{root_id}/member")
+    def group_member(root_id: str, body: MemberReq):
+        """멤버십 오버라이드 — INCLUDED(핀 고정)/EXCLUDED(파생 부활 차단)."""
+        if body.state not in ("INCLUDED", "EXCLUDED"):
+            raise HTTPException(400, "state must be INCLUDED|EXCLUDED")
+        if not _DOCID_RE.match(body.document_id):
+            raise HTTPException(400, "bad document id")
+        with lock:
+            _require_l1(root_id)
+            if store.conn.execute("SELECT 1 FROM document WHERE document_id=?",
+                                  (body.document_id,)).fetchone() is None:
+                raise HTTPException(404, "unknown document")
+            set_member_override(store, root_id, body.document_id, body.state)
+            store.commit()
+        return JSONResponse({"ok": True})
+
+    @app.delete("/api/group/{root_id}/member/{document_id}")
+    def group_member_clear(root_id: str, document_id: str):
+        with lock:
+            _require_l1(root_id)
+            n = clear_member_override(store, root_id, document_id)
+            store.commit()
+        if not n:
+            raise HTTPException(404, "no override")
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/group/{root_id}/recipe")
+    def recipe_snapshot(root_id: str, body: RecipeReq):
+        with lock:
+            _require_l1(root_id)
+            try:
+                res = snapshot_recipe(store, root_id, note=(body.note or "")[:2000],
+                                      created_by="web")
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        return {"ok": True, **res}
+
+    @app.get("/api/group/{root_id}/recipe")
+    def recipe_get(root_id: str):
+        with lock:
+            _require_l1(root_id)
+            rec = active_recipe(store, root_id)
+            history = [dict(r) for r in store.conn.execute(
+                """SELECT recipe_id, status, note, created_at, created_by
+                   FROM extraction_recipe WHERE root_concept_id=?
+                   ORDER BY created_at DESC LIMIT 20""", (root_id,))]
+            spec = json.loads(rec["spec_json"]) if rec is not None else None
+            stale = []
+            if spec:
+                for e in spec["template"]:
+                    c = store.concept(e["concept_id"])
+                    if c is None or c["status"] != "ACTIVE":
+                        stale.append(e["concept_id"])
+        if rec is None:
+            raise HTTPException(404, "레시피가 없습니다 — 먼저 스냅샷을 생성하세요")
+        return {"recipe_id": rec["recipe_id"], "created_at": rec["created_at"],
+                "note": rec["note"] or "", "spec": spec,
+                "stale_entries": sorted(set(stale)), "history": history}
+
+    @app.get("/api/group/{root_id}/recipe/preview")
+    def recipe_preview(root_id: str, document_id: str):
+        """dry-run: 이 문서에 활성 레시피가 어떻게 매칭되는지 (쓰기 없음)."""
+        if not _DOCID_RE.match(document_id):
+            raise HTTPException(400, "bad document id")
+        with lock:
+            _require_l1(root_id)
+            rec = active_recipe(store, root_id)
+            if rec is None:
+                raise HTTPException(404, "레시피가 없습니다")
+            rows = preview_recipe(store, rec, document_id)
+        return {"document_id": document_id, "recipe_id": rec["recipe_id"],
+                "nodes": rows}
+
+    @app.post("/api/group/{root_id}/recipe/{recipe_id}/rollback")
+    def recipe_roll(root_id: str, recipe_id: str):
+        if not _RCP_RE.match(recipe_id):
+            raise HTTPException(400, "bad recipe id")
+        with lock:
+            _require_l1(root_id)
+            try:
+                rid = rollback_recipe(store, root_id, recipe_id)
+            except KeyError:
+                raise HTTPException(404, "unknown recipe")
+        return {"ok": True, "recipe_id": rid}
+
+    @app.post("/api/group/{root_id}/recrawl")
+    def recrawl_group(root_id: str, body: RecrawlReq):
+        """멤버 문서 재수집+재매핑 — 백그라운드 실행, run_id로 폴링.
+        전역 직렬화: 한 문서가 여러 그룹에 속할 수 있어 그룹별 가드로는 부족."""
+        if body.mode not in MODES:
+            raise HTTPException(400, "mode must be fill|reset_auto")
+        if body.document_ids is not None:
+            if not body.document_ids or len(body.document_ids) > 200:
+                raise HTTPException(400, "document_ids: 1~200개")
+            for d in body.document_ids:
+                if not _DOCID_RE.match(d):
+                    raise HTTPException(400, "bad document id")
+        with lock:
+            _require_l1(root_id)
+            if recrawl_state["busy"]:
+                raise HTTPException(
+                    409, f"재크롤링이 이미 실행 중입니다 ({recrawl_state['run_id']})")
+            if not store.concepts():
+                raise HTTPException(503, "Domain KG가 비어 있습니다")
+            members = group_documents(store, root_id)
+            docs = body.document_ids or members
+            if not docs:
+                raise HTTPException(400, "그룹에 문서가 없습니다")
+            if set(docs) - set(members):
+                raise HTTPException(400, "그룹 멤버가 아닌 문서가 포함됐습니다")
+            rec = active_recipe(store, root_id)
+            run_id = start_run(store, root_id,
+                               rec["recipe_id"] if rec else None, body.mode)
+            recrawl_state["busy"], recrawl_state["run_id"] = True, run_id
+            retriever = _fresh_retriever()
+        judge = _judge()
+
+        def _worker():
+            try:
+                run_recrawl(store, lock, ws, root_id, body.mode, docs, run_id,
+                            retriever, judge)
+            except Exception as e:                     # 러너 자체 실패 — run 마감
+                with lock:
+                    store.conn.rollback()
+                    store.conn.execute(
+                        "UPDATE recrawl_run SET status='FAILED', finished_at=?, "
+                        "summary_json=COALESCE(summary_json, ?) WHERE run_id=?",
+                        (now_iso(), json.dumps([{"error": repr(e)}]), run_id))
+                    store.commit()
+            finally:
+                with lock:
+                    recrawl_state["busy"], recrawl_state["run_id"] = False, None
+                    struct_cache.clear()
+                    render_cache.clear()
+
+        threading.Thread(target=_worker, daemon=True, name=f"recrawl-{run_id}").start()
+        return {"ok": True, "run_id": run_id, "documents": len(docs)}
+
+    @app.get("/api/recrawl/{run_id}")
+    def recrawl_status(run_id: str):
+        if not _RCL_RE.match(run_id):
+            raise HTTPException(400, "bad run id")
+        with lock:
+            row = store.conn.execute(
+                "SELECT * FROM recrawl_run WHERE run_id=?", (run_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "unknown run")
+        out = dict(row)
+        out["summary"] = json.loads(out.pop("summary_json") or "[]")
+        return out
+
+    # ==================================================== KG2: Domain 편집 ----
+    _CONCEPT_FIELDS = ("canonical_name", "canonical_name_en", "description",
+                       "concept_type", "data_type", "domain_level",
+                       "canonical_unit", "unit_dimension")
+
+    @app.post("/api/kg/concept")
+    def concept_write(body: ConceptReq):
+        """생성 또는 부분 수정 — 수정은 읽기-병합-쓰기(미전달 필드 보존)."""
+        cid = body.concept_id
+        if cid is not None and not _CID_RE.match(cid):
+            raise HTTPException(400, "bad concept id")
+        if body.domain_level is not None and body.domain_level not in ("L1", "L2", "L3"):
+            raise HTTPException(400, "domain_level must be L1|L2|L3")
+        with lock:
+            row = store.concept(cid) if cid else None
+            if row is None:                                       # 생성
+                name = (body.canonical_name or "").strip()
+                if not name:
+                    raise HTTPException(400, "canonical_name 필수")
+                cid = cid or new_id("CONCEPT")
+                store.upsert_concept({
+                    "concept_id": cid, "canonical_name": name,
+                    "canonical_name_en": body.canonical_name_en,
+                    "description": body.description,
+                    "concept_type": body.concept_type,
+                    "data_type": body.data_type,
+                    "domain_level": body.domain_level,
+                    "canonical_unit": body.canonical_unit,
+                    "unit_dimension": body.unit_dimension,
+                    "status": "ACTIVE"})
+                for a in (name, body.canonical_name_en or ""):
+                    if a:                          # loader 관례: 이름은 alias로도
+                        store.add_alias(cid, a, normalize_label(a))
+                created = True
+            else:                                                 # 부분 수정
+                merged = dict(row)
+                for k in _CONCEPT_FIELDS:
+                    v = getattr(body, k)
+                    if v is not None:
+                        merged[k] = v
+                if not (merged.get("canonical_name") or "").strip():
+                    raise HTTPException(400, "canonical_name은 비울 수 없습니다")
+                store.upsert_concept(
+                    {k: merged[k] for k in
+                     ("concept_id", "status", *_CONCEPT_FIELDS)})
+                if body.canonical_name:            # 개명 시 새 이름도 검색에 닿게
+                    store.add_alias(cid, body.canonical_name,
+                                    normalize_label(body.canonical_name))
+                created = False
+            store.commit()
+        return {"ok": True, "concept_id": cid, "created": created}
+
+    @app.get("/api/kg/concept/{cid}")
+    def concept_get(cid: str):
+        """편집기용 상세 — 개념 전체 필드 + alias + 관계 (DEPRECATED 포함)."""
+        with lock:
+            row = store.concept(cid)
+            if row is None:
+                raise HTTPException(404, "unknown concept")
+            aliases = [r["alias_text"] for r in store.conn.execute(
+                "SELECT alias_text FROM domain_alias WHERE concept_id=? "
+                "ORDER BY alias_norm", (cid,))]
+            rels = [dict(r) for r in store.conn.execute(
+                "SELECT * FROM domain_relation WHERE source_concept_id=? "
+                "OR target_concept_id=? ORDER BY relation_type", (cid, cid))]
+            n_map = store.conn.execute(
+                """SELECT count(*) FROM semantic_mapping m
+                   JOIN tree_node t ON t.node_id=m.tree_node_id AND t.status='ACTIVE'
+                   WHERE m.concept_id=? AND m.is_active=1
+                     AND m.status IN ('AUTO_APPROVED','APPROVED','REVIEW_REQUIRED')""",
+                (cid,)).fetchone()[0]
+        return {"concept": dict(row), "aliases": aliases, "relations": rels,
+                "active_mappings": n_map}
+
+    @app.post("/api/kg/concept/{cid}/deprecate")
+    def concept_deprecate(cid: str):
+        """소프트 삭제 — 활성 매핑이 참조 중이면 409 (먼저 재매핑 유도)."""
+        with lock:
+            if store.concept(cid) is None:
+                raise HTTPException(404, "unknown concept")
+            n = store.conn.execute(
+                """SELECT count(*) FROM semantic_mapping m
+                   JOIN tree_node t ON t.node_id=m.tree_node_id AND t.status='ACTIVE'
+                   WHERE m.concept_id=? AND m.is_active=1
+                     AND m.status IN ('AUTO_APPROVED','APPROVED','REVIEW_REQUIRED')""",
+                (cid,)).fetchone()[0]
+            if n:
+                raise HTTPException(
+                    409, f"활성 매핑 {n}건이 이 개념을 참조합니다 — 먼저 재매핑하세요")
+            store.conn.execute(
+                "UPDATE domain_concept SET status='DEPRECATED' WHERE concept_id=?",
+                (cid,))
+            store.commit()
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/kg/concept/{cid}/restore")
+    def concept_restore(cid: str):
+        with lock:
+            if store.concept(cid) is None:
+                raise HTTPException(404, "unknown concept")
+            store.conn.execute(
+                "UPDATE domain_concept SET status='ACTIVE' WHERE concept_id=?", (cid,))
+            store.commit()
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/kg/alias")
+    def alias_add(body: AliasReq):
+        alias = (body.alias or "").strip()
+        if not alias:
+            raise HTTPException(400, "alias 필수")
+        with lock:
+            if store.concept(body.concept_id) is None:
+                raise HTTPException(404, "unknown concept")
+            store.add_alias(body.concept_id, alias, normalize_label(alias))
+            store.commit()
+        return JSONResponse({"ok": True})
+
+    @app.delete("/api/kg/alias")
+    def alias_delete(concept_id: str, alias: str):
+        with lock:
+            cur = store.conn.execute(
+                "DELETE FROM domain_alias WHERE concept_id=? AND alias_norm=?",
+                (concept_id, normalize_label(alias)))
+            store.commit()
+        if not cur.rowcount:
+            raise HTTPException(404, "unknown alias")
+        return JSONResponse({"ok": True})
+
+    def _isa_would_cycle(src: str, dst: str) -> bool:
+        """src IS_A dst 추가 시 사이클 여부 — dst의 부모 체인에 src가 있으면."""
+        parents = {r["s"]: r["t"] for r in store.conn.execute(
+            "SELECT source_concept_id s, target_concept_id t FROM domain_relation "
+            "WHERE relation_type='IS_A'")}
+        cur = dst
+        for _ in range(8):
+            if cur == src:
+                return True
+            cur = parents.get(cur)
+            if cur is None:
+                return False
+        return True                                 # 8홉 초과 = 이미 비정상 체인
+
+    @app.post("/api/kg/relation")
+    def relation_add(body: RelationReq):
+        if body.type not in VALID_RELATIONS:
+            raise HTTPException(400, f"type must be one of {sorted(VALID_RELATIONS)}")
+        if body.source == body.target:
+            raise HTTPException(400, "self-loop 불가")
+        with lock:
+            for c in (body.source, body.target):
+                if store.concept(c) is None:
+                    raise HTTPException(404, f"unknown concept: {c}")
+            if body.type == "IS_A" and _isa_would_cycle(body.source, body.target):
+                raise HTTPException(400, "IS_A 사이클이 생깁니다")
+            store.add_relation(body.source, body.target, body.type)
+            store.commit()
+        warning = ("IS_A 변경은 Document KG(문서군) 재편성에 영향을 줍니다"
+                   if body.type == "IS_A" else None)
+        return {"ok": True, "warning": warning}
+
+    @app.delete("/api/kg/relation")
+    def relation_delete(source: str, target: str, type: str):
+        with lock:
+            cur = store.conn.execute(
+                "DELETE FROM domain_relation WHERE source_concept_id=? "
+                "AND target_concept_id=? AND relation_type=?",
+                (source, target, type))
+            store.commit()
+        if not cur.rowcount:
+            raise HTTPException(404, "unknown relation")
+        warning = ("IS_A 변경은 Document KG(문서군) 재편성에 영향을 줍니다"
+                   if type == "IS_A" else None)
+        return {"ok": True, "warning": warning}
+
+    @app.get("/api/kg/export")
+    def kg_export():
+        """현재 DB를 domain_kg.yaml 형식으로 — 웹 편집의 YAML 역반영 통로."""
+        import yaml as _yaml
+        with lock:
+            crows = store.conn.execute(
+                "SELECT * FROM domain_concept ORDER BY concept_id").fetchall()
+            arows = store.conn.execute(
+                "SELECT concept_id, alias_text FROM domain_alias "
+                "ORDER BY concept_id, alias_norm").fetchall()
+            rrows = store.conn.execute(
+                "SELECT * FROM domain_relation ORDER BY 1,2,3").fetchall()
+        amap: dict[str, list[str]] = {}
+        for r in arows:
+            amap.setdefault(r["concept_id"], []).append(r["alias_text"])
+        concepts = []
+        for r in crows:
+            c: dict = {"concept_id": r["concept_id"],
+                       "canonical_name": r["canonical_name"]}
+            for k in ("canonical_name_en", "description", "concept_type",
+                      "data_type", "domain_level", "canonical_unit",
+                      "unit_dimension"):
+                if r[k]:
+                    c[k] = r[k]
+            if r["status"] != "ACTIVE":
+                c["status"] = r["status"]
+            als = [a for a in amap.get(r["concept_id"], [])
+                   if a not in (r["canonical_name"], r["canonical_name_en"])]
+            if als:
+                c["aliases"] = als
+            concepts.append(c)
+        data = {"version": f"db-export-{now_iso()}", "concepts": concepts,
+                "relations": [[r["source_concept_id"], r["target_concept_id"],
+                               r["relation_type"]] for r in rrows]}
+        return PlainTextResponse(
+            _yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+            media_type="text/yaml; charset=utf-8")
 
     app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="static")
     return app

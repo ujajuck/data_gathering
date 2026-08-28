@@ -197,3 +197,46 @@ CREATE TABLE IF NOT EXISTS lineage_edge (
     transform_path TEXT,             -- JSON: 거쳐온 transformation node 목록
     PRIMARY KEY (build_id, output_row_id, output_field)
 );
+
+-- ==================================================== KG2: DKG 멤버십 델타 --
+-- DKG(=L1 root concept)의 '사람 델타'만 저장한다. AUTO 멤버십은 승인 매핑에서
+-- 파생되며(kg/groups.py) 여기 저장되지 않는다.
+-- 최종 멤버 = 파생 ∪ INCLUDED − EXCLUDED. EXCLUDED는 파생 부활을 막는 tombstone.
+CREATE TABLE IF NOT EXISTS document_group_member (
+    root_concept_id TEXT NOT NULL REFERENCES domain_concept(concept_id),
+    document_id     TEXT NOT NULL REFERENCES document(document_id),
+    state           TEXT NOT NULL CHECK (state IN ('INCLUDED','EXCLUDED')),
+    created_at      TEXT NOT NULL,
+    PRIMARY KEY (root_concept_id, document_id)
+);
+CREATE INDEX IF NOT EXISTS idx_dgm_doc ON document_group_member(document_id);
+
+-- ================================================== KG2: Extraction Recipe --
+-- 그룹(=L1 root)당 ACTIVE 1개(부분 유니크 인덱스로 강제). spec_json은 불변
+-- 스냅샷 — 새 스냅샷/롤백은 기존 ACTIVE를 ARCHIVED로 내리고 새 행을 INSERT하는
+-- append-only 선형 이력이다.
+CREATE TABLE IF NOT EXISTS extraction_recipe (
+    recipe_id       TEXT PRIMARY KEY,               -- RCP-12hex
+    root_concept_id TEXT NOT NULL REFERENCES domain_concept(concept_id),
+    status          TEXT NOT NULL DEFAULT 'ACTIVE', -- ACTIVE/ARCHIVED
+    spec_json       TEXT NOT NULL,
+    note            TEXT,
+    created_at      TEXT NOT NULL,
+    created_by      TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_recipe_active
+    ON extraction_recipe(root_concept_id) WHERE status='ACTIVE';
+
+-- ==================================================== KG2: Recrawl Run -----
+-- 재크롤링 실행 기록 — 백그라운드 실행 + UI 폴링 + 기동 시 복구의 근거.
+CREATE TABLE IF NOT EXISTS recrawl_run (
+    run_id          TEXT PRIMARY KEY,               -- RCL-12hex
+    root_concept_id TEXT NOT NULL REFERENCES domain_concept(concept_id),
+    recipe_id       TEXT REFERENCES extraction_recipe(recipe_id),
+    mode            TEXT NOT NULL,                  -- fill/reset_auto
+    status          TEXT NOT NULL,                  -- RUNNING/SUCCESS/PARTIAL/FAILED
+    started_at      TEXT NOT NULL,
+    finished_at     TEXT,
+    summary_json    TEXT                            -- 문서별 진행/결과 JSON 배열
+);
+CREATE INDEX IF NOT EXISTS idx_recrawl_root ON recrawl_run(root_concept_id, started_at);

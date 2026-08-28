@@ -119,6 +119,16 @@ td.selc{outline:3px solid #1c3e9c!important;outline-offset:-3px}
  display:flex;justify-content:space-between;align-items:center;gap:8px}
 .concept .x{border:none;background:none;color:var(--red);cursor:pointer;font-size:14px}
 .warn{color:var(--amber);font-size:12px;margin-top:6px}
+.editForm input,.editForm select,.editForm textarea{width:100%;border:1px solid var(--line);
+  border-radius:8px;padding:7px 9px;font:inherit;font-size:12px;margin-top:4px;background:#fff}
+.editForm label{font-size:11px;color:var(--muted);display:block;margin-top:8px}
+.chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);
+  border-radius:999px;padding:3px 9px;font-size:11px;margin:2px 3px 0 0;background:#fff}
+.chip button{border:0;background:none;color:var(--red);cursor:pointer;font-size:11px;padding:0}
+.chip.pick{cursor:pointer}
+.chip.pick:hover,.chip.pick.sel{background:var(--blue2);border-color:var(--blue);color:#234fac}
+.progRow{display:grid;grid-template-columns:1fr auto;gap:8px;font-size:12px;
+  border-top:1px solid var(--line);padding:6px 0}
 .empty{color:var(--muted);padding:8px 2px;font-size:12px}
 @media(max-width:1150px){.grid3,.excelLayout,.builder{grid-template-columns:1fr}}
 </style>
@@ -137,9 +147,15 @@ td.selc{outline:3px solid #1c3e9c!important;outline-offset:-3px}
 
 <!-- 1. 파일 분석 -->
 <section id="files" class="screen">
+  <div class="panel pad" id="rawPanel" style="display:none;margin-bottom:14px">
+    <div class="kicker">미등록 파일</div>
+    <div class="sub">data/raw에 새 파일이 있습니다 — 분석하면 같은 형식의 Document KG를 제안하고,
+      배정하면 저장된 추출 레시피로 매핑을 이식합니다.</div>
+    <div id="rawRows" style="margin-top:8px"></div>
+  </div>
   <div class="panel pad">
     <div class="title">파일 분석</div>
-    <div class="sub">등록된 Excel의 분석 상태와 Domain KG / Document KG 매핑 현황입니다. 파일은 data/raw에 두고 kg ingest로 등록합니다.</div>
+    <div class="sub">등록된 Excel의 분석 상태와 Domain KG / Document KG 매핑 현황입니다. 파일은 data/raw에 두면 위 미등록 목록에 나타납니다.</div>
     <table class="table" style="margin-top:14px"><thead><tr>
       <th>파일</th><th>Document KG</th><th>매핑 노드</th><th>KG 매핑</th><th>검토</th><th>상태</th><th></th></tr></thead>
       <tbody id="fileRows"><tr><td colspan="7" class="empty">불러오는 중…</td></tr></tbody></table>
@@ -157,6 +173,8 @@ td.selc{outline:3px solid #1c3e9c!important;outline-offset:-3px}
       <button id="navDoc" class="tinyTab">문서 KG</button></div>
     <div id="domainList" style="margin-top:9px;max-height:46vh;overflow-y:auto"></div>
     <div id="docList" style="display:none;margin-top:9px;max-height:46vh;overflow-y:auto"></div>
+    <button class="secondary w100" id="newConceptBtn" style="margin-top:9px">+ 새 개념
+      <span class="muted" style="font-size:10px">(L1이면 새 Document KG)</span></button>
     <div id="legend" style="display:grid;gap:7px;font-size:12px;margin-top:12px"></div>
   </aside>
   <main class="panel">

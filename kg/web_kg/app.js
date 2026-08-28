@@ -17,6 +17,7 @@ const ROLE_BADGE = { KEY: 'green', VALUE: 'blue', CONTEXT: 'amber', IGNORE: '' }
 
 const state = {
   domain: null, dkgs: [], files: [],
+  raw: [], rawInfo: {},   // 미등록 파일 + 분석(제안) 결과
   selNode: null,          // {id, name}
   selDkg: null,           // dkg id
   selDkgDoc: null,        // Document KG 상세에서 선택한 문서
@@ -24,6 +25,26 @@ const state = {
   doc: null, sheet: null, seq: 0,
   lastBuild: null,
 };
+
+// KG 데이터 재조회 — 편집/등록/재크롤링 후 캐시 3종을 한 번에 갱신한다
+async function reloadKg() {
+  [state.domain, state.dkgs, conceptsCache] = await Promise.all([
+    api('/api/kg/domain'), api('/api/kg/document'), api('/api/concepts')]);
+  if (state.selDkg && !state.dkgs.some((g) => g.id === state.selDkg)) state.selDkg = null;
+  state.dkgDetail = null;
+  state.nodeSearch = null;
+  renderDomainGraph();
+  renderNav($('#kgSearch').value.trim());
+}
+
+function pollRecrawl(runId, onUpdate) {
+  return api(`/api/recrawl/${encodeURIComponent(runId)}`).then((r) => {
+    onUpdate(r);
+    if (r.status === 'RUNNING')
+      setTimeout(() => pollRecrawl(runId, onUpdate).catch(() => {}), 2000);
+    return r;
+  });
+}
 
 // -------------------------------------------------- 통합 초안 (Selection Basket)
 const CART_KEY = 'kg_cart_v3';
@@ -46,6 +67,7 @@ function show(id) {
   document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', s.id === id));
   if (id === 'source') renderSourceScreen();
   if (id === 'db') refreshProposal();
+  if (id === 'files') { loadFiles().catch(() => {}); loadRawFiles().catch(() => {}); }
 }
 steps.forEach((b) => b.onclick = () => show(b.dataset.screen));
 
@@ -76,6 +98,80 @@ async function loadFiles() {
     state.reviewDoc = b.dataset.review;   // §3.2 검토 큐 → 순차 검수
     state.selNode = null;
     show('source');
+  });
+}
+
+// ---- 미등록 파일: 분석(map=false) → 같은 형식 DKG 제안 → 배정 등록 (KG2)
+async function loadRawFiles() {
+  try { state.raw = await api('/api/raw-files'); } catch { state.raw = []; }
+  // '분석'으로 구조만 적재된 파일은 서버 목록에서 빠지므로 rawInfo 쪽을 합친다
+  const names = [...new Set([...state.raw.map((f) => f.filename),
+                             ...Object.keys(state.rawInfo)])].sort();
+  $('#rawPanel').style.display = names.length ? '' : 'none';
+  $('#rawRows').innerHTML = names.map((fn) => {
+    const info = state.rawInfo[fn];
+    let inner;
+    if (info) {
+      const chips = [
+        ...(info.suggestions || []).map((s) =>
+          `<span class="chip pick${info.picked === s.root_concept_id ? ' sel' : ''}"
+            data-fn="${esc(fn)}" data-g="${esc(s.root_concept_id)}">${esc(s.name)}
+            · ${s.match_pct}%${s.has_recipe ? ' · 레시피' : ''}</span>`),
+        `<span class="chip pick${info.picked === '' ? ' sel' : ''}"
+          data-fn="${esc(fn)}" data-g="">새 형식 (자동 판정)</span>`].join('');
+      inner = `<div style="margin-top:6px;font-size:12px">${(info.suggestions || []).length
+        ? '같은 형식으로 보이는 Document KG — 선택하면 레시피로 매핑을 이식합니다:'
+        : '비슷한 형식의 Document KG가 없습니다.'}<br>${chips}</div>
+        <button class="primary" style="margin-top:7px" data-reg="${esc(fn)}">
+          ${info.picked ? '선택한 DKG로 등록' : '등록 (자동 판정)'}</button>`;
+    } else {
+      inner = `<div><button class="secondary" style="margin-top:5px"
+        data-an="${esc(fn)}">분석 · DKG 제안</button></div>`;
+    }
+    return `<div class="fileRow" style="cursor:default"><b>${esc(fn)}</b>${inner}
+      <div class="status" data-st="${esc(fn)}"></div></div>`;
+  }).join('');
+  const st = (fn) => $('#rawRows').querySelector(`[data-st="${CSS.escape(fn)}"]`);
+  $('#rawRows').querySelectorAll('[data-an]').forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    st(b.dataset.an).textContent = '구조 분석 중…';
+    try {
+      const r = await post('/api/ingest', { filename: b.dataset.an, map: false });
+      const sugg = r.suggestions || [];
+      state.rawInfo[b.dataset.an] = {
+        document_id: r.document_id, suggestions: sugg,
+        picked: sugg.length ? sugg[0].root_concept_id : '' };
+      loadRawFiles();
+    } catch (e) { st(b.dataset.an).textContent = e.message; b.disabled = false; }
+  });
+  $('#rawRows').querySelectorAll('.chip.pick').forEach((c) => c.onclick = () => {
+    state.rawInfo[c.dataset.fn].picked = c.dataset.g;
+    loadRawFiles();
+  });
+  $('#rawRows').querySelectorAll('[data-reg]').forEach((b) => b.onclick = async () => {
+    const fn = b.dataset.reg;
+    const info = state.rawInfo[fn];
+    b.disabled = true;
+    st(fn).textContent = '등록 중… (레시피 적용 + 자동 판정)';
+    try {
+      const body = { filename: fn };
+      if (info && info.picked) body.group_id = info.picked;
+      const r = await post('/api/ingest', body);
+      const rc = r.recipe;
+      const parts = [];
+      if (r.ingest && r.ingest.unchanged !== undefined)
+        parts.push(`승계 ${r.ingest.unchanged}`);
+      if (rc) parts.push(`레시피 이식 ${rc.applied}건` +
+        (rc.review ? ` (검토 ${rc.review})` : '') +
+        (rc.relaxed ? ' · 양식 변경 감지' : ''));
+      if (r.map) parts.push(`자동 판정 ${r.map.nodes}건` +
+        (r.map.REVIEW_REQUIRED ? ` (검토 ${r.map.REVIEW_REQUIRED})` : ''));
+      st(fn).textContent = `✓ 등록 완료 — ${parts.join(' · ') || '변경 없음'}`;
+      delete state.rawInfo[fn];
+      await reloadKg();          // 파일 표의 DKG 배지가 최신 그룹으로 그려지도록
+      await loadFiles();         // dkgs 갱신 이후에 렌더 (순서 중요)
+      setTimeout(() => loadRawFiles().catch(() => {}), 2500);  // 토스트 읽을 시간
+    } catch (e) { st(fn).textContent = `실패: ${e.message}`; b.disabled = false; }
   });
 }
 
@@ -303,8 +399,10 @@ async function selectNode(nodeId) {
     <div class="rightBtns">
       <button class="primary" id="openDocKg">Document KG 상세 보기</button>
       <button class="secondary" id="openSource">이 노드의 원본 데이터 보기</button>
-      <button class="secondary" id="addNodeCart">통합 DB 대상에 추가</button></div>
+      <button class="secondary" id="addNodeCart">통합 DB 대상에 추가</button>
+      <button class="secondary" id="editConceptBtn">개념 편집</button></div>
     <div class="status" id="kgStatus"></div>`;
+  $('#editConceptBtn').onclick = () => openConceptEditor(n.id);
   $('#openDocKg').onclick = () => { graphMode(true); renderDkgDetail(); };
   $('#openSource').onclick = () => { state.reviewDoc = null; show('source'); };
   $('#addNodeCart').onclick = () => {
@@ -318,11 +416,14 @@ async function selectNode(nodeId) {
   };
 }
 
-function selectDkg(dkgId) {
+async function selectDkg(dkgId) {
   state.selDkg = dkgId;
   state.selDkgDoc = null;
   renderDomainGraph();
   renderNav($('#kgSearch').value.trim());
+  try {   // 상세(오버라이드/레시피/최근 재크롤링 포함) 선조회
+    state.dkgDetail = await api(`/api/kg/document/${encodeURIComponent(dkgId)}`);
+  } catch { state.dkgDetail = null; }
   renderDkgDetail();
 }
 
@@ -331,6 +432,9 @@ function renderDkgDetail() {
     ? state.dkgDetail : dkgOf(state.selDkg);
   if (!g) return;
   const selDoc = (g.member_documents || []).find((d) => d.document_id === state.selDkgDoc);
+  const rec = g.recipe;
+  const memberIds = new Set((g.member_documents || []).map((d) => d.document_id));
+  const addable = state.files.filter((f) => !memberIds.has(f.document_id));
   $('#kgDetail').innerHTML = `
     <div class="kicker">SELECTED DOCUMENT KG</div>
     <div class="title" style="color:${dkgColor(g.id)}">${esc(g.name)}</div>
@@ -341,25 +445,280 @@ function renderDkgDetail() {
       <div class="metric"><span>Source 위치</span><b>${g.source_location_count}</b></div>
       <div class="metric"><span>값</span><b>${g.value_count.toLocaleString()}</b></div></div>
     <div style="margin-top:13px" class="kicker">MEMBER DOCUMENTS</div>
-    <div style="max-height:30vh;overflow-y:auto">
+    <div style="max-height:24vh;overflow-y:auto">
     ${(g.member_documents || []).map((d) => `
       <div class="fileRow${state.selDkgDoc === d.document_id ? ' sel' : ''}" data-doc="${esc(d.document_id)}">
-        <b>${esc(d.filename)}</b><div>${esc(d.nodes.slice(0, 4).join(' · '))} · ${d.sources} src</div></div>`).join('')}
+        <b>${esc(d.filename)}</b>${d.override === 'INCLUDED' ? ' <span class="badge blue">고정</span>' : ''}
+        <div>${esc(d.nodes.slice(0, 4).join(' · ')) || '(매핑 없음)'} · ${d.sources} src
+          <button class="x" data-ex="${esc(d.document_id)}" title="이 그룹에서 제외 (매핑/빌드 소스는 유지)"
+            style="border:0;background:none;color:var(--red);cursor:pointer">제외</button></div>
+      </div>`).join('')}
     </div>
+    ${addable.length ? `<div style="display:flex;gap:6px;margin-top:7px" class="editForm">
+      <select id="dkgAddDoc" style="flex:1;margin-top:0">
+        <option value="">문서 추가 (그룹에 고정)…</option>
+        ${addable.map((f) => `<option value="${esc(f.document_id)}">${esc(f.filename)}</option>`).join('')}
+      </select></div>` : ''}
+    <div class="sub" style="font-size:11px;margin-top:4px">제외/추가는 그룹 소속만 바꿉니다 — 매핑과 빌드 소스는 유지됩니다.</div>
+
+    <div style="margin-top:13px" class="kicker">EXTRACTION RECIPE</div>
+    ${rec ? `<div style="font-size:12px">템플릿 ${rec.template}건
+        ${rec.conflicts ? ` · <span style="color:var(--amber)">충돌 ${rec.conflicts}</span>` : ''}
+        ${rec.dropped ? ` · 동률 제외 ${rec.dropped}` : ''}
+        ${rec.stale_entries ? ` · <span style="color:var(--red)">소멸 개념 ${rec.stale_entries}</span>` : ''}
+        <div class="sub" style="font-size:11px">${esc(rec.recipe_id)} · ${esc(rec.created_at.slice(0, 16))}</div></div>`
+      : '<div class="sub" style="font-size:12px">저장된 레시피가 없습니다 — 승인된 매핑에서 스냅샷을 만들면 같은 형식의 새 문서에 매핑이 이식됩니다.</div>'}
+    <div style="display:flex;gap:6px;margin-top:7px;flex-wrap:wrap">
+      <button class="secondary" id="dkgSnapshot">${rec ? '레시피 재저장' : '레시피 저장'}</button>
+      ${rec ? '<button class="secondary" id="dkgHistory">이력</button>' : ''}
+    </div>
+    <div id="dkgHistBox"></div>
+
+    <div style="margin-top:13px" class="kicker">RECRAWL</div>
+    <div class="editForm" style="display:flex;gap:6px;align-items:center">
+      <select id="dkgMode" style="flex:1;margin-top:0">
+        <option value="fill">증분 (fill) — 미매핑만 재평가</option>
+        <option value="reset_auto">자동매핑 초기화 (reset_auto)</option></select>
+      <button class="primary" id="dkgRecrawl">재크롤링</button></div>
+    <div class="sub" style="font-size:11px;margin-top:4px">사람 승인/거절은 보존됩니다.
+      reset_auto는 검수 대기 항목도 재판정합니다.</div>
+    ${g.last_recrawl ? `<div class="sub" style="font-size:11px">최근:
+      ${esc(g.last_recrawl.mode)} · ${esc(g.last_recrawl.status)} · ${esc((g.last_recrawl.started_at || '').slice(0, 16))}</div>` : ''}
+    <div id="recrawlProg"></div>
+
     <div class="rightBtns">
       <button class="primary" id="docToSource" ${selDoc ? '' : 'disabled'}>선택 문서의 원본 위치 보기</button>
-      <button class="secondary" id="backDomain">전체 KG로 돌아가기</button></div>`;
-  $('#kgDetail').querySelectorAll('[data-doc]').forEach((el) => el.onclick = () => {
+      <button class="secondary" id="backDomain">전체 KG로 돌아가기</button></div>
+    <div class="status" id="dkgStatus"></div>`;
+  $('#kgDetail').querySelectorAll('[data-doc]').forEach((el) => el.onclick = (ev) => {
+    if (ev.target.dataset.ex) return;              // 제외 버튼과 분리
     state.selDkgDoc = el.dataset.doc;
     renderDkgDetail();
     if ($('#docGraph').style.display !== 'none') renderDocGraph(g.id).catch(() => {});
   });
+  $('#kgDetail').querySelectorAll('[data-ex]').forEach((b) => b.onclick = async (ev) => {
+    ev.stopPropagation();
+    try {
+      await post(`/api/group/${encodeURIComponent(g.id)}/member`,
+                 { document_id: b.dataset.ex, state: 'EXCLUDED' });
+      await reloadKg();
+      selectDkg(g.id);
+    } catch (e) { $('#dkgStatus').textContent = e.message; }
+  });
+  const addSel = $('#dkgAddDoc');
+  if (addSel) addSel.onchange = async () => {
+    if (!addSel.value) return;
+    try {
+      await post(`/api/group/${encodeURIComponent(g.id)}/member`,
+                 { document_id: addSel.value, state: 'INCLUDED' });
+      await reloadKg();
+      selectDkg(g.id);
+    } catch (e) { $('#dkgStatus').textContent = e.message; }
+  };
+  $('#dkgSnapshot').onclick = async () => {
+    $('#dkgSnapshot').disabled = true;
+    try {
+      const r = await post(`/api/group/${encodeURIComponent(g.id)}/recipe`, {});
+      $('#dkgStatus').textContent =
+        `✓ 레시피 저장 — 템플릿 ${r.template}건, 충돌 ${r.conflicts}, 동률 제외 ${r.dropped}`;
+      await reloadKg();
+      selectDkg(g.id);
+    } catch (e) { $('#dkgStatus').textContent = e.message; $('#dkgSnapshot').disabled = false; }
+  };
+  const hist = $('#dkgHistory');
+  if (hist) hist.onclick = async () => {
+    try {
+      const r = await api(`/api/group/${encodeURIComponent(g.id)}/recipe`);
+      $('#dkgHistBox').innerHTML = r.history.map((h) => `
+        <div class="progRow"><span>${esc(h.recipe_id)} · ${esc(h.status)} · ${esc((h.created_at || '').slice(0, 16))}
+          ${h.note ? ` · ${esc(h.note.slice(0, 30))}` : ''}</span>
+          ${h.status === 'ARCHIVED' ? `<button class="x" data-rb="${esc(h.recipe_id)}"
+            style="border:0;background:none;color:var(--blue);cursor:pointer">이 버전으로</button>` : '<span class="badge green">활성</span>'}</div>`).join('');
+      $('#dkgHistBox').querySelectorAll('[data-rb]').forEach((b) => b.onclick = async () => {
+        try {
+          await post(`/api/group/${encodeURIComponent(g.id)}/recipe/${b.dataset.rb}/rollback`, {});
+          $('#dkgStatus').textContent = '✓ 롤백 — 해당 버전을 복사한 새 활성 레시피를 만들었습니다.';
+          await reloadKg();
+          selectDkg(g.id);
+        } catch (e) { $('#dkgStatus').textContent = e.message; }
+      });
+    } catch (e) { $('#dkgHistBox').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  $('#dkgRecrawl').onclick = async () => {
+    $('#dkgRecrawl').disabled = true;
+    const mode = $('#dkgMode').value;
+    try {
+      const r = await post(`/api/group/${encodeURIComponent(g.id)}/recrawl`, { mode });
+      const prog = () => $('#recrawlProg');
+      const draw = (run) => {
+        if (!prog()) return;
+        const badge = (d) => d.error ? '<span class="badge red">오류</span>'
+          : d.map === null ? '<span class="badge">진행 중</span>'
+          : `${d.ingest && d.ingest.skipped !== undefined ? '<span class="badge">승계</span>' : '<span class="badge blue">재적재</span>'}
+             ${d.recipe && d.recipe.applied ? `<span class="badge blue">레시피 ${d.recipe.applied}</span>` : ''}
+             ${(d.map && d.map.REVIEW_REQUIRED) || (d.recipe && d.recipe.review)
+               ? `<span class="badge amber">검토 ${(d.map ? d.map.REVIEW_REQUIRED || 0 : 0) + (d.recipe ? d.recipe.review || 0 : 0)}</span>` : ''}
+             ${d.recipe && d.recipe.relaxed ? '<span class="badge amber">양식 변경 감지</span>' : ''}`;
+        prog().innerHTML = `<div class="sub" style="margin-top:6px">${esc(run.status)} ·
+            ${run.summary.length}건</div>` +
+          run.summary.map((d) => `<div class="progRow">
+            <span>${esc(d.filename)}${d.error ? ` — <span style="color:var(--red)">${esc(d.error)}</span>` : ''}</span>
+            <span>${badge(d)}</span></div>`).join('');
+        if (run.status !== 'RUNNING') {
+          const review = run.summary.reduce((a, d) =>
+            a + (d.map ? d.map.REVIEW_REQUIRED || 0 : 0) +
+                (d.recipe ? d.recipe.review || 0 : 0), 0);
+          prog().innerHTML += `<div class="status">✓ 완료 (${esc(run.status)})` +
+            (review ? ` — 검토 필요 ${review}건은 파일 탭에서 검수하세요` : '') + '</div>';
+          $('#dkgRecrawl').disabled = false;
+          loadFiles().catch(() => {});
+          reloadKg().catch(() => {});
+        }
+      };
+      pollRecrawl(r.run_id, draw).catch((e) => {
+        if (prog()) prog().innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+        $('#dkgRecrawl').disabled = false;
+      });
+    } catch (e) {
+      $('#dkgStatus').textContent = e.message;
+      $('#dkgRecrawl').disabled = false;
+    }
+  };
   $('#docToSource').onclick = () => {
     state.reviewDoc = null;
     show('source');
     loadSheet(state.selDkgDoc, null).catch((e) => setVStatus(e.message));
   };
   $('#backDomain').onclick = () => { state.selDkg = null; graphMode(false); renderDomainGraph(); renderNav(); };
+}
+
+// ---- Domain Concept 편집기 (KG2) — 생성/부분 수정/별칭/관계/폐기
+const REL_TYPES = ['IS_A', 'PART_OF', 'AFFECTS', 'MEASURED_BY', 'RELATED_TO'];
+async function openConceptEditor(cid) {
+  let d = { concept: {}, aliases: [], relations: [], active_mappings: 0 };
+  if (cid) {
+    try { d = await api(`/api/kg/concept/${encodeURIComponent(cid)}`); }
+    catch (e) { $('#kgDetail').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  }
+  const c = d.concept || {};
+  const nameOf = (id) =>
+    (state.domain.nodes.find((x) => x.id === id) || { name: id }).name;
+  const opt = (list, cur) => list.map((v) =>
+    `<option value="${esc(v)}" ${v === (cur || '') ? 'selected' : ''}>${esc(v) || '—'}</option>`).join('');
+  $('#kgDetail').innerHTML = `
+    <div class="kicker">${cid ? 'EDIT DOMAIN NODE' : 'NEW DOMAIN NODE'}</div>
+    <div class="title">${esc(c.canonical_name || '새 개념')}</div>
+    ${c.status === 'DEPRECATED' ? '<span class="badge red">폐기됨</span>' : ''}
+    ${cid ? `<div class="sub">활성 매핑 ${d.active_mappings}건이 이 개념을 참조합니다.</div>` : ''}
+    <div class="editForm">
+      <label>이름 (canonical_name)</label><input id="efName" value="${esc(c.canonical_name || '')}">
+      <label>영문명</label><input id="efEn" value="${esc(c.canonical_name_en || '')}">
+      <label>설명</label><textarea id="efDesc" rows="2">${esc(c.description || '')}</textarea>
+      <label>레벨 <span class="muted">(L1 = Document KG 축)</span></label>
+      <select id="efLvl">${opt(['', 'L1', 'L2', 'L3'], c.domain_level)}</select>
+      <label>데이터 타입</label>
+      <select id="efDt">${opt(['', 'numeric', 'text', 'category', 'datetime', 'flag'], c.data_type)}</select>
+      <label>기준 단위</label><input id="efUnit" value="${esc(c.canonical_unit || '')}">
+    </div>
+    ${cid ? `
+    <div class="kicker" style="margin-top:12px">ALIASES</div>
+    <div>${d.aliases.map((a) => `<span class="chip">${esc(a)}
+        <button data-da="${esc(a)}">✕</button></span>`).join('')
+      || '<span class="empty">없음</span>'}</div>
+    <div style="display:flex;gap:6px;margin-top:6px" class="editForm">
+      <input id="efNewAlias" placeholder="새 별칭" style="flex:1;margin-top:0">
+      <button class="secondary" id="efAddAlias">추가</button></div>
+    <div class="kicker" style="margin-top:12px">RELATIONS</div>
+    <div>${d.relations.map((r) => `<span class="chip">${esc(nameOf(r.source_concept_id))}
+        —${esc(r.relation_type)}→ ${esc(nameOf(r.target_concept_id))}
+        <button data-dr="${esc([r.source_concept_id, r.target_concept_id, r.relation_type].join('|'))}">✕</button></span>`).join('')
+      || '<span class="empty">없음</span>'}</div>
+    <div class="editForm" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px">
+      <select id="efRelType">${REL_TYPES.map((t) => `<option>${t}</option>`).join('')}</select>
+      <select id="efRelTarget">
+        ${conceptsCache.filter((x) => x.concept_id !== cid).map((x) =>
+          `<option value="${esc(x.concept_id)}">${esc(x.canonical_name)}</option>`).join('')}</select>
+      <button class="secondary" id="efAddRel" style="grid-column:1/3">이 개념 → 대상 관계 추가</button>
+    </div>` : ''}
+    <div class="rightBtns">
+      <button class="primary" id="efSave">저장</button>
+      ${cid ? (c.status === 'DEPRECATED'
+        ? '<button class="secondary" id="efRestore">복원</button>'
+        : '<button class="secondary" id="efDeprecate">폐기</button>') : ''}
+      ${cid ? '<button class="secondary" id="efBack">돌아가기</button>' : ''}
+    </div>
+    <div class="status" id="efStatus"></div>`;
+  const status = (m) => { $('#efStatus').textContent = m; };
+  $('#efSave').onclick = async () => {
+    const body = {
+      concept_id: cid || undefined,
+      canonical_name: $('#efName').value.trim() || null,
+      canonical_name_en: $('#efEn').value.trim() || null,
+      description: $('#efDesc').value.trim() || null,
+      domain_level: $('#efLvl').value || null,
+      data_type: $('#efDt').value || null,
+      canonical_unit: $('#efUnit').value.trim() || null,
+    };
+    try {
+      const r = await post('/api/kg/concept', body);
+      await reloadKg();
+      status(`✓ 저장됨 (${r.concept_id})`);
+      if (r.created) selectNode(r.concept_id);
+      else openConceptEditor(cid);
+    } catch (e) { status(e.message); }
+  };
+  if (!cid) return;
+  $('#efBack').onclick = () => selectNode(cid);
+  $('#kgDetail').querySelectorAll('[data-da]').forEach((b) => b.onclick = async () => {
+    try {
+      await api(`/api/kg/alias?concept_id=${encodeURIComponent(cid)}&alias=${encodeURIComponent(b.dataset.da)}`,
+                { method: 'DELETE' });
+      openConceptEditor(cid);
+    } catch (e) { status(e.message); }
+  });
+  $('#efAddAlias').onclick = async () => {
+    const a = $('#efNewAlias').value.trim();
+    if (!a) return;
+    try {
+      await post('/api/kg/alias', { concept_id: cid, alias: a });
+      status('✓ 별칭 추가 — 미매핑을 재평가하려면 해당 DKG에서 재크롤링(fill)하세요');
+      openConceptEditor(cid);
+    } catch (e) { status(e.message); }
+  };
+  $('#kgDetail').querySelectorAll('[data-dr]').forEach((b) => b.onclick = async () => {
+    const [s, t, ty] = b.dataset.dr.split('|');
+    try {
+      const r = await api(`/api/kg/relation?source=${encodeURIComponent(s)}&target=${encodeURIComponent(t)}&type=${encodeURIComponent(ty)}`,
+                          { method: 'DELETE' });
+      if (r.warning) status(`⚠ ${r.warning}`);
+      openConceptEditor(cid);
+    } catch (e) { status(e.message); }
+  });
+  $('#efAddRel').onclick = async () => {
+    try {
+      const r = await post('/api/kg/relation', {
+        source: cid, target: $('#efRelTarget').value, type: $('#efRelType').value });
+      if (r.warning) status(`⚠ ${r.warning}`);
+      await reloadKg();
+      openConceptEditor(cid);
+    } catch (e) { status(e.message); }
+  };
+  const dep = $('#efDeprecate');
+  if (dep) dep.onclick = async () => {
+    try {
+      await post(`/api/kg/concept/${encodeURIComponent(cid)}/deprecate`, {});
+      await reloadKg();
+      openConceptEditor(cid);
+    } catch (e) { status(e.message); }        // 409: 활성 매핑 n건 참조 안내
+  };
+  const res = $('#efRestore');
+  if (res) res.onclick = async () => {
+    try {
+      await post(`/api/kg/concept/${encodeURIComponent(cid)}/restore`, {});
+      await reloadKg();
+      openConceptEditor(cid);
+    } catch (e) { status(e.message); }
+  };
 }
 
 // ================================================================ 3. 원본 데이터
@@ -572,7 +931,10 @@ async function openInspector(nodeId) {
     <div class="kicker">MAPPING</div><div class="title">${esc(d.range)}</div>
     <div class="kv"><strong>${esc(d.role)} → ${esc(d.concept_name || '미매핑')}</strong>
       <p>Header: ${esc(d.header)}${d.unit ? ` · ${esc(d.unit)}` : ''}
-      ${d.mapping ? ` · ${esc(d.mapping.status)} (${d.mapping.confidence})` : ''}</p></div>
+      ${d.mapping ? ` · ${esc(d.mapping.status)} (${d.mapping.confidence})` : ''}</p>
+      ${d.mapping && d.mapping.method ? `<p style="font-size:11px;color:var(--muted)">
+        ${d.mapping.method === 'recipe' ? '<span class="badge blue">레시피</span> ' : ''}방법: ${esc(d.mapping.method)}
+        ${d.mapping.reason ? `<br>${esc(d.mapping.reason)}` : ''}</p>` : ''}</div>
     <div class="kv"><strong>KEY · Row Context</strong>
       <p>인접: ${esc((d.row_context.keys || []).join(', ') || '—')}<br>
          경로: ${esc((d.row_context.header_path || []).join(' › ') || '—')}</p></div>
@@ -595,7 +957,10 @@ async function openInspector(nodeId) {
     const act = (action) => async () => {
       try {
         await post('/api/review', { mapping_id: d.mapping.mapping_id, action });
-        $('#insStatus').textContent = action === 'approve' ? '✓ 승인되었습니다.' : '반려되었습니다.';
+        $('#insStatus').textContent = action === 'approve' ? '✓ 승인되었습니다.'
+          : ('반려되었습니다.' + (d.mapping.method === 'recipe'
+             ? ' 이 양식 전체를 고치려면: 매핑 수정 후 레시피 재저장 → reset_auto 재크롤링.'
+             : ''));
         loadFiles().catch(() => {});
         if (state.reviewDoc) renderSourceScreen();
         loadSheet(state.doc, state.sheet, nodeId).catch(() => {});
@@ -741,6 +1106,7 @@ $('#buildDb').onclick = async () => {
     $('#navDoc').classList.add('active'); $('#navDomain').classList.remove('active');
     $('#domainList').style.display = 'none'; $('#docList').style.display = '';
   };
+  $('#newConceptBtn').onclick = () => openConceptEditor(null);
   $('#showDomainGraph').onclick = () => graphMode(false);
   $('#showDocGraph').onclick = () => {
     if (!state.selDkg && state.dkgs.length) state.selDkg = state.dkgs[0].id;

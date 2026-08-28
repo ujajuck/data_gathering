@@ -37,6 +37,8 @@ class KgStore:
                                     check_same_thread=not threadsafe)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        # CLI/웹이 같은 DB를 동시에 만질 때 SQLITE_BUSY 즉시 실패 대신 대기
+        self.conn.execute("PRAGMA busy_timeout = 5000")
         self.conn.executescript(_SCHEMA.read_text(encoding="utf-8"))
         self.conn.commit()
 
