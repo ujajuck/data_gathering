@@ -209,7 +209,7 @@ def _is_drm_file(path: Path) -> bool:
 def _load_render_wb(path: Path):
     import openpyxl
 
-    from src.inspect.inspector import _repair_sheet_names
+    from src.inspect.inspector import _repair_sheet_names, _render_from_openpyxl
     try:
         return openpyxl.load_workbook(path, data_only=True)
     except ValueError:
@@ -223,12 +223,13 @@ def _load_render_wb(path: Path):
 def _render_sheet_drm(path: Path, sheet_name: str | None) -> dict:
     """Render sheet from DRM-encrypted file via Excel COM automation.
 
-    Returns the same dict structure as _render_sheet but reads via COM
-    since openpyxl cannot open DRM files. Uses bulk Value read for speed;
-    skips per-cell style/merge queries (too slow over COM).
+    전략: ws.Copy() → 임시 xlsx → openpyxl 완전 렌더 (병합/스타일/열폭/행높이).
+    Copy가 막히면 COM bulk read로 폴백 (값/열폭/행높이/Shape).
     """
     import win32com.client
     import pythoncom
+    import tempfile, os
+    import openpyxl
 
     try:
         pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
@@ -258,11 +259,84 @@ def _render_sheet_drm(path: Path, sheet_name: str | None) -> dict:
         max_row = min(used.Rows.Count if used else 1, _SHEET_CAP_ROWS)
         max_col = min(used.Columns.Count if used else 1, _SHEET_CAP_COLS)
 
-        # Default column widths / row heights (skip per-column COM calls)
-        col_px = [64] * max_col
-        row_px = [20] * max_row
+        # ── Primary: Copy → SaveAs → openpyxl (완전 충실) ──
+        render = None
+        try:
+            ws.Copy()
+            new_wb = excel.ActiveWorkbook
+            tmp = os.path.join(tempfile.gettempdir(), f"_drm_render_{id(ws)}.xlsx")
+            new_wb.SaveAs(tmp, 51)  # xlOpenXMLWorkbook
+            new_wb.Close(SaveChanges=False)
 
-        # Bulk read values only — fast (~1s per sheet)
+            try:
+                owb = openpyxl.load_workbook(tmp, data_only=True)
+                ows = owb[owb.sheetnames[0]]
+                render = _render_from_openpyxl(ows, max_row, max_col)
+                owb.close()
+            finally:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+        except Exception:
+            pass  # Copy 실패 → 폴백
+
+        # ── Shape/TextBox 추출 (COM에서만 가능) ──
+        shapes = []
+        try:
+            for i in range(1, ws.Shapes.Count + 1):
+                sh = ws.Shapes.Item(i)
+                si = {"name": sh.Name}
+                try:
+                    tf = sh.TextFrame2
+                    if tf.HasText == -1:  # msoTrue
+                        si["text"] = tf.TextRange.Text
+                except Exception:
+                    pass
+                if "text" not in si:
+                    try:
+                        tf1 = sh.TextFrame
+                        si["text"] = tf1.Characters().Text
+                    except Exception:
+                        pass
+                try:
+                    si["left"] = round(sh.Left)
+                    si["top"] = round(sh.Top)
+                    si["width"] = round(sh.Width)
+                    si["height"] = round(sh.Height)
+                except Exception:
+                    pass
+                if "text" in si and si["text"].strip():
+                    shapes.append(si)
+        except Exception:
+            pass
+
+        if render is not None:
+            # openpyxl 렌더에 Shape 추가
+            if shapes:
+                render["shapes"] = shapes
+            render["sheet"] = target
+            render["sheets"] = names
+            wb.Close(SaveChanges=False)
+            return render
+
+        # ── Fallback: COM bulk read (값/열폭/행높이/Shape) ──
+        col_px = []
+        for c in range(1, max_col + 1):
+            try:
+                w = ws.Columns(c).ColumnWidth
+                col_px.append(max(14, round((w or 8.43) * 7 + 5)))
+            except Exception:
+                col_px.append(64)
+
+        row_px = []
+        for r in range(1, max_row + 1):
+            try:
+                h = ws.Rows(r).RowHeight
+                row_px.append(max(12, round((h or 15.0) * 4 / 3)))
+            except Exception:
+                row_px.append(20)
+
         cells = []
         if max_row > 0 and max_col > 0:
             try:
@@ -294,6 +368,7 @@ def _render_sheet_drm(path: Path, sheet_name: str | None) -> dict:
             "max_row": max_row, "max_col": max_col,
             "cols": col_px, "rows": row_px,
             "cells": cells, "images": [],
+            "shapes": shapes,
             "gridlines": True,
             "truncated": total_rows > _SHEET_CAP_ROWS or total_cols > _SHEET_CAP_COLS,
         }
