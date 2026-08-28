@@ -5,180 +5,237 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Semantic Excel Integration</title>
 <style>
-:root{--bg:#f7f8fa;--panel:#fff;--line:#dce0e6;--text:#20242a;--muted:#69717c;
- --blue:#3768e5;--bluebg:#e8eeff;--green:#2d9780;--greenbg:#e3f4ef;
- --orange:#d57b2f;--orangebg:#fceee1;--red:#c43d3d;--redbg:#fbe9e9}
+:root{--bg:#f5f7fb;--panel:#fff;--line:#d9dee8;--text:#20242c;--muted:#6e7685;
+ --blue:#3569e8;--blue2:#eaf0ff;--green:#3a8d6d;--green2:#e7f5ef;
+ --amber:#b57b1b;--amber2:#fff4d8;--purple:#7b61c9;--purple2:#f0ebff;--red:#b84b4b;
+ --shadow:0 1px 2px rgba(23,31,49,.04)}
 *{box-sizing:border-box}
-body{margin:0;font:14px/1.5 -apple-system,'Malgun Gothic','Noto Sans KR',sans-serif;
- background:var(--bg);color:var(--text)}
-button,input,select{font:inherit}
+body{margin:0;font:13px/1.5 Inter,-apple-system,'Malgun Gothic','Noto Sans KR',sans-serif;
+ color:var(--text);background:var(--bg)}
+button,input{font:inherit}button{cursor:pointer}
 .top{background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;
- justify-content:space-between;padding:12px 24px;gap:12px;flex-wrap:wrap}
-.brand{font-weight:800}.brand+div{font-size:12px}
-.tabs{display:flex;gap:8px}
-.tabs button,.btn{border:1px solid var(--line);background:#fff;border-radius:9px;
- padding:9px 13px;cursor:pointer}
-.tabs button.active,.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
-.btn:disabled{opacity:.5;cursor:default}
-main{padding:16px 24px}
-.screen{display:none}.screen.active{display:block}
-.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px}
-.muted{color:var(--muted);font-size:13px}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
-.stat{border:1px solid var(--line);border-radius:10px;padding:13px;background:#fff}
-.stat b{font-size:25px;display:block;margin-top:6px}
-table{border-collapse:collapse;width:100%}
-th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;font-size:13px}
-th{background:#f3f5f8;color:var(--muted);font-size:12px}
-.badge{display:inline-block;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:700}
-.b-ready{background:var(--greenbg);color:var(--green)}
-.b-review{background:var(--orangebg);color:var(--orange)}
-.b-error{background:var(--redbg);color:var(--red)}
-/* ---- 탐색 (S02+S03) ---- */
-.kgbar{display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
-.kgbar input{padding:8px 11px;border:1px solid var(--line);border-radius:9px;min-width:250px}
-.pill{display:inline-block;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700}
-.pnode{background:var(--bluebg);color:var(--blue)}
-.pkey{background:var(--greenbg);color:var(--green)}
-.pvalue{background:var(--orangebg);color:var(--orange)}
-.pctx{background:var(--bluebg);color:var(--blue)}
-.layout3{display:grid;grid-template-columns:260px minmax(0,1fr) 300px;gap:14px}
-.sources{max-height:74vh;overflow-y:auto}
-.sources button{width:100%;text-align:left;border:1px solid var(--line);background:#fff;
- border-radius:9px;padding:10px 11px;margin-bottom:8px;cursor:pointer}
-.sources button.on{border:2px solid var(--blue);background:var(--bluebg)}
-.viewer{overflow:hidden;display:flex;flex-direction:column;min-height:640px;max-height:78vh}
-.sheet-tabs{display:flex;gap:6px;margin:8px 0 10px;overflow-x:auto;flex:none}
-.sheet-tabs button{border:1px solid var(--line);background:#fff;border-radius:7px;
- padding:6px 11px;cursor:pointer;white-space:nowrap}
-.sheet-tabs .on{background:var(--bluebg);border-color:var(--blue);color:var(--blue);font-weight:700}
-#gridwrap{flex:1;overflow:auto;border:1px solid var(--line);border-radius:8px}
-table.grid{border-collapse:collapse;margin:0}
-table.grid td{border:1px solid #edf0f4;padding:2px 6px;min-width:32px;max-width:250px;
- overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;height:21px}
-table.grid td.hd{background:#f6f8fa;color:var(--muted);font-size:10px;text-align:center;min-width:28px}
+ justify-content:space-between;padding:12px 26px;gap:10px;flex-wrap:wrap}
+.brand b{font-size:20px}.brand div{font-size:12px;color:var(--muted);margin-top:2px}
+.steps{display:flex;gap:8px;flex-wrap:wrap}
+.step{border:1px solid var(--line);background:#fff;border-radius:9px;padding:9px 14px}
+.step.active{background:var(--blue);border-color:var(--blue);color:#fff}
+.screen{display:none;padding:18px 22px}.screen.active{display:block}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+.pad{padding:15px}
+.kicker{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.04em}
+.title{font-weight:800;font-size:18px;margin-top:3px}
+.sub{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5}
+.muted{color:var(--muted)}
+.crumb{font-size:12px;color:var(--muted);margin-bottom:10px}.crumb b{color:var(--text)}
+.badge{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;
+ font-size:11px;background:#fff}
+.badge.green{background:var(--green2);border-color:#cbe7dc;color:#25684f}
+.badge.amber{background:var(--amber2);border-color:#edd59e;color:#835812}
+.badge.red{background:#fbe9e9;border-color:#eac3c3;color:#8f3232}
+.badge.blue{background:var(--blue2);border-color:#b6c8f7;color:#244ea8}
+.table{width:100%;border-collapse:collapse;font-size:12px}
+.table th,.table td{border-bottom:1px solid var(--line);padding:10px 8px;text-align:left}
+.table th{color:var(--muted);font-size:11px;background:#fafbfd}
+.primary{border:0;background:var(--blue);color:#fff;border-radius:9px;padding:10px 13px;font-weight:700}
+.secondary{border:1px solid var(--line);background:#fff;border-radius:9px;padding:9px 12px}
+.primary:disabled,.secondary:disabled{opacity:.5;cursor:default}
+.w100{width:100%}
+.metricGrid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:11px}
+.metric{border:1px solid var(--line);border-radius:10px;padding:10px}
+.metric span{font-size:11px;color:var(--muted)}.metric b{display:block;font-size:20px;margin-top:4px}
+/* -------- 2. KG 탐색 -------- */
+.grid3{display:grid;grid-template-columns:225px minmax(0,1fr) 305px;gap:13px}
+.search{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;
+ margin:10px 0;background:#fafbfd}
+.listBtn{width:100%;text-align:left;border:0;background:transparent;border-radius:8px;
+ padding:8px 10px;margin:1px 0;display:flex;justify-content:space-between;gap:6px}
+.listBtn:hover,.listBtn.sel{background:var(--blue2);color:#234fac}
+.listBtn .n{color:var(--muted);font-size:11px}
+.dkgCard{border:1px solid var(--line);border-radius:10px;padding:10px;margin:7px 0;cursor:pointer}
+.dkgCard.sel{border:2px solid var(--blue);background:var(--blue2)}
+.dkgCard b{font-size:13px}.dkgCard div{font-size:11px;color:var(--muted);margin-top:3px}
+.tabs{display:flex;gap:6px}
+.tinyTab{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 10px;font-size:12px}
+.tinyTab.active{background:var(--blue2);border-color:#b6c8f7;color:#244ea8}
+.graphHead{display:flex;align-items:flex-start;justify-content:space-between;
+ padding:15px 17px 4px;gap:10px;flex-wrap:wrap}
+.graphWrap{padding:4px 12px 12px}
+.graphSvg{width:100%;height:600px}
+.gnode{fill:#fff;stroke:#aeb9ca;stroke-width:1.4;cursor:pointer}
+.gnode.sel{fill:#eaf0ff;stroke:var(--blue);stroke-width:3}
+.gnode.dim{opacity:.35}
+.ntext{font-size:12px;fill:#20242c;font-weight:700;text-anchor:middle;
+ dominant-baseline:middle;pointer-events:none}
+.ncnt{font-size:10px;fill:#6e7685;text-anchor:middle;pointer-events:none}
+.gedge{stroke:#c3cbd8;stroke-width:1.4;fill:none}
+.hull{stroke-width:2;stroke-dasharray:6 5;cursor:pointer}
+.hull.dim{opacity:.25}
+.hlabel{font-size:12px;font-weight:800;cursor:pointer}
+.fileRow{border-top:1px solid var(--line);padding:9px 0;cursor:pointer}
+.fileRow:first-child{border-top:0}
+.fileRow b{font-size:12px}.fileRow div{font-size:11px;color:var(--muted);margin-top:3px}
+.fileRow.sel b{color:var(--blue)}
+.rightBtns{display:grid;gap:8px;margin-top:13px}
+.docNode{fill:#fff;stroke:#9da9bb;stroke-width:1.4}
+.docFile{fill:#f9fafc;stroke:#c7cfdb;stroke-width:1.2;cursor:pointer}
+.docFile.sel{stroke:var(--blue);stroke-width:2.4;fill:var(--blue2)}
+.docEdge{stroke:#c4cdda;stroke-width:1.4}.docEdge.hi{stroke:var(--blue);stroke-width:2.6}
+/* -------- 3. 원본 데이터 -------- */
+.excelLayout{display:grid;grid-template-columns:240px minmax(0,1fr) 305px;gap:13px}
+.location{border:1px solid var(--line);border-radius:9px;padding:9px 10px;margin:7px 0;
+ background:#fff;cursor:pointer}
+.location.sel{border:2px solid var(--blue);background:var(--blue2)}
+.location b{font-size:12px}.location .sub{margin-top:2px}
+.srcList{max-height:66vh;overflow-y:auto}
+.sheetTabs{display:flex;gap:4px;border-bottom:1px solid var(--line);padding:9px;overflow-x:auto}
+.sheet{border:0;background:transparent;padding:6px 10px;border-radius:7px;white-space:nowrap}
+.sheet.sel{background:var(--blue2);color:#244ea8;font-weight:700}
+.excel{overflow:auto;background:#fff;max-height:62vh}
+table.grid{border-collapse:collapse}
+table.grid td{border:1px solid #e2e6ec;padding:2px 6px;min-width:34px;max-width:240px;
+ overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;height:22px}
+table.grid td.hd{background:#f1f3f7;color:#6c7481;font-size:10px;text-align:center;min-width:30px}
 td.ov{cursor:pointer}
-td.ov-KEY{outline:2px solid var(--green);outline-offset:-2px;background:var(--greenbg)!important}
-td.ov-VALUE{outline:2px solid var(--orange);outline-offset:-2px;background:var(--orangebg)!important}
-td.ov-CONTEXT{outline:2px dashed var(--blue);outline-offset:-2px}
-td.sel{outline:3px solid var(--blue)!important;outline-offset:-3px}
-#vstatus{padding:5px 2px;color:var(--muted);font-size:12px;flex:none}
-.inspector{max-height:74vh;overflow-y:auto}
-.inspector h2{margin:2px 0 4px;font-size:19px}
-.inspector select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;margin-top:5px}
-.preview{display:grid;grid-template-columns:44px 1fr 44px;gap:6px;margin-top:8px;line-height:24px;font-size:13px}
-.preview b{text-align:right}
-.status{font-size:12px;color:var(--green);margin-top:8px;min-height:16px}
-/* ---- 통합 DB (S04+S05) ---- */
-.steps{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
-.step{border:1px solid var(--line);border-radius:99px;padding:7px 16px;font-size:13px}
-.step.on{border-color:var(--blue);background:var(--bluebg);color:var(--blue);font-weight:700}
-.buildgrid{display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px}
-.concept{border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin:8px 0;
+td.ov-KEY{outline:3px solid var(--green);outline-offset:-3px;background:var(--green2)!important}
+td.ov-VALUE{outline:3px solid var(--blue);outline-offset:-3px;background:#eef3ff!important}
+td.ov-CONTEXT{outline:2px dashed var(--purple);outline-offset:-2px}
+td.selc{outline:3px solid #1c3e9c!important;outline-offset:-3px}
+.kv{border:1px solid var(--line);border-radius:10px;padding:10px 11px;margin-top:9px}
+.kv strong{font-size:13px}.kv p{font-size:11px;color:var(--muted);margin:4px 0 0;line-height:1.5}
+#vstatus{padding:6px 10px;color:var(--muted);font-size:12px;border-top:1px solid var(--line)}
+.insp{max-height:66vh;overflow-y:auto}
+.insp select{width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;margin-top:5px}
+.status{font-size:12px;color:var(--green);margin-top:8px;min-height:15px}
+/* -------- 4. 통합 DB -------- */
+.builder{display:grid;grid-template-columns:minmax(0,1fr) 335px;gap:13px}
+.schemaCard{border:1px solid var(--line);border-radius:11px;padding:12px;margin:10px 0}
+.flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.block{border:1px solid var(--line);border-radius:9px;padding:9px 11px;background:#fff;font-size:12px}
+.arrow{color:#8a93a1}
+.code{background:#f6f7fa;border:1px solid var(--line);border-radius:10px;padding:11px;
+ font:12px/1.7 ui-monospace,monospace;white-space:pre;overflow-x:auto}
+.concept{border:1px solid var(--line);border-radius:9px;padding:9px 11px;margin:7px 0;
  display:flex;justify-content:space-between;align-items:center;gap:8px}
-.concept .x{border:none;background:none;color:var(--red);cursor:pointer;font-size:15px}
-.pipeline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
-.pipe{border:1px solid var(--line);border-radius:9px;padding:11px 13px;font-size:13px;background:#fff}
-.result{margin-top:18px;background:#fafbfc;border:1px solid var(--line);border-radius:10px;padding:14px}
-.result table td,.result table th{font-size:12px;padding:6px 8px}
-.warn{color:var(--orange);font-size:12px}
-.empty{color:var(--muted);padding:8px 2px}
-@media(max-width:1100px){.layout3,.buildgrid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
+.concept .x{border:none;background:none;color:var(--red);cursor:pointer;font-size:14px}
+.warn{color:var(--amber);font-size:12px;margin-top:6px}
+.empty{color:var(--muted);padding:8px 2px;font-size:12px}
+@media(max-width:1150px){.grid3,.excelLayout,.builder{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <header class="top">
-  <div><div class="brand">Semantic Excel Integration</div>
-    <div class="muted">Fixed Domain KG 기반 데이터 통합</div></div>
-  <nav class="tabs">
-    <button data-tab="files" class="active">1. 파일 분석</button>
-    <button data-tab="explore">2. KG 데이터 탐색</button>
-    <button data-tab="build">3. 통합 DB <span id="cartN"></span></button>
+  <div class="brand"><b>Semantic Excel Integration</b>
+    <div>Fixed Domain KG · Document KG · Source Location · Custom DB</div></div>
+  <nav class="steps">
+    <button class="step" data-screen="files">1. 파일 분석</button>
+    <button class="step active" data-screen="kg">2. KG 탐색</button>
+    <button class="step" data-screen="source">3. 원본 데이터</button>
+    <button class="step" data-screen="db">4. 통합 DB <span id="cartN"></span></button>
   </nav>
 </header>
-<main>
 
-<!-- S01 파일 분석 -->
-<section id="files" class="screen active">
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-      <div><h2 style="margin:0">파일 분석</h2>
-        <div class="muted">KG 기준 탐색에 사용할 준비 상태를 확인합니다. 파일은 data/raw에 두고 ingest로 등록합니다.</div></div>
-    </div>
-    <div class="stats" id="fileStats"></div>
-    <table><thead><tr><th>파일</th><th>상태</th><th>시트</th><th>KG 매핑</th><th>검토</th><th>작업</th></tr></thead>
-      <tbody id="fileRows"><tr><td colspan="6" class="empty">불러오는 중…</td></tr></tbody></table>
+<!-- 1. 파일 분석 -->
+<section id="files" class="screen">
+  <div class="panel pad">
+    <div class="title">파일 분석</div>
+    <div class="sub">등록된 Excel의 분석 상태와 Domain KG / Document KG 매핑 현황입니다. 파일은 data/raw에 두고 kg ingest로 등록합니다.</div>
+    <table class="table" style="margin-top:14px"><thead><tr>
+      <th>파일</th><th>Document KG</th><th>매핑 노드</th><th>KG 매핑</th><th>검토</th><th>상태</th><th></th></tr></thead>
+      <tbody id="fileRows"><tr><td colspan="7" class="empty">불러오는 중…</td></tr></tbody></table>
   </div>
 </section>
 
-<!-- S02+S03 KG 데이터 탐색 + Excel Semantic Viewer -->
-<section id="explore" class="screen">
-  <div class="card kgbar">
-    <input id="q" list="concepts" placeholder="KG 노드 검색 (예: 심부온도, core T)">
-    <datalist id="concepts"></datalist>
-    <span id="kgctx" class="muted">노드를 검색하면 연결 위치·파일·값 개수가 표시됩니다</span>
-  </div>
-  <div class="layout3">
-    <aside class="card sources">
-      <h3 style="margin:2px 0 2px">연결된 원본 위치</h3>
-      <div class="muted" style="margin-bottom:8px">파일 / 시트 / 영역 / 신뢰도</div>
-      <div id="srcList"><div class="empty">← KG 노드를 먼저 검색</div></div>
+<!-- 2. KG 탐색 -->
+<section id="kg" class="screen active">
+<div class="grid3">
+  <aside class="panel pad">
+    <div class="kicker">KG NAVIGATION</div><div class="title">지식 그래프</div>
+    <input class="search" id="kgSearch" placeholder="노드 / 문서 KG 검색">
+    <div class="tabs">
+      <button id="navDomain" class="tinyTab active">전체 KG</button>
+      <button id="navDoc" class="tinyTab">문서 KG</button></div>
+    <div id="domainList" style="margin-top:9px;max-height:46vh;overflow-y:auto"></div>
+    <div id="docList" style="display:none;margin-top:9px;max-height:46vh;overflow-y:auto"></div>
+    <div id="legend" style="display:grid;gap:7px;font-size:12px;margin-top:12px"></div>
+  </aside>
+  <main class="panel">
+    <div class="graphHead">
+      <div><div class="crumb" id="crumb"><b>전체 Domain KG</b> · Document KG Coverage</div>
+        <div class="title" id="graphTitle">전체 KG에서 Document KG 위치 보기</div>
+        <div class="sub" id="graphSub">반투명 영역은 각 Document KG(문서군)가 Domain KG의 어느 노드들을 커버하는지 나타냅니다.</div></div>
+      <div class="tabs">
+        <button id="showDomainGraph" class="tinyTab active">전체 KG</button>
+        <button id="showDocGraph" class="tinyTab">Document KG 상세</button></div></div>
+    <div class="graphWrap" id="domainGraph"></div>
+    <div class="graphWrap" id="docGraph" style="display:none"></div>
+  </main>
+  <aside class="panel pad" id="kgDetail">
+    <div class="empty">Domain Node 또는 Document KG 영역을 클릭하세요</div>
+  </aside>
+</div>
+</section>
+
+<!-- 3. 원본 데이터 -->
+<section id="source" class="screen">
+  <div class="crumb" id="srcCrumb"><b>전체 KG</b> › 원본 데이터</div>
+  <div class="excelLayout">
+    <aside class="panel pad">
+      <div class="kicker">SOURCE LOCATIONS</div>
+      <div class="title" id="srcTitle">노드를 선택하세요</div>
+      <div class="sub" id="srcSub">KG 탐색에서 Domain Node를 고르면 매핑된 위치가 나옵니다</div>
+      <div class="srcList" id="srcList"></div>
     </aside>
-    <div class="card viewer">
-      <div style="flex:none"><b id="vdoc">문서를 선택하세요</b>
-        <span class="muted" id="vsheetlbl"></span></div>
-      <div class="sheet-tabs" id="tabs"></div>
-      <div id="gridwrap"><div class="empty" style="padding:16px">
-        파일 분석 탭에서 '열어보기' 또는 좌측 원본 위치를 클릭하세요</div></div>
+    <main class="panel" style="display:flex;flex-direction:column;min-height:600px">
+      <div class="sheetTabs" id="tabs"><span class="muted" style="padding:6px">문서를 선택하세요</span></div>
+      <div class="excel" id="gridwrap" style="flex:1"><div class="empty" style="padding:16px">
+        좌측 원본 위치를 클릭하면 원본 렌더 + Semantic Overlay가 표시됩니다</div></div>
       <div id="vstatus"></div>
-    </div>
-    <aside class="card inspector" id="inspector">
-      <div class="empty">Overlay 영역(색 테두리 셀)이나 원본 위치를 클릭하면<br>
-        선택 영역의 역할·개념·값이 여기 표시됩니다</div>
+    </main>
+    <aside class="panel pad insp" id="inspector">
+      <div class="kicker">MAPPING</div>
+      <div class="empty">Overlay 영역(테두리 셀)이나 원본 위치를 클릭하세요</div>
     </aside>
   </div>
 </section>
 
-<!-- S04+S05 통합 DB Builder + 결과 -->
-<section id="build" class="screen">
-  <div class="steps">
-    <div class="step" id="st1">1 노드 선택</div><div class="step" id="st2">2 원본 확인</div>
-    <div class="step on" id="st3">3 통합 규칙</div><div class="step" id="st4">4 결과</div>
-  </div>
-  <div class="buildgrid">
-    <aside class="card">
-      <h3 style="margin:2px 0">선택된 데이터 묶음</h3>
-      <div class="muted">탐색 화면에서 '이 위치 포함'으로 담습니다</div>
-      <div id="cart"><div class="empty">아직 담긴 위치가 없습니다</div></div>
-      <div class="muted" style="margin-top:14px">원본 파일</div>
-      <div id="cartDocs" class="muted">—</div>
-      <button class="btn" style="width:100%;margin-top:12px" id="clearCart">전체 비우기</button>
+<!-- 4. 통합 DB -->
+<section id="db" class="screen">
+  <div class="builder">
+    <main>
+      <div class="panel pad">
+        <div class="title">통합 DB Builder</div>
+        <div class="sub">선택한 Domain Node와 Source들을 Row Context 기준으로 묶어 스키마를 제안합니다. 예외만 조정하세요.</div>
+        <div class="schemaCard">
+          <h4 style="margin:0 0 8px" id="schemaName">선택된 묶음</h4>
+          <div id="cart" style="margin-bottom:8px"></div>
+          <table class="table"><thead><tr>
+            <th>필드</th><th>Domain Node</th><th>역할</th><th>Source</th><th>처리</th><th>상태</th></tr></thead>
+            <tbody id="schemaRows"><tr><td colspan="6" class="empty">원본 데이터 화면에서 '이 Source 포함' 또는 KG 탐색의 '통합 DB 대상에 추가'로 담으세요</td></tr></tbody></table>
+        </div>
+        <div class="flow">
+          <div class="block">Source Select</div><span class="arrow">→</span>
+          <div class="block">Schema Align</div><span class="arrow">→</span>
+          <div class="block">Unit Normalize</div><span class="arrow">→</span>
+          <div class="block">Type Cast</div><span class="arrow">→</span>
+          <div class="block">Union / Join</div><span class="arrow">→</span>
+          <div class="block">Validation</div></div>
+      </div>
+    </main>
+    <aside class="panel pad">
+      <div class="kicker">OUTPUT</div><div class="title">생성 결과</div>
+      <div class="metricGrid">
+        <div class="metric"><span>선택 위치</span><b id="mSrc">0</b></div>
+        <div class="metric"><span>대상 문서</span><b id="mDocs">0</b></div></div>
+      <div style="margin-top:11px"><label class="muted" style="font-size:12px">결과 이름</label>
+        <input id="dbName" class="search" style="margin:5px 0" value="experiment_result"></div>
+      <div class="code" id="schemaTree">결과 스키마가 여기 표시됩니다</div>
+      <button class="primary w100" style="margin-top:11px" id="buildDb">DB 생성 및 반환</button>
+      <button class="secondary w100" style="margin-top:8px" id="clearCart">묶음 비우기</button>
+      <div class="status" id="buildStatus"></div>
+      <div id="result"></div>
     </aside>
-    <div class="card">
-      <h2 style="margin:0">통합 스키마 제안</h2>
-      <div class="muted">같은 Row Context와 KG 관계를 이용해 시스템이 먼저 묶음을 제안합니다. 필드명은 수정할 수 있습니다.</div>
-      <table style="margin-top:12px"><thead><tr>
-        <th>필드</th><th>KG 개념</th><th>역할</th><th>원본</th><th>처리</th><th>상태</th></tr></thead>
-        <tbody id="schemaRows"><tr><td colspan="6" class="empty">묶음을 담으면 제안이 생성됩니다</td></tr></tbody></table>
-      <h3 style="margin:20px 0 4px">통합 규칙</h3>
-      <div class="pipeline">
-        <div class="pipe">SOURCE<br><span class="muted">검증된 원본</span></div>→
-        <div class="pipe">NORMALIZE<br><span class="muted">단위·타입</span></div>→
-        <div class="pipe">ALIGN<br><span class="muted">Row Context</span></div>→
-        <div class="pipe">MERGE<br><span class="muted">UNION</span></div>→
-        <div class="pipe">VALIDATE<br><span class="muted">중복·결측</span></div>
-      </div>
-      <div style="display:flex;gap:10px;align-items:center;margin-top:16px;flex-wrap:wrap">
-        <label class="muted">결과 이름
-          <input id="dbName" value="experiment_result" style="padding:8px;border:1px solid var(--line);border-radius:8px;margin-left:6px"></label>
-        <button class="btn primary" id="buildDb">DB 생성 및 반환</button>
-        <span class="status" id="buildStatus"></span>
-      </div>
-      <div class="result" id="result" style="display:none"></div>
-    </div>
   </div>
 </section>
-</main>
 <script type="module" src="./app.js"></script>
 </body>
 </html>

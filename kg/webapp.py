@@ -196,19 +196,25 @@ def create_app(ws_root: str | Path) -> FastAPI:
         return res
 
     @app.get("/api/review")
-    def review_queue(limit: int = 30):
+    def review_queue(limit: int = 50, doc: str | None = None):
+        """검수 큐 (§9 Warning Badge) — doc 지정 시 그 파일의 순차 검수 목록."""
+        where = "m.status='REVIEW_REQUIRED' AND m.is_active=1 AND n.status='ACTIVE'"
+        params: list = []
+        if doc:
+            where += " AND n.document_id=?"
+            params.append(doc)
+        params.append(limit)
         with lock:
             rows = store.conn.execute(
-                """SELECT m.mapping_id, m.concept_id, m.confidence,
-                          n.node_name, n.locator, n.document_id, d.filename,
-                          e.reason
-                   FROM semantic_mapping m
-                   JOIN tree_node n ON n.node_id=m.tree_node_id
-                   JOIN document d ON d.document_id=n.document_id
-                   LEFT JOIN mapping_evidence e ON e.mapping_id=m.mapping_id
-                   WHERE m.status='REVIEW_REQUIRED' AND m.is_active=1
-                     AND n.status='ACTIVE'
-                   ORDER BY m.confidence DESC LIMIT ?""", (limit,)).fetchall()
+                f"""SELECT m.mapping_id, m.concept_id, m.confidence, n.node_id,
+                           n.node_name, n.locator, n.document_id, d.filename,
+                           e.reason
+                    FROM semantic_mapping m
+                    JOIN tree_node n ON n.node_id=m.tree_node_id
+                    JOIN document d ON d.document_id=n.document_id
+                    LEFT JOIN mapping_evidence e ON e.mapping_id=m.mapping_id
+                    WHERE {where}
+                    ORDER BY m.confidence DESC LIMIT ?""", params).fetchall()
         return [dict(r) for r in rows]
 
     @app.get("/api/sheet")
@@ -220,6 +226,109 @@ def create_app(ws_root: str | Path) -> FastAPI:
         if target is None:
             raise HTTPException(404, "empty workbook")
         return {"document_id": doc, "sheets": names, **_grid_json(structure, target)}
+
+    # ---------------------------------------------- KG View Models (§8 v3) ----
+    def _isa_roots():
+        """concept → L1 루트 (IS_A 체인). Document KG의 묶음 축이 된다."""
+        levels = {}
+        parents = {}
+        for r in store.conn.execute("SELECT concept_id, domain_level FROM domain_concept"):
+            levels[r["concept_id"]] = r["domain_level"]
+        for r in store.conn.execute(
+                "SELECT source_concept_id s, target_concept_id t FROM domain_relation "
+                "WHERE relation_type='IS_A'"):
+            parents[r["s"]] = r["t"]
+        roots = {}
+        for cid in levels:
+            cur, hops = cid, 0
+            while levels.get(cur) != "L1" and cur in parents and hops < 6:
+                cur = parents[cur]
+                hops += 1
+            roots[cid] = cur if levels.get(cur) == "L1" else None
+        return roots, levels, parents
+
+    def _document_kgs():
+        """Document KG 도출(§4.3): L1 도메인 그룹별로, 그 그룹 개념에 매핑을
+        제공하는 문서군 + 커버 노드 + 위치/값 수. Core 파생 View Model."""
+        roots, levels, _ = _isa_roots()
+        rows = store.conn.execute(
+            """SELECT m.concept_id, n.document_id, d.filename, n.node_id,
+                      n.locator, n.tree_path, c.canonical_name,
+                      (SELECT p.row_count FROM data_payload p
+                       WHERE p.tree_node_id=n.node_id AND p.is_current=1) rowc
+               FROM semantic_mapping m
+               JOIN tree_node n ON n.node_id=m.tree_node_id AND n.status='ACTIVE'
+               JOIN document d ON d.document_id=n.document_id
+               JOIN domain_concept c ON c.concept_id=m.concept_id
+               WHERE m.is_active=1 AND m.status IN ('AUTO_APPROVED','APPROVED')
+            """).fetchall()
+        kgs: dict[str, dict] = {}
+        for r in rows:
+            root = roots.get(r["concept_id"])
+            if root is None:
+                continue
+            g = kgs.setdefault(root, {"id": root, "nodes": {}, "docs": {},
+                                      "sources": 0, "values": 0})
+            g["nodes"].setdefault(r["concept_id"], 0)
+            g["nodes"][r["concept_id"]] += 1
+            doc = g["docs"].setdefault(r["document_id"], {
+                "document_id": r["document_id"], "filename": r["filename"],
+                "nodes": set(), "first_locator": r["locator"], "sources": 0})
+            doc["nodes"].add(r["canonical_name"])
+            doc["sources"] += 1
+            g["sources"] += 1
+            g["values"] += r["rowc"] or 0
+        out = []
+        for root, g in kgs.items():
+            c = store.concept(root)
+            out.append({
+                "id": root,
+                "name": (c["canonical_name"] if c else root) + " KG",
+                "domain_node_ids": sorted(g["nodes"], key=lambda k: -g["nodes"][k]),
+                "member_document_count": len(g["docs"]),
+                "member_documents": sorted(
+                    ({**d, "nodes": sorted(d["nodes"])} for d in g["docs"].values()),
+                    key=lambda d: -d["sources"]),
+                "source_location_count": g["sources"],
+                "value_count": g["values"],
+            })
+        out.sort(key=lambda k: -k["source_location_count"])
+        return out
+
+    @app.get("/api/kg/domain")
+    def kg_domain():
+        """전체 Domain KG Snapshot (§8): 노드(레벨/그룹/소스수) + IS_A 엣지."""
+        with lock:
+            roots, levels, parents = _isa_roots()
+            src_counts = {r["concept_id"]: r["n"] for r in store.conn.execute(
+                """SELECT concept_id, count(*) n FROM semantic_mapping
+                   WHERE is_active=1 AND status IN ('AUTO_APPROVED','APPROVED')
+                   GROUP BY concept_id""")}
+            nodes = [{
+                "id": r["concept_id"], "name": r["canonical_name"],
+                "level": r["domain_level"], "root": roots.get(r["concept_id"]),
+                "parent": parents.get(r["concept_id"]),
+                "sources": src_counts.get(r["concept_id"], 0),
+            } for r in store.concepts()]
+        return {"nodes": nodes,
+                "edges": [{"s": s, "t": t} for s, t in parents.items()]}
+
+    @app.get("/api/kg/document")
+    def kg_document_list():
+        with lock:
+            kgs = _document_kgs()
+        for g in kgs:                      # 목록은 요약만 (§7.3 데이터 많은 경우)
+            g["member_document_ids"] = [d["document_id"] for d in g["member_documents"]]
+            g["member_documents"] = g["member_documents"][:4]
+        return kgs
+
+    @app.get("/api/kg/document/{dkg_id}")
+    def kg_document_detail(dkg_id: str):
+        with lock:
+            kgs = {g["id"]: g for g in _document_kgs()}
+        if dkg_id not in kgs:
+            raise HTTPException(404, "unknown document kg")
+        return kgs[dkg_id]
 
     @app.get("/api/files")
     def files():
@@ -268,15 +377,21 @@ def create_app(ws_root: str | Path) -> FastAPI:
                    JOIN semantic_mapping m ON m.tree_node_id=n.node_id AND m.is_active=1
                    LEFT JOIN domain_concept c ON c.concept_id=m.concept_id
                    WHERE n.document_id=? AND n.status='ACTIVE' AND n.node_type='HEADER'
-                     AND m.status IN ('AUTO_APPROVED','APPROVED','REVIEW_REQUIRED')
-                     AND n.locator LIKE ?""", (doc, name + "!%")).fetchall()
+                     AND m.status IN ('AUTO_APPROVED','APPROVED','REVIEW_REQUIRED',
+                                      'UNMAPPED')""", (doc,)).fetchall()
         out = []
         for r in rows:
-            rng = (r["locator"] or "").rsplit("!", 1)[-1]
+            loc = r["locator"] or ""
+            # 시트 부분 완전일치 — LIKE의 '_'/'%' 와일드카드 과매칭을 배제한다
+            if loc.rsplit("!", 1)[0] != name:
+                continue
+            rng = loc.rsplit("!", 1)[-1]
             meta = json.loads(r["metadata"] or "{}")
+            role = "IGNORE" if r["status"] == "UNMAPPED" else \
+                _node_role(meta, r["data_type"], r["concept_type"])
             out.append({
                 "node_id": r["node_id"], "header": r["node_name"], "range": rng,
-                "role": _node_role(meta, r["data_type"], r["concept_type"]),
+                "role": role,
                 "concept_id": r["concept_id"], "concept_name": r["canonical_name"],
                 "confidence": round(r["confidence"], 2), "status": r["status"]})
         return out
@@ -334,14 +449,19 @@ def create_app(ws_root: str | Path) -> FastAPI:
         with lock:
             by_concept: dict[str, dict] = {}
             docs: set[str] = set()
+            stale: list[str] = []
             for nid in body.node_ids[:500]:
                 n = store.node(nid)
                 m = store.active_mapping(nid) if n else None
-                if n is None or m is None or not m["concept_id"]:
+                if n is None or n["status"] != "ACTIVE" or m is None \
+                        or not m["concept_id"]:
+                    stale.append(nid)   # 재적재로 사라졌거나 매핑 해제된 위치
                     continue
                 c = store.concept(m["concept_id"])
                 if c is None:
+                    stale.append(nid)
                     continue
+                usable = m["status"] in ("AUTO_APPROVED", "APPROVED")
                 g = by_concept.setdefault(m["concept_id"], {
                     "concept_id": c["concept_id"], "concept_name": c["canonical_name"],
                     "field_name": re.sub(r"[^A-Za-z0-9_]", "_",
@@ -350,12 +470,14 @@ def create_app(ws_root: str | Path) -> FastAPI:
                     "target_unit": c["canonical_unit"], "type": c["data_type"],
                     "units": set(), "sources": 0, "review": 0, "node_ids": [],
                     "role": None})
-                g["sources"] += 1
-                g["node_ids"].append(nid)
+                if usable:
+                    # build와 같은 자격 기준 — REVIEW_REQUIRED는 승인 전까지 제외
+                    g["sources"] += 1
+                    g["node_ids"].append(nid)
+                else:
+                    g["review"] += 1
                 if n["unit"]:
                     g["units"].add(n["unit"])
-                if m["status"] == "REVIEW_REQUIRED":
-                    g["review"] += 1
                 meta = json.loads(n["metadata"] or "{}")
                 g["role"] = g["role"] or _node_role(meta, n["data_type"], c["concept_type"])
                 doc = store.conn.execute(
@@ -370,9 +492,17 @@ def create_app(ws_root: str | Path) -> FastAPI:
             note = (f"{'/'.join(units)} → {tgt}" if tgt and units and
                     (len(units) > 1 or units[0] != tgt) else
                     (f"{tgt} 통일" if tgt else "타입 정규화"))
-            status = "검토" if (len(units) > 1 and not tgt) or g["review"] else "정상"
+            if g["review"] and not g["sources"]:
+                status, note = "검토", f"검토 대기 {g['review']}건 — 승인 후 포함됩니다"
+            elif g["review"]:
+                status = "검토"
+                note += f" · 검토 대기 {g['review']}건 제외"
+            elif len(units) > 1 and not tgt:
+                status = "검토"
+            else:
+                status = "정상"
             fields.append({**g, "units": units, "note": note, "status": status})
-        return {"fields": fields, "documents": sorted(docs)}
+        return {"fields": fields, "documents": sorted(docs), "stale_node_ids": stale}
 
     # ------------------------------------------------------------- write ----
     @app.post("/api/review")
@@ -428,17 +558,23 @@ def create_app(ws_root: str | Path) -> FastAPI:
             ],
         }
         with lock:
+            from kg.integration.builder import delete_project
+            iid = None
             try:
                 iid = define_project(store, config)
                 result = run_build(store, iid, root / "data" / "kg" / "builds",
                                    units=units)
             except (ValueError, KeyError) as e:
+                if iid is not None:
+                    delete_project(store, iid)   # 유령 프로젝트 버전 방지 (보상 삭제)
                 raise HTTPException(400, str(e))
             # 결과 미리보기 + Schema/Lineage manifest (§9)
             import sqlite3 as _sq
             con = _sq.connect(result["output_db"])
             con.row_factory = _sq.Row
             try:
+                actual_cols = {r[1] for r in con.execute(
+                    f'PRAGMA table_info("{body.name}")')}
                 preview = [dict(r) for r in con.execute(
                     f'SELECT * FROM "{body.name}" LIMIT 5')]
                 lineage_docs = con.execute(
@@ -446,16 +582,26 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 ).fetchone()[0]
             finally:
                 con.close()
-        status = "COMPLETED_WITH_WARNINGS" if result.get("warnings") else "COMPLETED"
+        # Schema Manifest는 산출물의 진실을 말한다 — 소스가 없어 탈락한 필드는
+        # included=false + warning으로 드러낸다 (§9.2 Warning은 차단과 분리)
+        warnings = list(result.get("warnings") or [])
+        schema = []
+        for f in body.fields:
+            included = f.name in actual_cols
+            schema.append({"field": f.name, "concept": f.concept, "unit": f.unit,
+                           "type": f.type, "included": included})
+            if not included:
+                warnings.append({"op": "source_select", "field": f.name,
+                                 "reason": "사용 가능한 소스가 없어 결과에서 제외됨 "
+                                           "(검토 대기/매핑 해제 여부 확인)"})
+        status = "COMPLETED_WITH_WARNINGS" if warnings else "COMPLETED"
         return {
             "status": status, "build_id": result["build_id"],
             "artifact": result["output_db"], "table": result["table"],
             "row_count": result["rows"],
-            "schema": [{"field": f.name, "concept": f.concept, "unit": f.unit,
-                        "type": f.type} for f in body.fields],
+            "schema": schema,
             "lineage": {"edges": result["lineage_edges"], "documents": lineage_docs},
-            "build_report": {"frames": result["frames"],
-                             "warnings": result.get("warnings") or []},
+            "build_report": {"frames": result["frames"], "warnings": warnings},
             "preview": preview,
         }
 

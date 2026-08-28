@@ -1,6 +1,5 @@
-// Semantic Excel Integration — S01 파일분석 / S02+S03 KG탐색+Semantic Viewer / S04+S05 통합DB.
-// 탐색 축은 KG 노드(§12): 노드를 고르면 서비스가 원본 위치를 찾아주고,
-// 검증은 원본 렌더(그리드) 위 Overlay에서, 포함 결정은 통합 초안(cart)에 저장된다.
+// Semantic Excel Integration v3 — 드릴다운: 전체 Domain KG → Document KG →
+// Member Documents → Source Location(원본 렌더+Overlay) → 통합 DB.
 const $ = (s) => document.querySelector(s);
 const esc = (t) => String(t ?? '').replace(/[&<>"']/g,
   (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -10,59 +9,396 @@ async function api(path, opts) {
   if (!r.ok) throw new Error((await r.text()).slice(0, 300));
   return r.json();
 }
+const post = (path, body) => api(path, { method: 'POST',
+  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-const ROLE_PILL = { KEY: 'pkey', VALUE: 'pvalue', CONTEXT: 'pctx' };
-const state = { doc: null, sheet: null, seq: 0, overlay: [], selNode: null, concepts: [] };
+const PALETTE = ['#3569e8', '#7b61c9', '#3a8d6d', '#b57b1b', '#c05b8c', '#3d8ea6', '#7a7f8a'];
+const ROLE_BADGE = { KEY: 'green', VALUE: 'blue', CONTEXT: 'amber', IGNORE: '' };
 
-// ------------------------------------------------- 통합 초안 (cart, §7.2) ----
-const CART_KEY = 'kg_cart_v1';
+const state = {
+  domain: null, dkgs: [], files: [],
+  selNode: null,          // {id, name}
+  selDkg: null,           // dkg id
+  selDkgDoc: null,        // Document KG 상세에서 선택한 문서
+  reviewDoc: null,        // 검수 모드 대상 문서
+  doc: null, sheet: null, seq: 0,
+  lastBuild: null,
+};
+
+// -------------------------------------------------- 통합 초안 (Selection Basket)
+const CART_KEY = 'kg_cart_v3';
 function cart() { try { return JSON.parse(localStorage.getItem(CART_KEY)) || []; } catch { return []; } }
 function saveCart(c) {
   try { localStorage.setItem(CART_KEY, JSON.stringify(c)); } catch {}
   $('#cartN').textContent = c.length ? `(${c.length})` : '';
-  renderCart();
 }
-function addToCart(item) {
+function addToCart(items) {
   const c = cart();
-  if (!c.some((x) => x.node_id === item.node_id)) c.push(item);
+  for (const it of [].concat(items))
+    if (!c.some((x) => x.node_id === it.node_id)) c.push(it);
   saveCart(c);
 }
-function dropFromCart(nodeId) { saveCart(cart().filter((x) => x.node_id !== nodeId)); }
 
-// ---------------------------------------------------------------- 탭 전환 ----
-const tabs = [...document.querySelectorAll('[data-tab]')];
+// ---------------------------------------------------------------- 탭 전환
+const steps = [...document.querySelectorAll('.step')];
 function show(id) {
-  tabs.forEach((b) => b.classList.toggle('active', b.dataset.tab === id));
+  steps.forEach((b) => b.classList.toggle('active', b.dataset.screen === id));
   document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', s.id === id));
-  if (id === 'build') refreshProposal();
+  if (id === 'source') renderSourceScreen();
+  if (id === 'db') refreshProposal();
 }
-tabs.forEach((b) => b.onclick = () => show(b.dataset.tab));
+steps.forEach((b) => b.onclick = () => show(b.dataset.screen));
 
-// ------------------------------------------------------- S01 파일 분석 ----
-const BADGE = { READY: ['b-ready', 'Ready'], REVIEW_REQUIRED: ['b-review', 'Review'],
-                ERROR: ['b-error', 'Error'] };
+const dkgOf = (id) => state.dkgs.find((g) => g.id === id);
+const dkgColor = (id) => PALETTE[state.dkgs.findIndex((g) => g.id === id) % PALETTE.length];
+
+// ================================================================ 1. 파일 분석
+const FBADGE = { READY: ['green', 'Ready'], REVIEW_REQUIRED: ['amber', '검토 필요'],
+                 ERROR: ['red', 'Error'] };
 async function loadFiles() {
-  const files = await api('/api/files');
-  const n = (s) => files.filter((f) => f.status === s).length;
-  $('#fileStats').innerHTML = [
-    ['전체 파일', files.length], ['Ready', n('READY')],
-    ['검토 필요', n('REVIEW_REQUIRED')], ['오류', n('ERROR')],
-  ].map(([k, v]) => `<div class="stat">${k}<b>${v}</b></div>`).join('');
-  $('#fileRows').innerHTML = files.map((f) => {
-    const [cls, label] = BADGE[f.status] || ['', f.status];
+  state.files = await api('/api/files');
+  $('#fileRows').innerHTML = state.files.map((f) => {
+    const [cls, label] = FBADGE[f.status] || ['', f.status];
+    const dkgs = state.dkgs.filter((g) => (g.member_document_ids || []).includes(f.document_id));
     return `<tr><td><b>${esc(f.filename)}</b></td>
-      <td><span class="badge ${cls}">${label}</span></td>
-      <td>${f.sheets}</td><td>${f.coverage_pct}%</td>
-      <td>${f.review || '—'}</td>
-      <td><button class="btn" data-open="${esc(f.document_id)}">열어보기</button></td></tr>`;
-  }).join('') || '<tr><td colspan="6" class="empty">등록된 파일이 없습니다 — kg ingest를 먼저 실행하세요</td></tr>';
+      <td>${dkgs.map((g) => `<span class="badge" style="border-color:${dkgColor(g.id)};color:${dkgColor(g.id)}">${esc(g.name)}</span>`).join(' ') || '—'}</td>
+      <td>${f.headers}</td><td>${f.coverage_pct}%</td>
+      <td>${f.review ? `<button class="secondary" data-review="${esc(f.document_id)}">${f.review}건 검수</button>` : '—'}</td>
+      <td><span class="badge ${cls}">${esc(label)}</span></td>
+      <td><button class="secondary" data-open="${esc(f.document_id)}">열어보기</button></td></tr>`;
+  }).join('') || '<tr><td colspan="7" class="empty">등록된 파일이 없습니다 — kg ingest를 먼저 실행하세요</td></tr>';
   $('#fileRows').querySelectorAll('[data-open]').forEach((b) => b.onclick = () => {
-    show('explore');
-    loadSheet(b.dataset.open, null).catch((e) => $('#vstatus').textContent = e.message);
+    state.reviewDoc = null;
+    show('source');
+    loadSheet(b.dataset.open, null).catch((e) => setVStatus(e.message));
+  });
+  $('#fileRows').querySelectorAll('[data-review]').forEach((b) => b.onclick = () => {
+    state.reviewDoc = b.dataset.review;   // §3.2 검토 큐 → 순차 검수
+    state.selNode = null;
+    show('source');
   });
 }
 
-// -------------------------------------- S03 Excel Semantic Viewer + Overlay ----
+// ================================================================ 2. KG 탐색
+// ---- 전체 Domain KG: 그룹(=Document KG) 격자 배치 + Coverage Hull (§3.2)
+function layoutDomain() {
+  const leafs = state.domain.nodes.filter((n) => n.level !== 'L1');
+  const groups = [];
+  for (const g of state.dkgs) {
+    const nodes = leafs.filter((n) => n.root === g.id)
+      .sort((a, b) => b.sources - a.sources || a.name.localeCompare(b.name));
+    if (nodes.length) groups.push({ dkg: g, nodes });
+  }
+  const orphanRoots = [...new Set(leafs.map((n) => n.root))]
+    .filter((r) => r && !groups.some((x) => x.dkg.id === r));
+  for (const r of orphanRoots) {
+    const root = state.domain.nodes.find((n) => n.id === r);
+    groups.push({ dkg: { id: r, name: (root ? root.name : r) + ' KG',
+                         member_document_count: 0 },
+                  nodes: leafs.filter((n) => n.root === r) });
+  }
+  const NW = 108, NH = 30, GX = 10, GY = 12, PAD = 14, LABEL = 30;
+  let x = 12, y = 14, rowH = 0;
+  const MAXW = 1156;
+  for (const g of groups) {
+    const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(g.nodes.length))));
+    const rows = Math.ceil(g.nodes.length / cols);
+    g.w = cols * (NW + GX) - GX + PAD * 2;
+    g.h = rows * (NH + GY) - GY + PAD * 2 + LABEL;
+    if (x + g.w > MAXW) { x = 12; y += rowH + 18; rowH = 0; }
+    g.x = x; g.y = y;
+    x += g.w + 18; rowH = Math.max(rowH, g.h);
+    g.nodes.forEach((n, i) => {
+      n.x = g.x + PAD + (i % cols) * (NW + GX);
+      n.y = g.y + PAD + LABEL + Math.floor(i / cols) * (NH + GY);
+    });
+  }
+  return { groups, height: y + rowH + 16, NW, NH };
+}
+
+function renderDomainGraph() {
+  const { groups, height, NW, NH } = layoutDomain();
+  const nodeAt = {};
+  const parts = [];
+  for (const g of groups) {
+    const color = dkgColor(g.dkg.id);
+    const dim = (state.selDkg && state.selDkg !== g.dkg.id) ? ' dim' : '';
+    parts.push(`<rect class="hull${dim}" data-dkg="${esc(g.dkg.id)}" x="${g.x}" y="${g.y}"
+      width="${g.w}" height="${g.h}" rx="16"
+      style="fill:${color}12;stroke:${color}"/>`);
+    parts.push(`<text class="hlabel${dim}" data-dkg="${esc(g.dkg.id)}" x="${g.x + 14}"
+      y="${g.y + 21}" style="fill:${color}">${esc(g.dkg.name)} · ${g.dkg.member_document_count} docs</text>`);
+    for (const n of g.nodes) nodeAt[n.id] = n;
+  }
+  // IS_A(leaf→leaf) 엣지 — 그룹 내부 계층 (예: 심부최대온도 → 심부온도)
+  for (const e of state.domain.edges) {
+    const a = nodeAt[e.s], b = nodeAt[e.t];
+    if (a && b) parts.push(`<line class="gedge" x1="${a.x + NW / 2}" y1="${a.y + NH}"
+      x2="${b.x + NW / 2}" y2="${b.y}"/>`);
+  }
+  for (const g of groups) {
+    for (const n of g.nodes) {
+      const sel = state.selNode && state.selNode.id === n.id ? ' sel' : '';
+      const dim = (state.selDkg && state.selDkg !== g.dkg.id) ? ' dim' : '';
+      parts.push(`<g><rect class="gnode${sel}${dim}" data-node="${esc(n.id)}" x="${n.x}" y="${n.y}"
+        width="${NW}" height="${NH}" rx="9"/>
+        <text class="ntext" x="${n.x + NW / 2}" y="${n.y + 12}">${esc(n.name)}</text>
+        <text class="ncnt" x="${n.x + NW / 2}" y="${n.y + 24}">${n.sources ? n.sources + ' src' : '미연결'}</text></g>`);
+    }
+  }
+  $('#domainGraph').innerHTML =
+    `<svg class="graphSvg" viewBox="0 0 1180 ${height}" style="height:${Math.min(640, height)}px"
+      aria-label="전체 Domain KG와 Document KG 커버리지">${parts.join('')}</svg>`;
+  $('#domainGraph').querySelectorAll('[data-node]').forEach((el) =>
+    el.onclick = () => selectNode(el.dataset.node));
+  $('#domainGraph').querySelectorAll('[data-dkg]').forEach((el) =>
+    el.onclick = () => selectDkg(el.dataset.dkg));
+}
+
+// ---- Document KG 상세: 커버 노드 + Member Documents (§4)
+async function renderDocGraph(dkgId) {
+  const g = await api(`/api/kg/document/${encodeURIComponent(dkgId)}`);
+  state.dkgDetail = g;
+  const color = dkgColor(dkgId);
+  const nameOf = Object.fromEntries(state.domain.nodes.map((n) => [n.id, n.name]));
+  const top = g.domain_node_ids.slice(0, 6);
+  const NODEW = 128, W = 1180;
+  const nx = (i) => 70 + i * (NODEW + 40);
+  const docs = g.member_documents.slice(0, 4);
+  const dx = (i) => 60 + i * 280;
+  const parts = [];
+  parts.push(`<rect x="40" y="55" width="${Math.max(nx(top.length - 1) + NODEW + 30 - 40, 460)}"
+    height="130" rx="20" class="hull" style="fill:${color}10;stroke:${color}"/>`);
+  parts.push(`<text x="58" y="84" font-size="15" font-weight="800" fill="${color}">${esc(g.name)}</text>`);
+  // 엣지: 문서 → 제공 노드
+  docs.forEach((d, di) => {
+    top.forEach((nid, ni) => {
+      if (d.nodes.includes(nameOf[nid])) {
+        const hi = state.selDkgDoc === d.document_id ? ' hi' : '';
+        parts.push(`<line class="docEdge${hi}" x1="${nx(ni) + NODEW / 2}" y1="150"
+          x2="${dx(di) + 110}" y2="330"/>`);
+      }
+    });
+  });
+  top.forEach((nid, i) => {
+    parts.push(`<g><rect class="docNode" x="${nx(i)}" y="105" width="${NODEW}" height="45" rx="10"/>
+      <text class="ntext" x="${nx(i) + NODEW / 2}" y="127">${esc(nameOf[nid] || nid)}</text></g>`);
+  });
+  if (g.domain_node_ids.length > top.length)
+    parts.push(`<text x="${nx(top.length - 1) + NODEW + 44}" y="132" font-size="12" fill="#6e7685">외 ${g.domain_node_ids.length - top.length}개 노드</text>`);
+  parts.push(`<text x="60" y="300" font-size="12" fill="#6e7685" font-weight="700">MEMBER DOCUMENTS</text>`);
+  docs.forEach((d, i) => {
+    const sel = state.selDkgDoc === d.document_id ? ' sel' : '';
+    parts.push(`<g><rect class="docFile${sel}" data-doc="${esc(d.document_id)}" x="${dx(i)}" y="330"
+      width="230" height="92" rx="11"/>
+      <text x="${dx(i) + 14}" y="355" font-size="12" font-weight="700">${esc(d.filename.slice(0, 24))}${d.filename.length > 24 ? '…' : ''}</text>
+      <text x="${dx(i) + 14}" y="376" font-size="11" fill="#6e7685">${esc((d.first_locator || '').slice(0, 30))}</text>
+      <text x="${dx(i) + 14}" y="396" font-size="11" fill="#6e7685">mapped: ${esc(d.nodes.slice(0, 3).join(', ').slice(0, 30))}${d.nodes.length > 3 ? '…' : ''}</text>
+      <text x="${dx(i) + 14}" y="414" font-size="11" fill="#6e7685">${d.sources} source</text></g>`);
+  });
+  if (g.member_documents.length > docs.length || g.member_document_count > docs.length)
+    parts.push(`<text x="60" y="470" font-size="12" fill="#6e7685">… 외 ${g.member_document_count - docs.length}개 문서 (우측 목록에서 선택)</text>`);
+  $('#docGraph').innerHTML =
+    `<svg class="graphSvg" viewBox="0 0 ${W} 500" style="height:520px"
+      aria-label="Document KG와 소속 문서">${parts.join('')}</svg>`;
+  $('#docGraph').querySelectorAll('[data-doc]').forEach((el) =>
+    el.onclick = () => { state.selDkgDoc = el.dataset.doc; renderDocGraph(dkgId); renderDkgDetail(); });
+}
+
+function graphMode(docMode) {
+  $('#domainGraph').style.display = docMode ? 'none' : '';
+  $('#docGraph').style.display = docMode ? '' : 'none';
+  $('#showDomainGraph').classList.toggle('active', !docMode);
+  $('#showDocGraph').classList.toggle('active', docMode);
+  const g = state.selDkg ? dkgOf(state.selDkg) : null;
+  $('#graphTitle').textContent = docMode
+    ? 'Document KG에 어떤 문서가 속하는지 보기' : '전체 KG에서 Document KG 위치 보기';
+  $('#graphSub').textContent = docMode
+    ? '선택한 Document KG의 Domain Node와 그 노드에 데이터를 제공하는 문서를 함께 봅니다.'
+    : '반투명 영역은 각 Document KG(문서군)가 Domain KG의 어느 노드들을 커버하는지 나타냅니다.';
+  $('#crumb').innerHTML = docMode && g
+    ? `<b>전체 Domain KG</b> › ${esc(g.name)}`
+    : `<b>전체 Domain KG</b> · Document KG Coverage`;
+  if (docMode && state.selDkg) renderDocGraph(state.selDkg).catch(() => {});
+}
+
+// ---- 좌측 내비 + 우측 상세
+function renderNav(filter = '') {
+  const leafs = state.domain.nodes.filter((n) => n.level !== 'L1')
+    .filter((n) => !filter || n.name.includes(filter) || n.id.includes(filter))
+    .sort((a, b) => b.sources - a.sources);
+  $('#domainList').innerHTML = leafs.map((n) =>
+    `<button class="listBtn${state.selNode && state.selNode.id === n.id ? ' sel' : ''}"
+      data-node="${esc(n.id)}"><span>${esc(n.name)}</span><span class="n">${n.sources}</span></button>`).join('');
+  $('#domainList').querySelectorAll('[data-node]').forEach((el) =>
+    el.onclick = () => selectNode(el.dataset.node));
+  $('#docList').innerHTML = state.dkgs
+    .filter((g) => !filter || g.name.includes(filter))
+    .map((g) => `<div class="dkgCard${state.selDkg === g.id ? ' sel' : ''}" data-dkg="${esc(g.id)}">
+      <b style="color:${dkgColor(g.id)}">${esc(g.name)}</b>
+      <div>${g.member_document_count}개 문서 · ${g.domain_node_ids.length}개 노드 · ${g.source_location_count} 위치</div></div>`).join('');
+  $('#docList').querySelectorAll('[data-dkg]').forEach((el) =>
+    el.onclick = () => { selectDkg(el.dataset.dkg); graphMode(true); });
+  $('#legend').innerHTML = state.dkgs.map((g) =>
+    `<div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;
+      background:${dkgColor(g.id)};margin-right:7px"></span>${esc(g.name)} · ${g.member_document_count} docs</div>`).join('');
+}
+
+async function selectNode(nodeId) {
+  const n = state.domain.nodes.find((x) => x.id === nodeId);
+  if (!n) return;
+  state.selNode = { id: n.id, name: n.name, root: n.root };
+  state.selDkg = n.root;
+  graphMode(false);
+  renderDomainGraph();
+  renderNav($('#kgSearch').value.trim());
+  let res = null;
+  try { res = await api(`/api/search?concept=${encodeURIComponent(n.id)}`); } catch {}
+  state.nodeSearch = res;
+  const g = n.root ? dkgOf(n.root) : null;
+  const inCart = cart().some((x) => x.concept_id === n.id);
+  $('#kgDetail').innerHTML = `
+    <div class="kicker">SELECTED DOMAIN NODE</div><div class="title">${esc(n.name)}</div>
+    <div class="sub">${esc((res && res.concept.description) || '')}</div>
+    ${inCart ? '<span class="badge blue" style="margin-top:8px">✓ 통합 대상 포함됨</span>' : ''}
+    <div class="metricGrid">
+      <div class="metric"><span>Document KG</span><b>${g ? 1 : 0}</b></div>
+      <div class="metric"><span>소속 문서</span><b>${res ? res.documents.length : 0}</b></div>
+      <div class="metric"><span>데이터 위치</span><b>${res ? res.sources.length : 0}</b></div>
+      <div class="metric"><span>값</span><b>${res ? res.total_rows : 0}</b></div></div>
+    ${g ? `<div style="margin-top:14px" class="kicker">CONNECTED DOCUMENT KG</div>
+      <div class="dkgCard" data-godkg="${esc(g.id)}"><b style="color:${dkgColor(g.id)}">${esc(g.name)}</b>
+        <div>${g.member_document_count}문서 · ${g.domain_node_ids.slice(0, 4).map((i) =>
+          esc((state.domain.nodes.find((x) => x.id === i) || {}).name || i)).join(' / ')}</div></div>` : ''}
+    <div class="rightBtns">
+      <button class="primary" id="openDocKg">Document KG 상세 보기</button>
+      <button class="secondary" id="openSource">이 노드의 원본 데이터 보기</button>
+      <button class="secondary" id="addNodeCart">통합 DB 대상에 추가</button></div>
+    <div class="status" id="kgStatus"></div>`;
+  $('#openDocKg').onclick = () => { graphMode(true); renderDkgDetail(); };
+  $('#openSource').onclick = () => { state.reviewDoc = null; show('source'); };
+  $('#addNodeCart').onclick = () => {
+    if (!res) return;
+    addToCart(res.sources.filter((s) => s.status !== 'REVIEW_REQUIRED').map((s) => ({
+      node_id: s.node_id, concept_id: n.id, header: s.header,
+      document: s.document, sheet: s.sheet,
+      range: (s.locator || '').split('!').pop(), role: null })));
+    $('#kgStatus').textContent = `✓ ${res.sources.length}개 위치를 통합 대상에 담았습니다.`;
+    selectNode(nodeId);
+  };
+}
+
+function selectDkg(dkgId) {
+  state.selDkg = dkgId;
+  state.selDkgDoc = null;
+  renderDomainGraph();
+  renderNav($('#kgSearch').value.trim());
+  renderDkgDetail();
+}
+
+function renderDkgDetail() {
+  const g = state.dkgDetail && state.dkgDetail.id === state.selDkg
+    ? state.dkgDetail : dkgOf(state.selDkg);
+  if (!g) return;
+  const selDoc = (g.member_documents || []).find((d) => d.document_id === state.selDkgDoc);
+  $('#kgDetail').innerHTML = `
+    <div class="kicker">SELECTED DOCUMENT KG</div>
+    <div class="title" style="color:${dkgColor(g.id)}">${esc(g.name)}</div>
+    <div class="sub">이 문서군이 커버하는 Domain Node와 소속 문서입니다.</div>
+    <div class="metricGrid">
+      <div class="metric"><span>소속 문서</span><b>${g.member_document_count}</b></div>
+      <div class="metric"><span>Domain Node</span><b>${g.domain_node_ids.length}</b></div>
+      <div class="metric"><span>Source 위치</span><b>${g.source_location_count}</b></div>
+      <div class="metric"><span>값</span><b>${g.value_count.toLocaleString()}</b></div></div>
+    <div style="margin-top:13px" class="kicker">MEMBER DOCUMENTS</div>
+    <div style="max-height:30vh;overflow-y:auto">
+    ${(g.member_documents || []).map((d) => `
+      <div class="fileRow${state.selDkgDoc === d.document_id ? ' sel' : ''}" data-doc="${esc(d.document_id)}">
+        <b>${esc(d.filename)}</b><div>${esc(d.nodes.slice(0, 4).join(' · '))} · ${d.sources} src</div></div>`).join('')}
+    </div>
+    <div class="rightBtns">
+      <button class="primary" id="docToSource" ${selDoc ? '' : 'disabled'}>선택 문서의 원본 위치 보기</button>
+      <button class="secondary" id="backDomain">전체 KG로 돌아가기</button></div>`;
+  $('#kgDetail').querySelectorAll('[data-doc]').forEach((el) => el.onclick = () => {
+    state.selDkgDoc = el.dataset.doc;
+    renderDkgDetail();
+    if ($('#docGraph').style.display !== 'none') renderDocGraph(g.id).catch(() => {});
+  });
+  $('#docToSource').onclick = () => {
+    state.reviewDoc = null;
+    show('source');
+    loadSheet(state.selDkgDoc, null).catch((e) => setVStatus(e.message));
+  };
+  $('#backDomain').onclick = () => { state.selDkg = null; graphMode(false); renderDomainGraph(); renderNav(); };
+}
+
+// ================================================================ 3. 원본 데이터
+function crumbText() {
+  const g = state.selDkg ? dkgOf(state.selDkg) : null;
+  const parts = ['<b>전체 KG</b>'];
+  if (g) parts.push(esc(g.name));
+  if (state.selNode) parts.push(esc(state.selNode.name));
+  if (state.reviewDoc) {
+    const f = state.files.find((x) => x.document_id === state.reviewDoc);
+    parts.push(`${esc(f ? f.filename : '')} 검수`);
+  }
+  parts.push('원본 데이터');
+  return parts.join(' › ');
+}
+
+async function renderSourceScreen() {
+  $('#srcCrumb').innerHTML = crumbText();
+  if (state.reviewDoc) {                      // 검수 모드 (§3.2 검토 큐)
+    const rows = await api(`/api/review?doc=${encodeURIComponent(state.reviewDoc)}`);
+    $('#srcTitle').textContent = '검수 대기 목록';
+    $('#srcSub').textContent = '항목을 클릭해 원본을 확인하고 승인/반려하세요';
+    $('#srcList').innerHTML = rows.length ? rows.map((r, i) => `
+      <div class="location" data-i="${i}"><b>${esc(r.node_name)}</b> → ${esc(r.concept_id || '?')}
+        <div class="sub">${esc(r.filename)} · ${esc((r.locator || '').split('!').pop())} · ${(+r.confidence).toFixed(2)}</div></div>`).join('')
+      : '<div class="empty">검수 대기 항목이 없습니다 ✓</div>';
+    $('#srcList').querySelectorAll('.location').forEach((el) => el.onclick = () => {
+      $('#srcList').querySelectorAll('.sel').forEach((x) => x.classList.remove('sel'));
+      el.classList.add('sel');
+      const r = rows[+el.dataset.i];
+      jumpTo(r.document_id, r.locator, r.node_id);
+    });
+    return;
+  }
+  if (!state.selNode) {
+    $('#srcTitle').textContent = '노드를 선택하세요';
+    $('#srcSub').textContent = 'KG 탐색에서 Domain Node를 고르면 매핑된 위치가 나옵니다';
+    $('#srcList').innerHTML = '';
+    return;
+  }
+  let res = state.nodeSearch;
+  if (!res || res.concept.concept_id !== state.selNode.id) {
+    try { res = await api(`/api/search?concept=${encodeURIComponent(state.selNode.id)}`); }
+    catch (e) { $('#srcList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    state.nodeSearch = res;
+  }
+  $('#srcTitle').textContent = state.selNode.name;
+  $('#srcSub').textContent = `Document KG에 포함된 문서 중 ${state.selNode.name}에 매핑된 위치`;
+  $('#srcList').innerHTML = res.sources.map((s, i) => `
+    <div class="location" data-i="${i}"><b>${esc(s.document)}</b>
+      <div class="sub">${esc(s.sheet)} · ${esc((s.locator || '').split('!').pop())} · ${s.rows} values · ${s.mapping}${s.status === 'REVIEW_REQUIRED' ? ' ⚠' : ''}</div></div>`).join('')
+    || '<div class="empty">연결된 위치 없음</div>';
+  $('#srcList').querySelectorAll('.location').forEach((el) => el.onclick = () => {
+    $('#srcList').querySelectorAll('.sel').forEach((x) => x.classList.remove('sel'));
+    el.classList.add('sel');
+    const s = res.sources[+el.dataset.i];
+    jumpTo(s.document_id, s.locator, s.node_id);
+  });
+}
+
+function jumpTo(documentId, locator, nodeId) {
+  const cut = (locator || '').lastIndexOf('!');
+  const sheet = cut > 0 ? locator.slice(0, cut) : null;
+  loadSheet(documentId, sheet, nodeId)
+    .then(() => nodeId && openInspector(nodeId))
+    .catch((e) => setVStatus(e.message));
+}
+
+// ---- Excel 렌더 + Semantic Overlay
 function colName(n) {
   let s = '';
   while (n > 0) { s = String.fromCharCode(64 + ((n - 1) % 26)) + s; n = Math.floor((n - 1) / 26); }
@@ -81,32 +417,27 @@ function parseRange(range) {
   return p1 && p2 ? { r1: Math.min(p1.r, p2.r), c1: Math.min(p1.c, p2.c),
                       r2: Math.max(p1.r, p2.r), c2: Math.max(p1.c, p2.c) } : null;
 }
+const setVStatus = (html) => { $('#vstatus').innerHTML = html; };
 
 async function loadSheet(doc, sheet, focusNode) {
   const seq = ++state.seq;
-  $('#vstatus').textContent = '불러오는 중…';
+  setVStatus('불러오는 중…');
   const data = await api(`/api/sheet?doc=${encodeURIComponent(doc)}` +
                          (sheet ? `&name=${encodeURIComponent(sheet)}` : ''));
   if (seq !== state.seq) return;
-  let overlay = [];
+  let overlay = [], ovErr = '';
   try { overlay = await api(`/api/overlay?doc=${encodeURIComponent(doc)}&name=${encodeURIComponent(data.sheet)}`); }
-  catch {}
+  catch (e) { ovErr = ` · <span style="color:var(--amber)">Overlay 조회 실패: ${esc(e.message.slice(0, 60))}</span>`; }
   if (seq !== state.seq) return;
-  state.doc = doc; state.sheet = data.sheet; state.overlay = overlay;
+  state.doc = doc; state.sheet = data.sheet;
+  $('#inspector').innerHTML = '<div class="kicker">MAPPING</div>' +
+    '<div class="empty">Overlay 영역이나 원본 위치를 클릭하세요</div>';
 
-  $('#vdoc').textContent = '';
-  $('#vsheetlbl').textContent = ` Sheet: ${data.sheet}`;
   $('#tabs').innerHTML = data.sheets.map((s) =>
-    `<button data-s="${esc(s)}" class="${s === data.sheet ? 'on' : ''}">${esc(s)}</button>`).join('');
+    `<button class="sheet${s === data.sheet ? ' sel' : ''}" data-s="${esc(s)}">${esc(s)}</button>`).join('') +
+    `<span class="muted" style="margin-left:auto;padding:6px;white-space:nowrap">원본 렌더 + Semantic Overlay</span>`;
   $('#tabs').querySelectorAll('button').forEach((b) => b.onclick = () => loadSheet(doc, b.dataset.s));
 
-  // 문서명 표시
-  api('/api/files').then((fs) => {
-    const f = fs.find((x) => x.document_id === doc);
-    if (f && state.doc === doc) $('#vdoc').textContent = f.filename;
-  }).catch(() => {});
-
-  // Overlay 좌표층: 셀 → {role, node}
   const ovAt = new Map();
   for (const o of overlay) {
     const rg = parseRange(o.range);
@@ -115,8 +446,8 @@ async function loadSheet(doc, sheet, focusNode) {
       for (let c = rg.c1; c <= rg.c2; c++)
         if (!ovAt.has(`${r},${c}`)) ovAt.set(`${r},${c}`, o);
   }
-  const focusRange = focusNode ? parseRange(
-    (overlay.find((o) => o.node_id === focusNode) || {}).range) : null;
+  const focus = focusNode ? overlay.find((o) => o.node_id === focusNode) : null;
+  const focusRange = focus ? parseRange(focus.range) : null;
 
   const byPos = new Map();
   for (const c of data.cells) byPos.set(`${c.r},${c.c}`, c);
@@ -137,16 +468,17 @@ async function loadSheet(doc, sheet, focusNode) {
       const ov = ovAt.get(`${r},${c}`);
       const inFocus = focusRange && r >= focusRange.r1 && r <= focusRange.r2 &&
                       c >= focusRange.c1 && c <= focusRange.c2;
-      const cls = (ov ? ` ov ov-${ov.role}` : '') + (inFocus ? ' sel' : '');
-      const dat = ov ? ` data-node="${esc(ov.node_id)}"` : '';
+      const cls = (ov && ov.role !== 'IGNORE' ? ` ov ov-${ov.role}` : (ov ? ' ov' : '')) +
+                  (inFocus ? ' selc' : '');
       const style = [];
       if (cell && cell.f) style.push(`background:${esc(cell.f)}`);
       if (cell && cell.b) style.push('font-weight:700');
-      html += `<td${cls ? ` class="${cls.trim()}"` : ''}${dat}` +
+      html += `<td${cls.trim() ? ` class="${cls.trim()}"` : ''}` +
+        `${ov ? ` data-node="${esc(ov.node_id)}"` : ''}` +
         `${cell && cell.rs > 1 ? ` rowspan="${cell.rs}"` : ''}` +
         `${cell && cell.cs > 1 ? ` colspan="${cell.cs}"` : ''}` +
         `${style.length ? ` style="${style.join(';')}"` : ''}` +
-        ` title="${colName(c)}${r}${ov ? ` · ${esc(ov.concept_name || ov.header)} [${ov.role}]` : ''}">` +
+        ` title="${colName(c)}${r}${ov ? ` · ${esc(ov.concept_name || ov.header)} [${esc(ov.role)}]` : ''}">` +
         `${cell ? esc(cell.v) : ''}</td>`;
     }
     html += '</tr>';
@@ -155,193 +487,215 @@ async function loadSheet(doc, sheet, focusNode) {
   $('#gridwrap').innerHTML = html;
   $('#gridwrap').querySelectorAll('td.ov').forEach((td) =>
     td.onclick = () => openInspector(td.dataset.node));
-  const roles = { KEY: 0, VALUE: 0, CONTEXT: 0 };
+  const roles = {};
   overlay.forEach((o) => roles[o.role] = (roles[o.role] || 0) + 1);
-  $('#vstatus').innerHTML =
-    `${data.sheet} — ${data.max_row}×${data.max_col}${data.truncated ? ' (잘림)' : ''} · ` +
-    `Overlay <span class="pill pkey">KEY ${roles.KEY}</span> ` +
-    `<span class="pill pvalue">VALUE ${roles.VALUE}</span> ` +
-    `<span class="pill pctx">CONTEXT ${roles.CONTEXT}</span>`;
-  const selCell = $('#gridwrap td.sel');
+  const rolesTxt = overlay.length
+    ? `Overlay <span class="badge green">KEY ${roles.KEY || 0}</span>
+       <span class="badge blue">VALUE ${roles.VALUE || 0}</span>
+       <span class="badge amber">CONTEXT ${roles.CONTEXT || 0}</span>
+       <span class="badge">미매핑 ${roles.IGNORE || 0}</span>`
+    : '<span style="color:var(--amber)">이 시트에는 매핑된 영역이 없습니다</span>';
+  setVStatus(`${esc(data.sheet)} — ${data.max_row}×${data.max_col}` +
+    `${data.truncated ? ' (잘림)' : ''} · ${rolesTxt}${ovErr}`);
+  const selCell = $('#gridwrap td.selc');
   if (selCell) selCell.scrollIntoView({ block: 'center', inline: 'center' });
 }
 
-// ------------------------------------------------------- S03 Inspector ----
+// ---- Inspector (MAPPING 패널)
+let conceptsCache = [];
 async function openInspector(nodeId) {
-  state.selNode = nodeId;
   const d = await api(`/api/source/${encodeURIComponent(nodeId)}`);
   const inCart = cart().some((x) => x.node_id === nodeId);
-  const opts = state.concepts.map((c) =>
-    `<option value="${esc(c.concept_id)}" ${d.mapping && d.mapping.concept_id === c.concept_id ? 'selected' : ''}>` +
-    `${esc(c.canonical_name)} (${esc(c.concept_id)})</option>`).join('');
+  const isReview = d.mapping && d.mapping.status === 'REVIEW_REQUIRED';
+  const unmapped = !d.mapping || !d.mapping.concept_id || d.mapping.status === 'UNMAPPED';
+  const opts = ['<option value="" disabled' + (unmapped ? ' selected' : '') + '>— 개념 선택 —</option>',
+    ...conceptsCache.map((c) =>
+      `<option value="${esc(c.concept_id)}" ${!unmapped && d.mapping.concept_id === c.concept_id ? 'selected' : ''}>` +
+      `${esc(c.canonical_name)} (${esc(c.concept_id)})</option>`)].join('');
   $('#inspector').innerHTML = `
-    <h3 style="margin:2px 0">선택 영역</h3>
-    <h2>${esc(d.range)}</h2>
-    <span class="pill ${ROLE_PILL[d.role] || 'pctx'}">${esc(d.role)}</span>
-    <span class="muted">${esc(d.header)}</span>
-    <div style="margin-top:14px" class="muted">Domain Concept
-      ${d.mapping ? `· ${esc(d.mapping.status)} (${d.mapping.confidence})` : '· 미매핑'}</div>
+    <div class="kicker">MAPPING</div><div class="title">${esc(d.range)}</div>
+    <div class="kv"><strong>${esc(d.role)} → ${esc(d.concept_name || '미매핑')}</strong>
+      <p>Header: ${esc(d.header)}${d.unit ? ` · ${esc(d.unit)}` : ''}
+      ${d.mapping ? ` · ${esc(d.mapping.status)} (${d.mapping.confidence})` : ''}</p></div>
+    <div class="kv"><strong>KEY · Row Context</strong>
+      <p>인접: ${esc((d.row_context.keys || []).join(', ') || '—')}<br>
+         경로: ${esc((d.row_context.header_path || []).join(' › ') || '—')}</p></div>
+    <div class="kv"><strong>CONTEXT</strong>
+      <p>Sheet: ${esc(d.sheet)} · 문서: ${esc(d.document)}</p></div>
+    <div style="margin-top:12px" class="kicker">DOMAIN CONCEPT</div>
     <select id="conceptSel">${opts}</select>
-    <div style="margin-top:14px" class="muted">Value Preview</div>
-    <div class="preview">${d.values.map((v, i) =>
-      `<span class="muted">${esc(v.key ?? String(i + 1).padStart(2, '0'))}</span>` +
-      `<b>${esc(v.value)}</b><span class="muted">${esc(d.unit || '')}</span>`).join('')}</div>
-    <div style="margin-top:14px" class="muted">Row Context</div>
-    <p style="margin:6px 0">인접: <b>${esc((d.row_context.keys || []).join(', ') || '—')}</b><br>
-      Source: <b>${esc(d.sheet)}!${esc(d.range)}</b><br>
-      문서: <b>${esc(d.document)}</b></p>
-    <button class="btn primary" style="width:100%" id="includeBtn"
-      ${inCart ? 'disabled' : ''}>${inCart ? '✓ 이미 포함됨' : '이 위치 포함'}</button>
-    <button class="btn" style="width:100%;margin-top:8px" id="remapBtn">매핑 수정</button>
+    <div style="margin-top:12px" class="kicker">VALUE PREVIEW</div>
+    <div style="display:grid;grid-template-columns:52px 1fr 44px;gap:5px;margin-top:6px;font-size:12px;line-height:22px">
+      ${d.values.map((v, i) => `<span class="muted">${esc(v.key ?? String(i + 1).padStart(2, '0'))}</span>
+        <b style="text-align:right">${esc(v.value)}</b><span class="muted">${esc(d.unit || '')}</span>`).join('')}</div>
+    ${isReview ? `<div style="display:flex;gap:8px;margin-top:12px">
+      <button class="primary" style="flex:1" id="approveBtn">승인</button>
+      <button class="secondary" style="flex:1" id="rejectBtn">반려</button></div>` : ''}
+    <button class="primary w100" style="margin-top:10px" id="includeBtn"
+      ${inCart || unmapped ? 'disabled' : ''}>${inCart ? '✓ 이미 포함됨' : (unmapped ? '매핑 확정 후 포함 가능' : '이 Source 포함')}</button>
+    <button class="secondary w100" style="margin-top:8px" id="remapBtn">매핑 수정</button>
     <div class="status" id="insStatus"></div>`;
+  if (isReview) {
+    const act = (action) => async () => {
+      try {
+        await post('/api/review', { mapping_id: d.mapping.mapping_id, action });
+        $('#insStatus').textContent = action === 'approve' ? '✓ 승인되었습니다.' : '반려되었습니다.';
+        loadFiles().catch(() => {});
+        if (state.reviewDoc) renderSourceScreen();
+        loadSheet(state.doc, state.sheet, nodeId).catch(() => {});
+      } catch (e) { $('#insStatus').textContent = e.message; }
+    };
+    $('#approveBtn').onclick = act('approve');
+    $('#rejectBtn').onclick = act('reject');
+  }
   $('#includeBtn').onclick = () => {
-    addToCart({ node_id: nodeId, header: d.header, document: d.document,
-                sheet: d.sheet, range: d.range,
-                concept_id: d.mapping ? d.mapping.concept_id : null, role: d.role });
+    addToCart({ node_id: nodeId, concept_id: d.mapping.concept_id, header: d.header,
+                document: d.document, sheet: d.sheet, range: d.range, role: d.role });
     $('#insStatus').textContent = '✓ 통합 DB 초안에 포함되었습니다.';
     $('#includeBtn').disabled = true;
     $('#includeBtn').textContent = '✓ 이미 포함됨';
   };
   $('#remapBtn').onclick = async () => {
     const concept_id = $('#conceptSel').value;
+    if (!concept_id) { $('#insStatus').textContent = '개념을 먼저 선택하세요.'; return; }
     $('#remapBtn').disabled = true;
     try {
-      await api('/api/remap', { method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ node_id: nodeId, concept_id }) });
+      await post('/api/remap', { node_id: nodeId, concept_id });
       $('#insStatus').textContent = `✓ ${concept_id} 로 매핑을 확정했습니다.`;
-      loadSheet(state.doc, state.sheet, nodeId).catch(() => {});
-    } catch (e) { $('#insStatus').textContent = e.message; }
-    $('#remapBtn').disabled = false;
+      loadSheet(state.doc, state.sheet, nodeId).then(() => openInspector(nodeId)).catch(() => {});
+    } catch (e) { $('#insStatus').textContent = e.message; $('#remapBtn').disabled = false; }
   };
 }
 
-// ---------------------------------------------- S02 KG 노드 검색 → 소스 ----
-async function search(q) {
-  try {
-    const res = await api(`/api/search?concept=${encodeURIComponent(q)}`);
-    const c = res.concept;
-    $('#kgctx').innerHTML = `선택 노드 <span class="pill pnode">${esc(c.canonical_name)}</span>
-      <span class="muted">연결 위치 ${res.sources.length}개 · ${res.documents.length}개 파일 · 값 ${res.total_rows}개</span>`;
-    $('#srcList').innerHTML = res.sources.length ? res.sources.map((s, i) => `
-      <button data-i="${i}"><b>${esc(s.document)}</b><br>
-        <span class="muted">${esc(s.sheet)} · ${esc((s.locator || '').split('!').pop())} · ${s.mapping}${s.status === 'REVIEW_REQUIRED' ? ' ⚠' : ''}</span>
-      </button>`).join('') : '<div class="empty">연결된 소스 없음</div>';
-    $('#srcList').querySelectorAll('button').forEach((el) => el.onclick = () => {
-      $('#srcList').querySelectorAll('.on').forEach((x) => x.classList.remove('on'));
-      el.classList.add('on');
-      const s = res.sources[+el.dataset.i];
-      const loc = s.locator || '';
-      const cut = loc.lastIndexOf('!');
-      loadSheet(s.document_id, cut > 0 ? loc.slice(0, cut) : null, s.node_id)
-        .then(() => openInspector(s.node_id))
-        .catch((e) => $('#vstatus').textContent = e.message);
-    });
-  } catch (e) {
-    $('#kgctx').textContent = e.message;
-    $('#srcList').innerHTML = '<div class="empty">검색 결과 없음</div>';
-  }
-}
-
-// ------------------------------------------- S04 통합 DB Builder + 결과 ----
-function renderCart() {
+// ================================================================ 4. 통합 DB
+let proposal = null;
+function renderCartList() {
   const c = cart();
   const byConcept = {};
   c.forEach((x) => { (byConcept[x.concept_id || '(미매핑)'] ||= []).push(x); });
-  $('#cart').innerHTML = Object.keys(byConcept).length ? Object.entries(byConcept).map(
-    ([cid, items]) => `<div class="concept"><span><b>${esc(cid)}</b>
-      <div class="muted">${items.length} 위치 · ${esc(items[0].role || '')}</div></span>
-      <button class="x" data-c="${esc(cid)}" title="이 개념 묶음 제거">✕</button></div>`).join('')
-    : '<div class="empty">아직 담긴 위치가 없습니다</div>';
+  $('#cart').innerHTML = Object.entries(byConcept).map(([cid, items]) =>
+    `<span class="badge blue" style="margin:2px 3px">${esc(cid)} · ${items.length}
+      <button class="x" data-c="${esc(cid)}" style="border:0;background:none;color:var(--red);cursor:pointer">✕</button></span>`).join('')
+    || '<span class="empty">비어 있음</span>';
   $('#cart').querySelectorAll('.x').forEach((b) => b.onclick = () => {
     saveCart(cart().filter((x) => (x.concept_id || '(미매핑)') !== b.dataset.c));
     refreshProposal();
   });
-  const docs = [...new Set(c.map((x) => x.document))];
-  $('#cartDocs').innerHTML = docs.length ? docs.map((d) => `☑ ${esc(d)}`).join('<br>') : '—';
 }
 
-let proposal = null;
 async function refreshProposal() {
-  renderCart();
+  renderCartList();
   const c = cart();
+  $('#mSrc').textContent = c.length;
+  $('#mDocs').textContent = new Set(c.map((x) => x.document)).size;
   if (!c.length) {
-    $('#schemaRows').innerHTML = '<tr><td colspan="6" class="empty">묶음을 담으면 제안이 생성됩니다</td></tr>';
+    $('#schemaRows').innerHTML = '<tr><td colspan="6" class="empty">원본 데이터 화면에서 \'이 Source 포함\' 또는 KG 탐색의 \'통합 DB 대상에 추가\'로 담으세요</td></tr>';
+    $('#schemaTree').textContent = '결과 스키마가 여기 표시됩니다';
     proposal = null;
     return;
   }
-  proposal = await api('/api/proposal', { method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ node_ids: c.map((x) => x.node_id) }) });
+  proposal = await post('/api/proposal', { node_ids: c.map((x) => x.node_id) });
+  if (proposal.stale_node_ids && proposal.stale_node_ids.length) {
+    const stale = new Set(proposal.stale_node_ids);
+    saveCart(c.filter((x) => !stale.has(x.node_id)));
+    $('#buildStatus').textContent =
+      `⚠ 재적재로 사라진 위치 ${stale.size}건을 묶음에서 제거했습니다.`;
+    renderCartList();
+  }
   $('#schemaRows').innerHTML = proposal.fields.map((f, i) => `
     <tr><td><input value="${esc(f.field_name)}" data-f="${i}"
-        style="border:1px solid var(--line);border-radius:6px;padding:5px;width:150px"></td>
+        style="border:1px solid var(--line);border-radius:6px;padding:4px 6px;width:140px"></td>
       <td>${esc(f.concept_name)}</td>
-      <td><span class="pill ${ROLE_PILL[f.role] || 'pctx'}">${esc(f.role || '')}</span></td>
+      <td><span class="badge ${ROLE_BADGE[f.role] || ''}">${esc(f.role || '')}</span></td>
       <td>${f.sources}</td><td>${esc(f.note)}</td>
-      <td style="color:${f.status === '검토' ? 'var(--orange)' : 'var(--green)'}">${esc(f.status)}</td></tr>`).join('');
+      <td style="color:${f.status === '검토' ? 'var(--amber)' : 'var(--green)'}">${esc(f.status)}</td></tr>`).join('');
   $('#schemaRows').querySelectorAll('input').forEach((inp) =>
     inp.onchange = () => { proposal.fields[+inp.dataset.f].field_name = inp.value.trim(); });
+  const name = $('#dbName').value.trim() || 'result';
+  $('#schemaTree').textContent = [name,
+    ...proposal.fields.map((f, i) =>
+      `${i === proposal.fields.length - 1 ? '└─' : '├─'} ${f.field_name} ${(f.type || 'text').toUpperCase()}${f.target_unit ? ' · ' + f.target_unit : ''}`),
+    '├─ _source_document_id', '├─ _source_sheet', '└─ _source_locator'].join('\n');
 }
 
-$('#clearCart').onclick = () => { saveCart([]); refreshProposal(); };
+$('#clearCart').onclick = () => { saveCart([]); refreshProposal(); $('#result').innerHTML = ''; };
 
 $('#buildDb').onclick = async () => {
-  if (!proposal || !proposal.fields.length) {
-    $('#buildStatus').textContent = '먼저 탐색 화면에서 위치를 담으세요.';
+  if (!proposal || !proposal.fields.filter((f) => f.sources > 0).length) {
+    $('#buildStatus').textContent = '사용 가능한 소스가 없습니다 — 검토 대기 항목은 승인 후 포함됩니다.';
     return;
   }
   const name = ($('#dbName').value.trim() || 'result').replace(/[^A-Za-z0-9_]/g, '_');
   $('#buildDb').disabled = true;
-  $('#st4').classList.remove('on'); $('#st3').classList.add('on');
   $('#buildStatus').textContent = 'BUILDING…';
   try {
+    const fields = proposal.fields.filter((f) => f.sources > 0);
     const body = {
       name,
-      fields: proposal.fields.map((f) => ({
+      fields: fields.map((f) => ({
         name: f.field_name.replace(/[^A-Za-z0-9_]/g, '_') || f.concept_id,
         concept: f.concept_id, unit: f.target_unit, type: f.type })),
-      include_nodes: Object.fromEntries(proposal.fields.map((f) => [
+      include_nodes: Object.fromEntries(fields.map((f) => [
         f.field_name.replace(/[^A-Za-z0-9_]/g, '_') || f.concept_id, f.node_ids])),
     };
-    const r = await api('/api/build', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    $('#buildStatus').textContent = `✓ ${r.status}`;
-    $('#st3').classList.remove('on'); $('#st4').classList.add('on');
+    const r = await post('/api/build', body);
+    state.lastBuild = name;
+    $('#buildStatus').innerHTML = `✓ ${esc(r.status)} — 재실행하면 새 버전이 생성됩니다`;
+    $('#buildDb').textContent = 'DB 다시 생성 (새 버전)';
     const cols = r.preview.length ? Object.keys(r.preview[0]).filter((k) => !k.startsWith('_')) : [];
-    $('#result').style.display = '';
     $('#result').innerHTML = `
-      <h3 style="margin:0 0 4px">결과 — <span style="color:var(--blue)">${esc(r.table)}</span></h3>
-      <div class="muted">${r.row_count} rows · Lineage ${r.lineage.edges}셀 / ${r.lineage.documents}개 문서 ·
-        artifact: <code>${esc(r.artifact)}</code></div>
-      ${r.build_report.warnings.length ? `<div class="warn">⚠ Warnings: ${esc(JSON.stringify(r.build_report.warnings))}</div>` : ''}
-      <h4 style="margin:12px 0 4px">Schema Manifest</h4>
-      <table><thead><tr><th>필드</th><th>KG Concept</th><th>단위</th><th>타입</th></tr></thead><tbody>
-        ${r.schema.map((s) => `<tr><td>${esc(s.field)}</td><td>${esc(s.concept)}</td>
-          <td>${esc(s.unit || '—')}</td><td>${esc(s.type || '—')}</td></tr>`).join('')}</tbody></table>
-      <h4 style="margin:12px 0 4px">Preview (5행)</h4>
-      <div style="overflow-x:auto"><table><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead>
-        <tbody>${r.preview.map((row) => `<tr>${cols.map((c) =>
-          `<td>${esc(row[c] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+      <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+      <div class="kicker">RESULT</div>
+      <div class="sub"><b style="color:var(--blue)">${esc(r.table)}</b> · ${r.row_count} rows ·
+        Lineage ${r.lineage.edges}셀/${r.lineage.documents}문서<br>
+        artifact: <code style="font-size:11px">${esc(r.artifact)}</code></div>
+      ${r.build_report.warnings.length ? `<div class="warn">⚠ ${r.build_report.warnings.map((w) =>
+        esc(w.field ? `${w.field}: ${w.reason}` : `${w.column || ''} ${w.from || ''}→${w.to || ''} ${w.cells || ''}건 미변환`)).join('<br>⚠ ')}</div>` : ''}
+      <table class="table" style="margin-top:8px"><thead><tr><th>필드</th><th>Concept</th><th>단위</th><th>포함</th></tr></thead>
+        <tbody>${r.schema.map((s) => `<tr><td>${esc(s.field)}</td><td>${esc(s.concept)}</td>
+          <td>${esc(s.unit || '—')}</td><td>${s.included === false ? '<span style="color:var(--red)">제외됨</span>' : '✓'}</td></tr>`).join('')}</tbody></table>
+      <div class="kicker" style="margin-top:10px">PREVIEW</div>
+      <div style="overflow-x:auto"><table class="table"><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+        <tbody>${r.preview.map((row) => `<tr>${cols.map((c) => `<td>${esc(row[c] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`;
   } catch (e) {
     $('#buildStatus').textContent = `실패: ${e.message}`;
   }
   $('#buildDb').disabled = false;
 };
 
-// ----------------------------------------------------------------- init ----
+// ================================================================ init
 (async () => {
-  loadFiles().catch(() => {});
   try {
-    state.concepts = await api('/api/concepts');
-    $('#concepts').innerHTML = state.concepts.map((c) =>
-      `<option value="${esc(c.canonical_name)}">${esc(c.concept_id)} · 소스 ${c.sources}</option>`).join('');
-  } catch {}
-  let t = null;
-  $('#q').oninput = (e) => {
-    clearTimeout(t);
-    const v = e.target.value.trim();
-    if (v) t = setTimeout(() => search(v), 250);
+    [state.domain, state.dkgs, conceptsCache] = await Promise.all([
+      api('/api/kg/domain'), api('/api/kg/document'), api('/api/concepts')]);
+  } catch (e) {
+    document.body.insertAdjacentHTML('afterbegin',
+      `<div style="background:#fbe9e9;padding:10px 24px">${esc(e.message)}</div>`);
+    return;
+  }
+  renderDomainGraph();
+  renderNav();
+  loadFiles().catch(() => {});
+  saveCart(cart());
+  $('#navDomain').onclick = () => {
+    $('#navDomain').classList.add('active'); $('#navDoc').classList.remove('active');
+    $('#domainList').style.display = ''; $('#docList').style.display = 'none';
   };
-  saveCart(cart());   // 배지/목록 초기화 (§7.2: 화면 이동 후에도 유지)
+  $('#navDoc').onclick = () => {
+    $('#navDoc').classList.add('active'); $('#navDomain').classList.remove('active');
+    $('#domainList').style.display = 'none'; $('#docList').style.display = '';
+  };
+  $('#showDomainGraph').onclick = () => graphMode(false);
+  $('#showDocGraph').onclick = () => {
+    if (!state.selDkg && state.dkgs.length) state.selDkg = state.dkgs[0].id;
+    renderNav($('#kgSearch').value.trim());
+    graphMode(true);
+    renderDkgDetail();
+  };
+  let t = null;
+  $('#kgSearch').oninput = (e) => {
+    clearTimeout(t);
+    t = setTimeout(() => renderNav(e.target.value.trim()), 200);
+  };
+  $('#dbName').oninput = () => { if (proposal) refreshProposal(); };
 })();

@@ -69,11 +69,40 @@ def _validate_config(store: KgStore, config: dict) -> None:
             errors.append(f"transform[{i}]: 알 수 없는 op {op!r}")
         elif step.get("config") is not None and not isinstance(step["config"], dict):
             errors.append(f"transform[{i}]({op}): config는 매핑이어야 합니다")
+    # include_nodes 키는 필드명과 정확히 일치해야 한다 — 오타가 조용히
+    # '해당 개념 전체 포함'으로 넘어가는 fail-open을 막는다
+    includes = (config.get("sources") or {}).get("include_nodes") or {}
+    for key in includes:
+        if key not in seen:
+            errors.append(f"sources.include_nodes의 키 {key!r}가 필드명과 일치하지 않습니다")
     if errors:
         raise ValueError("프로젝트 정의 오류:\n- " + "\n- ".join(errors))
 
 
 # ------------------------------------------------------------- definition ---
+def delete_project(store: KgStore, integration_id: str) -> None:
+    """실패한 웹 빌드의 보상 삭제 — 버전만 쌓이는 유령 프로젝트를 남기지 않는다.
+    (build_run/lineage가 이미 붙은 프로젝트는 이력 보존을 위해 지우지 않는다.)"""
+    used = store.conn.execute(
+        "SELECT 1 FROM build_run WHERE integration_id=? AND status='SUCCESS' LIMIT 1",
+        (integration_id,)).fetchone()
+    if used:
+        return
+    for sql in (
+        "DELETE FROM lineage_edge WHERE build_id IN "
+        "  (SELECT build_id FROM build_run WHERE integration_id=?)",
+        "DELETE FROM build_run WHERE integration_id=?",
+        "DELETE FROM transformation_edge WHERE integration_id=?",
+        "DELETE FROM transformation_node WHERE integration_id=?",
+        "DELETE FROM source_selection WHERE field_id IN "
+        "  (SELECT field_id FROM integration_field WHERE integration_id=?)",
+        "DELETE FROM integration_field WHERE integration_id=?",
+        "DELETE FROM integration_project WHERE integration_id=?",
+    ):
+        store.conn.execute(sql, (integration_id,))
+    store.commit()
+
+
 def define_project(store: KgStore, config: dict | str | Path) -> str:
     """프로젝트 정의 저장 (idempotent: 같은 이름은 새 버전으로 대체)."""
     if not isinstance(config, dict):
