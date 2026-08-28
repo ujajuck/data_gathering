@@ -80,75 +80,105 @@ async function loadFiles() {
 }
 
 // ================================================================ 2. KG 탐색
-// ---- 전체 Domain KG: 그룹(=Document KG) 격자 배치 + Coverage Hull (§3.2)
+// ---- 전체 Domain KG: 루트 → L1 → 리프로 내려가는 노드-링크 트리 위에
+//      Document KG Coverage Hull을 겹쳐 그린다 (§3.2 — 고정 좌표 유지)
 function layoutDomain() {
   const leafs = state.domain.nodes.filter((n) => n.level !== 'L1');
+  const l1s = Object.fromEntries(
+    state.domain.nodes.filter((n) => n.level === 'L1').map((n) => [n.id, n]));
   const groups = [];
-  for (const g of state.dkgs) {
-    const nodes = leafs.filter((n) => n.root === g.id)
+  const order = [...state.dkgs.map((g) => g.id),
+    ...Object.keys(l1s).filter((id) => !state.dkgs.some((g) => g.id === id))];
+  for (const rootId of order) {
+    const nodes = leafs.filter((n) => n.root === rootId);
+    if (!nodes.length) continue;
+    // 부모(L2) 바로 뒤에 자식(L3)이 오도록 정렬 — 계층 엣지가 이웃 칸으로 떨어진다
+    const l2 = nodes.filter((n) => l1s[n.parent])
       .sort((a, b) => b.sources - a.sources || a.name.localeCompare(b.name));
-    if (nodes.length) groups.push({ dkg: g, nodes });
+    const ordered = [];
+    for (const p of l2) {
+      ordered.push(p);
+      ordered.push(...nodes.filter((n) => n.parent === p.id));
+    }
+    for (const n of nodes) if (!ordered.includes(n)) ordered.push(n);
+    const dkg = dkgOf(rootId) ||
+      { id: rootId, name: (l1s[rootId] ? l1s[rootId].name : rootId) + ' KG',
+        member_document_count: 0 };
+    groups.push({ dkg, l1: l1s[rootId], nodes: ordered });
   }
-  const orphanRoots = [...new Set(leafs.map((n) => n.root))]
-    .filter((r) => r && !groups.some((x) => x.dkg.id === r));
-  for (const r of orphanRoots) {
-    const root = state.domain.nodes.find((n) => n.id === r);
-    groups.push({ dkg: { id: r, name: (root ? root.name : r) + ' KG',
-                         member_document_count: 0 },
-                  nodes: leafs.filter((n) => n.root === r) });
-  }
-  const NW = 108, NH = 30, GX = 10, GY = 12, PAD = 14, LABEL = 30;
-  let x = 12, y = 14, rowH = 0;
-  const MAXW = 1156;
+  const NW = 104, NH = 30, GX = 12, GY = 26, PAD = 16, L1H = 34, LABEL = 26;
+  const ROOTH = 42;
+  let x = 14, y = 96, rowH = 0;
+  const MAXW = 1160;
   for (const g of groups) {
-    const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(g.nodes.length))));
+    const cols = Math.min(4, Math.max(2, Math.ceil(g.nodes.length / 3)));
     const rows = Math.ceil(g.nodes.length / cols);
     g.w = cols * (NW + GX) - GX + PAD * 2;
-    g.h = rows * (NH + GY) - GY + PAD * 2 + LABEL;
-    if (x + g.w > MAXW) { x = 12; y += rowH + 18; rowH = 0; }
+    g.h = PAD + L1H + 18 + rows * (NH + GY) - GY + LABEL + PAD;
+    if (x + g.w > MAXW) { x = 14; y += rowH + 26; rowH = 0; }
     g.x = x; g.y = y;
-    x += g.w + 18; rowH = Math.max(rowH, g.h);
+    x += g.w + 20; rowH = Math.max(rowH, g.h);
+    g.l1x = g.x + g.w / 2;                 // L1 노드 중심
+    g.l1y = g.y + PAD;
     g.nodes.forEach((n, i) => {
       n.x = g.x + PAD + (i % cols) * (NW + GX);
-      n.y = g.y + PAD + LABEL + Math.floor(i / cols) * (NH + GY);
+      n.y = g.y + PAD + L1H + 18 + Math.floor(i / cols) * (NH + GY);
     });
   }
-  return { groups, height: y + rowH + 16, NW, NH };
+  const height = y + rowH + 20;
+  return { groups, height, NW, NH, L1H, ROOTH };
 }
 
 function renderDomainGraph() {
-  const { groups, height, NW, NH } = layoutDomain();
+  const { groups, height, NW, NH, L1H } = layoutDomain();
+  const rootX = 590, rootY = 16, ROOTW = 150, ROOTH = 40;
   const nodeAt = {};
-  const parts = [];
+  const hulls = [], edges = [], boxes = [];
+  for (const g of groups) for (const n of g.nodes) nodeAt[n.id] = n;
+
   for (const g of groups) {
     const color = dkgColor(g.dkg.id);
     const dim = (state.selDkg && state.selDkg !== g.dkg.id) ? ' dim' : '';
-    parts.push(`<rect class="hull${dim}" data-dkg="${esc(g.dkg.id)}" x="${g.x}" y="${g.y}"
-      width="${g.w}" height="${g.h}" rx="16"
-      style="fill:${color}12;stroke:${color}"/>`);
-    parts.push(`<text class="hlabel${dim}" data-dkg="${esc(g.dkg.id)}" x="${g.x + 14}"
-      y="${g.y + 21}" style="fill:${color}">${esc(g.dkg.name)} · ${g.dkg.member_document_count} docs</text>`);
-    for (const n of g.nodes) nodeAt[n.id] = n;
-  }
-  // IS_A(leaf→leaf) 엣지 — 그룹 내부 계층 (예: 심부최대온도 → 심부온도)
-  for (const e of state.domain.edges) {
-    const a = nodeAt[e.s], b = nodeAt[e.t];
-    if (a && b) parts.push(`<line class="gedge" x1="${a.x + NW / 2}" y1="${a.y + NH}"
-      x2="${b.x + NW / 2}" y2="${b.y}"/>`);
-  }
-  for (const g of groups) {
+    // Coverage Hull — 트리 가지(L1+리프)를 감싸는 반투명 영역, 라벨은 하단
+    hulls.push(`<rect class="hull${dim}" data-dkg="${esc(g.dkg.id)}" x="${g.x}" y="${g.y}"
+      width="${g.w}" height="${g.h}" rx="22" style="fill:${color}10;stroke:${color}"/>
+      <text class="hlabel${dim}" data-dkg="${esc(g.dkg.id)}" x="${g.x + 14}"
+        y="${g.y + g.h - 12}" style="fill:${color}">${esc(g.dkg.name)} · ${g.dkg.member_document_count} docs</text>`);
+    // 루트 → L1 엣지
+    edges.push(`<path class="gedge" d="M${rootX + ROOTW / 2} ${rootY + ROOTH}
+      C ${rootX + ROOTW / 2} ${rootY + ROOTH + 26}, ${g.l1x} ${g.l1y - 26}, ${g.l1x} ${g.l1y}"/>`);
+    // L1 → 각 리프 팬아웃 (L3는 자기 부모 L2에 연결)
+    for (const n of g.nodes) {
+      const p = nodeAt[n.parent];
+      const fromX = p ? p.x + NW / 2 : g.l1x;
+      const fromY = p ? p.y + NH : g.l1y + L1H;
+      edges.push(`<line class="gedge" x1="${fromX}" y1="${fromY}"
+        x2="${n.x + NW / 2}" y2="${n.y}"/>`);
+    }
+    // L1 노드
+    const l1sel = state.selDkg === g.dkg.id ? ' sel' : '';
+    boxes.push(`<g><rect class="gnode${l1sel}${dim}" data-dkg="${esc(g.dkg.id)}"
+      x="${g.l1x - 62}" y="${g.l1y}" width="124" height="${L1H}" rx="11"
+      style="stroke:${color};fill:#fff"/>
+      <text class="ntext" x="${g.l1x}" y="${g.l1y + L1H / 2 + 1}"
+        style="fill:${color}">${esc(g.l1 ? g.l1.name : g.dkg.name)}</text></g>`);
+    // 리프 노드
     for (const n of g.nodes) {
       const sel = state.selNode && state.selNode.id === n.id ? ' sel' : '';
-      const dim = (state.selDkg && state.selDkg !== g.dkg.id) ? ' dim' : '';
-      parts.push(`<g><rect class="gnode${sel}${dim}" data-node="${esc(n.id)}" x="${n.x}" y="${n.y}"
+      boxes.push(`<g><rect class="gnode${sel}${dim}" data-node="${esc(n.id)}" x="${n.x}" y="${n.y}"
         width="${NW}" height="${NH}" rx="9"/>
         <text class="ntext" x="${n.x + NW / 2}" y="${n.y + 12}">${esc(n.name)}</text>
         <text class="ncnt" x="${n.x + NW / 2}" y="${n.y + 24}">${n.sources ? n.sources + ' src' : '미연결'}</text></g>`);
     }
   }
+  const root = `<g><rect class="gnode" x="${rootX}" y="${rootY}" width="${ROOTW}" height="${ROOTH}"
+      rx="13" style="stroke:#8d99ad;stroke-width:2"/>
+    <text class="ntext" x="${rootX + ROOTW / 2}" y="${rootY + ROOTH / 2 - 5}">${esc(state.domain.domain || 'Domain')}</text>
+    <text class="ncnt" x="${rootX + ROOTW / 2}" y="${rootY + ROOTH / 2 + 11}">Fixed Domain KG</text></g>`;
   $('#domainGraph').innerHTML =
-    `<svg class="graphSvg" viewBox="0 0 1180 ${height}" style="height:${Math.min(640, height)}px"
-      aria-label="전체 Domain KG와 Document KG 커버리지">${parts.join('')}</svg>`;
+    `<svg class="graphSvg" viewBox="0 0 1180 ${height}" style="height:${Math.min(660, height)}px"
+      aria-label="전체 Domain KG 트리와 Document KG 커버리지">
+      ${hulls.join('')}${edges.join('')}${root}${boxes.join('')}</svg>`;
   $('#domainGraph').querySelectorAll('[data-node]').forEach((el) =>
     el.onclick = () => selectNode(el.dataset.node));
   $('#domainGraph').querySelectorAll('[data-dkg]').forEach((el) =>

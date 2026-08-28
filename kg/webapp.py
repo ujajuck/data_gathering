@@ -310,7 +310,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 "parent": parents.get(r["concept_id"]),
                 "sources": src_counts.get(r["concept_id"], 0),
             } for r in store.concepts()]
-        return {"nodes": nodes,
+        return {"nodes": nodes, "domain": root.name,
                 "edges": [{"s": s, "t": t} for s, t in parents.items()]}
 
     @app.get("/api/kg/document")
