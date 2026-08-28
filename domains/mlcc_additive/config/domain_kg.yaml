@@ -1,0 +1,1594 @@
+version: '1'
+domain: mlcc_additive
+description: MLCC 첨가제 체크시트 도메인의 고정 지식 그래프 (Fixed Domain KG v1.0) — checksheet_tree.txt
+  기반
+concepts:
+- concept_id: domain_experiment
+  canonical_name: 실험기본정보
+  canonical_name_en: Experiment Info
+  description: 실험 기본 정보
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: domain_summary
+  canonical_name: 실험요약
+  canonical_name_en: Experiment Summary
+  description: 실험 요약 정보
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: domain_weighing
+  canonical_name: 칭량공정
+  canonical_name_en: Weighing Process
+  description: 칭량 공정 정보
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: domain_apex
+  canonical_name: APEX공정
+  canonical_name_en: APEX Process
+  description: APEX 해쇄/분산 공정
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: domain_apex_filter
+  canonical_name: APEX해쇄필터
+  canonical_name_en: APEX Crushing Filter
+  description: APEX 해쇄필터 공정
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: domain_final_filter
+  canonical_name: 최종필터공정
+  canonical_name_en: Final Filter Process
+  description: 최종필터 공정
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: domain_batch_inspection
+  canonical_name: 배치검사
+  canonical_name_en: Batch Inspection
+  description: 배치 검사 (물성 기준)
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: domain_stirring
+  canonical_name: 교반Table
+  canonical_name_en: Stirring Table
+  description: 교반 Table 조건
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: domain_calculation
+  canonical_name: 계산식
+  canonical_name_en: Calculation
+  description: 첨가제 배합 계산식
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: domain_input
+  canonical_name: 투입량
+  canonical_name_en: Input Amount
+  description: Checksheet 투입량
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: title
+  canonical_name: 제목
+  canonical_name_en: Title
+  description: 실험 제목
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 제목
+  - 타이틀
+- concept_id: material_code
+  canonical_name: 자료코드
+  canonical_name_en: Material Code
+  description: 자료 코드 (MLCUA-*)
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 자료코드
+  - 자료 코드
+  - Material Code
+  - MLCUA
+- concept_id: input_date
+  canonical_name: 투입일
+  canonical_name_en: Input Date
+  description: 투입 일자
+  concept_type: event_time
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: time
+  status: ACTIVE
+  aliases:
+  - 투입일
+  - 투입일자
+  - Input Date
+- concept_id: author
+  canonical_name: 작성자
+  canonical_name_en: Author
+  description: 작성자
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 작성자
+  - Author
+  - 담당자
+- concept_id: lot_no
+  canonical_name: LOT
+  canonical_name_en: LOT Number
+  description: LOT 번호
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - LOT
+  - LOT번호
+  - Lot No
+  - Lot No.
+- concept_id: powder
+  canonical_name: Powder
+  canonical_name_en: Powder
+  description: 파우더 정보
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Powder
+  - 파우더
+  - 분말
+- concept_id: binder_composition
+  canonical_name: Binder조성
+  canonical_name_en: Binder Composition
+  description: 바인더 조성 코드
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Binder조성
+  - 바인더조성
+  - Binder 조성
+- concept_id: additive
+  canonical_name: Additive
+  canonical_name_en: Additive
+  description: 첨가제 코드
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Additive
+  - 첨가제
+  - 첨가제코드
+- concept_id: sr_ratio
+  canonical_name: S/R비
+  canonical_name_en: S/R Ratio
+  description: Solid/Resin 비율
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - S/R비
+  - S/R
+  - SR비
+  - Solid/Resin
+- concept_id: binder
+  canonical_name: Binder
+  canonical_name_en: Binder
+  description: 바인더 종류
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Binder
+  - 바인더
+- concept_id: dispersant
+  canonical_name: 분산제
+  canonical_name_en: Dispersant
+  description: 분산제 종류
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 분산제
+  - Dispersant
+  - BYK
+- concept_id: solid_content
+  canonical_name: 고형분
+  canonical_name_en: Solid Content
+  description: 고형분 비율
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: '%'
+  unit_dimension: percentage
+  status: ACTIVE
+  aliases:
+  - 고형분
+  - Solid Content
+  - 고형분율
+- concept_id: solvent
+  canonical_name: 솔벤트
+  canonical_name_en: Solvent
+  description: 용매 종류
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 솔벤트
+  - Solvent
+  - 용매
+  - Ethanol
+  - 에탄올
+- concept_id: input_product
+  canonical_name: 투입제품
+  canonical_name_en: Input Product
+  description: 투입 제품명
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 투입제품
+  - 투입 제품
+  - Input Product
+- concept_id: weight_target
+  canonical_name: 무게Target
+  canonical_name_en: Weight Target
+  description: 목표 무게
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - 무게Target
+  - 무게 Target
+  - 목표무게
+  - Weight Target
+- concept_id: tolerance
+  canonical_name: 공차
+  canonical_name_en: Tolerance
+  description: 허용 공차
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 공차
+  - Tolerance
+  - 허용범위
+- concept_id: combination_detail
+  canonical_name: 조합내역
+  canonical_name_en: Combination Detail
+  description: 조합 내역
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 조합내역
+  - 조합 내역
+- concept_id: input_lot_no
+  canonical_name: 투입LOT
+  canonical_name_en: Input LOT
+  description: 투입 LOT 번호
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - LOT_No
+  - 투입LOT
+  - Input LOT
+- concept_id: check_item
+  canonical_name: 체크항목
+  canonical_name_en: Check Item
+  description: 점검/체크 항목명
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 체크항목
+  - 체크 항목
+  - Check Item
+  - 점검항목
+- concept_id: target_value
+  canonical_name: Target
+  canonical_name_en: Target Value
+  description: 목표값
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Target
+  - 목표값
+  - Target Value
+- concept_id: check_tolerance
+  canonical_name: 체크공차
+  canonical_name_en: Check Tolerance
+  description: 체크 항목 공차
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 체크공차
+- concept_id: material_name
+  canonical_name: 자재명
+  canonical_name_en: Material Name
+  description: 자재 명
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 자재 명
+  - 자재명
+  - Material Name
+- concept_id: input_amount
+  canonical_name: 투입량
+  canonical_name_en: Input Amount
+  description: 투입량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - 투입량
+  - Input Amount
+- concept_id: tank_type
+  canonical_name: TankType
+  canonical_name_en: Tank Type
+  description: 탱크 타입
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Tank Type
+  - Tank_TYPE
+  - 탱크타입
+- concept_id: slurry_temperature
+  canonical_name: 슬러리온도
+  canonical_name_en: Slurry Temperature
+  description: 슬러리 온도
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: ℃
+  unit_dimension: temperature
+  status: ACTIVE
+  aliases:
+  - 슬러리온도
+  - Slurry 온도
+  - Slurry Temperature
+- concept_id: cooling_water_temp
+  canonical_name: 냉각수온도
+  canonical_name_en: Cooling Water Temp
+  description: 냉각수 온도
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: ℃
+  unit_dimension: temperature
+  status: ACTIVE
+  aliases:
+  - 냉각수온도
+  - 냉각수 온도
+- concept_id: rotor_rpm
+  canonical_name: RotorRPM
+  canonical_name_en: Rotor RPM
+  description: 로터 회전수
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: rpm
+  unit_dimension: frequency
+  status: ACTIVE
+  aliases:
+  - Rotor RPM
+  - RotorRPM
+  - 로터RPM
+- concept_id: flow_rate
+  canonical_name: 유량
+  canonical_name_en: Flow Rate
+  description: 유량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 유량
+  - Flow Rate
+- concept_id: cylinder_pressure
+  canonical_name: 실린더압력
+  canonical_name_en: Cylinder Pressure
+  description: 실린더 압력
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: psi
+  unit_dimension: pressure
+  status: ACTIVE
+  aliases:
+  - 실린더압력
+  - Cylinder Pressure
+- concept_id: oil_temperature
+  canonical_name: 오일온도
+  canonical_name_en: Oil Temperature
+  description: 오일 온도
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: ℃
+  unit_dimension: temperature
+  status: ACTIVE
+  aliases:
+  - 오일온도
+  - Oil Temperature
+- concept_id: pass_time
+  canonical_name: 1pass소요시간
+  canonical_name_en: 1-Pass Time
+  description: 1패스 소요 시간
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: time
+  status: ACTIVE
+  aliases:
+  - 1pass 소요시간
+  - 1pass소요시간
+- concept_id: inspection_category
+  canonical_name: 구분
+  canonical_name_en: Inspection Category
+  description: 검사 구분
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 구분
+  - 검사구분
+- concept_id: inspection_target
+  canonical_name: 검사Target
+  canonical_name_en: Inspection Target
+  description: 검사 목표값
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 검사 Target
+- concept_id: inspection_tolerance
+  canonical_name: 검사공차
+  canonical_name_en: Inspection Tolerance
+  description: 검사 공차
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 검사공차
+- concept_id: inspection_unit
+  canonical_name: 검사결과단위
+  canonical_name_en: Inspection Unit
+  description: 검사 결과 단위
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 검사결과_단위
+  - 검사단위
+- concept_id: viscosity
+  canonical_name: 점도
+  canonical_name_en: Viscosity
+  description: 점도 (cPs)
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: cPs
+  unit_dimension: viscosity
+  status: ACTIVE
+  aliases:
+  - 점도
+  - Viscosity
+  - cPs
+- concept_id: specific_gravity
+  canonical_name: 비중
+  canonical_name_en: Specific Gravity
+  description: 비중
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g/cc
+  unit_dimension: density
+  status: ACTIVE
+  aliases:
+  - 비중
+  - Specific Gravity
+- concept_id: solid_content_pct
+  canonical_name: 고형분율
+  canonical_name_en: Solid Content %
+  description: 고형분 (%)
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: '%'
+  unit_dimension: percentage
+  status: ACTIVE
+  aliases:
+  - 고형분
+  - 고형분율
+- concept_id: crushing_bet
+  canonical_name: 해쇄BET
+  canonical_name_en: Crushing BET
+  description: 해쇄 BET 비표면적
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: ㎡/g
+  unit_dimension: specific_surface
+  status: ACTIVE
+  aliases:
+  - 해쇄BET
+  - 해쇄 BET
+  - Crushing BET
+- concept_id: final_bet
+  canonical_name: 최종BET
+  canonical_name_en: Final BET
+  description: 최종 BET 비표면적
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: ㎡/g
+  unit_dimension: specific_surface
+  status: ACTIVE
+  aliases:
+  - 최종BET
+  - 최종 BET
+  - Final BET
+- concept_id: sub_process
+  canonical_name: 세부공정
+  canonical_name_en: Sub Process
+  description: 세부 공정명
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 세부공정
+  - 세부 공정
+  - Sub Process
+- concept_id: stirring_rpm
+  canonical_name: 교반RPM
+  canonical_name_en: Stirring RPM
+  description: 교반 회전수
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: rpm
+  unit_dimension: frequency
+  status: ACTIVE
+  aliases:
+  - 교반 RPM
+  - RPM
+  - 교반RPM
+- concept_id: calc_item
+  canonical_name: 계산항목
+  canonical_name_en: Calc Item
+  description: 계산식 항목명
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 항목
+  - 계산항목
+- concept_id: solute_powder
+  canonical_name: 용질파우더
+  canonical_name_en: Solute Powder
+  description: 용질 중 파우더량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - 파우더
+  - 용질 파우더
+- concept_id: solute_dispersant
+  canonical_name: 용질분산제
+  canonical_name_en: Solute Dispersant
+  description: 용질 중 분산제량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - 분산제
+  - 용질 분산제
+- concept_id: solute_binder
+  canonical_name: 용질바인더
+  canonical_name_en: Solute Binder
+  description: 용질 중 바인더량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - 바인더
+  - 용질 바인더
+- concept_id: solute_plasticizer
+  canonical_name: 용질가소제
+  canonical_name_en: Solute Plasticizer
+  description: 용질 중 가소제량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - 가소제
+  - 용질 가소제
+- concept_id: solvent_etoh
+  canonical_name: 용매Etoh
+  canonical_name_en: Solvent EtOH
+  description: 용매 중 에탄올량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - Etoh
+  - 에탄올
+  - 용매 Etoh
+- concept_id: solvent_toluene
+  canonical_name: 용매Toluene
+  canonical_name_en: Solvent Toluene
+  description: 용매 중 톨루엔량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - Toluene
+  - 톨루엔
+  - 용매 Toluene
+- concept_id: sol_amount
+  canonical_name: Sol양
+  canonical_name_en: Sol Amount
+  description: Sol 총량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - Sol 양
+  - Sol양
+  - Sol Amount
+- concept_id: input_weight
+  canonical_name: 투입무게
+  canonical_name_en: Input Weight
+  description: 투입 무게 (g)
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - 투입 무게
+  - 투입무게
+  - Input Weight
+- concept_id: memo
+  canonical_name: 메모
+  canonical_name_en: Memo
+  description: 작업 메모/조건
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 메모
+  - Memo
+  - 작업조건
+- concept_id: domain_raw_material
+  canonical_name: 원자재
+  canonical_name_en: Raw Material
+  description: 원자재 (화합물, 원소)
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: dy2o3
+  canonical_name: Dy2O3
+  canonical_name_en: Dysprosium Oxide
+  description: 산화 디스프로슘
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Dy2O3
+  - 디스프로슘산화물
+- concept_id: baco3
+  canonical_name: BaCO3
+  canonical_name_en: Barium Carbonate
+  description: 탄산 바륨
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - BaCO3
+  - 탄산바륨
+- concept_id: caco3
+  canonical_name: CaCO3
+  canonical_name_en: Calcium Carbonate
+  description: 탄산 칼슘
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - CaCO3
+  - 탄산칼슘
+- concept_id: mn3o4
+  canonical_name: Mn3O4
+  canonical_name_en: Manganese Oxide
+  description: 산화 망간
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Mn3O4
+  - 망간산화물
+- concept_id: al2o3
+  canonical_name: Al2O3
+  canonical_name_en: Aluminum Oxide
+  description: 산화 알루미늄
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Al2O3
+  - 알루미나
+- concept_id: li2co3
+  canonical_name: Li2CO3
+  canonical_name_en: Lithium Carbonate
+  description: 탄산 리튬
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Li2CO3
+  - 탄산리튬
+- concept_id: cuo
+  canonical_name: CuO
+  canonical_name_en: Copper Oxide
+  description: 산화 구리
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - CuO
+  - 구리산화물
+- concept_id: sm2o3
+  canonical_name: Sm2O3
+  canonical_name_en: Samarium Oxide
+  description: 산화 사마륨
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Sm2O3
+- concept_id: tb4o7
+  canonical_name: Tb4O7
+  canonical_name_en: Terbium Oxide
+  description: 산화 테르븀
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Tb4O7
+- concept_id: cr2o3
+  canonical_name: Cr2O3
+  canonical_name_en: Chromium Oxide
+  description: 산화 크롬
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Cr2O3
+- concept_id: v2o5
+  canonical_name: V2O5
+  canonical_name_en: Vanadium Oxide
+  description: 산화 바나듐
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - V2O5
+- concept_id: sio2
+  canonical_name: SiO2
+  canonical_name_en: Silicon Dioxide
+  description: 이산화 규소
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - SiO2
+  - 실리카
+- concept_id: batio3
+  canonical_name: BaTiO3
+  canonical_name_en: Barium Titanate
+  description: 티탄산 바륨
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - BaTiO3
+  - BTO
+- concept_id: mn
+  canonical_name: Mn
+  canonical_name_en: Manganese
+  description: 망간 (원소)
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Mn
+  - 망간
+- concept_id: ba
+  canonical_name: Ba
+  canonical_name_en: Barium
+  description: 바륨 (원소)
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Ba
+  - 바륨
+- concept_id: dy
+  canonical_name: Dy
+  canonical_name_en: Dysprosium
+  description: 디스프로슘 (원소)
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Dy
+  - 디스프로슘
+- concept_id: al
+  canonical_name: Al
+  canonical_name_en: Aluminum
+  description: 알루미늄 (원소)
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Al
+  - 알루미늄
+- concept_id: tb
+  canonical_name: Tb
+  canonical_name_en: Terbium
+  description: 테르븀 (원소)
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Tb
+  - 테르븀
+- concept_id: ca
+  canonical_name: Ca
+  canonical_name_en: Calcium
+  description: 칼슘 (원소)
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Ca
+  - 칼슘
+- concept_id: mol_ratio
+  canonical_name: mol
+  canonical_name_en: Mole Ratio
+  description: 몰비
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: mol
+  unit_dimension: amount
+  status: ACTIVE
+  aliases:
+  - mol
+  - 몰
+  - 몰비
+  - mol비
+  - 함량(mol)
+- concept_id: wt_conversion
+  canonical_name: wt환산량
+  canonical_name_en: Weight Conversion
+  description: 중량 환산량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - wt. 환산량
+  - wt 환산량
+  - wt환산량
+  - Weight 환산
+- concept_id: batch_id
+  canonical_name: batch
+  canonical_name_en: Batch ID
+  description: 배치 번호
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - batch
+  - Batch
+  - 배치
+  - 차수
+  - LOT
+  - 1회/LOT
+- concept_id: total
+  canonical_name: Total
+  canonical_name_en: Total
+  description: 총합
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Total
+  - 총합
+  - 합계
+- concept_id: mw
+  canonical_name: Mw
+  canonical_name_en: Molecular Weight
+  description: 분자량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g/mol
+  unit_dimension: molar_mass
+  status: ACTIVE
+  aliases:
+  - Mw.
+  - Mw
+  - 분자량
+  - Molecular Weight
+- concept_id: add_amount
+  canonical_name: 추가투입량
+  canonical_name_en: Additional Input
+  description: 추가 투입량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - 추가투입량
+  - 추가 투입량
+- concept_id: base_composition
+  canonical_name: Base조성
+  canonical_name_en: Base Composition
+  description: 베이스 조성
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Dy-Mn-V Base
+  - Base
+  - Base조성
+  - 베이스
+- concept_id: bh3
+  canonical_name: BH3
+  canonical_name_en: BH3 Binder
+  description: BH-3 바인더
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - BH3
+  - BH-3
+  - 바인더 BH-3
+  - 1차 바인더
+  - 2차 바인더
+- concept_id: byk103
+  canonical_name: BYK103
+  canonical_name_en: BYK103 Dispersant
+  description: BYK-103 분산제
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - BYK103
+  - BYK-103
+  - BYK
+- concept_id: bl1
+  canonical_name: BL-1
+  canonical_name_en: BL-1 Plasticizer
+  description: BL-1 가소제
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - BL-1
+  - BL1
+- concept_id: na272rf006
+  canonical_name: NA272RF006
+  canonical_name_en: NA272RF006 Powder
+  description: NA272RF006 파우더
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - NA272RF006
+- concept_id: weight_g
+  canonical_name: Weight_g
+  canonical_name_en: Weight (g)
+  description: 무게 (g)
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - Weight [g]
+  - 무게
+  - 칭량
+  - g
+- concept_id: add_code
+  canonical_name: Add
+  canonical_name_en: Additive Code
+  description: 첨가제 코드
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Add.
+  - Add
+  - 첨가제코드
+- concept_id: target_result
+  canonical_name: Target결과
+  canonical_name_en: Target Result
+  description: 목표 대비 결과
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Target 결과
+  - Target 결과값
+- concept_id: cover_powder
+  canonical_name: Cover파우더
+  canonical_name_en: Cover Powder
+  description: 커버 파우더
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 커버파우더
+  - Cover
+  - Cover 파우더
+- concept_id: active_powder
+  canonical_name: Active파우더
+  canonical_name_en: Active Powder
+  description: 액티브 파우더
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 액티브파우더
+  - Active
+  - Active 파우더
+- concept_id: etoh_additional
+  canonical_name: Etoh추가
+  canonical_name_en: EtOH Additional
+  description: 에탄올 추가량
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: mass
+  status: ACTIVE
+  aliases:
+  - Etoh 추가
+  - Etoh추가
+  - 에탄올 추가
+- concept_id: toluene_alias
+  canonical_name: Toluene
+  canonical_name_en: Toluene
+  description: 톨루엔
+  concept_type: identifier
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Toluene
+  - Toulene
+  - 톨루엔
+- concept_id: filter_pass
+  canonical_name: 필터pass
+  canonical_name_en: Filter Pass
+  description: 필터 통과수
+  concept_type: measurement
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - pass
+  - 필터 pass
+  - 20pass
+  - 30pass
+relations:
+- - domain_experiment
+  - domain_summary
+  - AFFECTS
+- - domain_summary
+  - domain_weighing
+  - PART_OF
+- - domain_weighing
+  - domain_apex
+  - PART_OF
+- - domain_apex
+  - domain_apex_filter
+  - PART_OF
+- - domain_apex_filter
+  - domain_final_filter
+  - PART_OF
+- - domain_final_filter
+  - domain_batch_inspection
+  - PART_OF
+- - domain_batch_inspection
+  - domain_stirring
+  - RELATED_TO
+- - domain_calculation
+  - domain_input
+  - AFFECTS
+- - title
+  - domain_experiment
+  - IS_A
+- - material_code
+  - domain_experiment
+  - IS_A
+- - input_date
+  - domain_experiment
+  - IS_A
+- - author
+  - domain_experiment
+  - IS_A
+- - lot_no
+  - domain_summary
+  - IS_A
+- - powder
+  - domain_summary
+  - IS_A
+- - binder_composition
+  - domain_summary
+  - IS_A
+- - additive
+  - domain_summary
+  - IS_A
+- - sr_ratio
+  - domain_summary
+  - IS_A
+- - binder
+  - domain_summary
+  - IS_A
+- - dispersant
+  - domain_summary
+  - IS_A
+- - solid_content
+  - domain_summary
+  - IS_A
+- - solvent
+  - domain_summary
+  - IS_A
+- - input_product
+  - domain_weighing
+  - IS_A
+- - weight_target
+  - domain_weighing
+  - IS_A
+- - tolerance
+  - domain_weighing
+  - IS_A
+- - material_name
+  - domain_apex
+  - IS_A
+- - input_amount
+  - domain_apex
+  - IS_A
+- - slurry_temperature
+  - domain_apex
+  - IS_A
+- - rotor_rpm
+  - domain_apex
+  - IS_A
+- - flow_rate
+  - domain_apex
+  - IS_A
+- - cylinder_pressure
+  - domain_apex_filter
+  - IS_A
+- - pass_time
+  - domain_apex_filter
+  - IS_A
+- - oil_temperature
+  - domain_apex_filter
+  - IS_A
+- - viscosity
+  - domain_batch_inspection
+  - IS_A
+- - specific_gravity
+  - domain_batch_inspection
+  - IS_A
+- - solid_content_pct
+  - domain_batch_inspection
+  - IS_A
+- - crushing_bet
+  - domain_batch_inspection
+  - IS_A
+- - final_bet
+  - domain_batch_inspection
+  - IS_A
+- - sub_process
+  - domain_stirring
+  - IS_A
+- - stirring_rpm
+  - domain_stirring
+  - IS_A
+- - calc_item
+  - domain_calculation
+  - IS_A
+- - input_weight
+  - domain_input
+  - IS_A
+- - additive
+  - viscosity
+  - AFFECTS
+- - additive
+  - specific_gravity
+  - AFFECTS
+- - additive
+  - solid_content_pct
+  - AFFECTS
+- - additive
+  - crushing_bet
+  - AFFECTS
+- - additive
+  - final_bet
+  - AFFECTS
+- - binder
+  - viscosity
+  - AFFECTS
+- - dispersant
+  - viscosity
+  - AFFECTS
+- - solid_content
+  - viscosity
+  - AFFECTS
+- - rotor_rpm
+  - crushing_bet
+  - AFFECTS
+- - slurry_temperature
+  - viscosity
+  - AFFECTS
+- - dy2o3
+  - domain_raw_material
+  - IS_A
+- - baco3
+  - domain_raw_material
+  - IS_A
+- - caco3
+  - domain_raw_material
+  - IS_A
+- - mn3o4
+  - domain_raw_material
+  - IS_A
+- - al2o3
+  - domain_raw_material
+  - IS_A
+- - li2co3
+  - domain_raw_material
+  - IS_A
+- - cuo
+  - domain_raw_material
+  - IS_A
+- - sm2o3
+  - domain_raw_material
+  - IS_A
+- - tb4o7
+  - domain_raw_material
+  - IS_A
+- - cr2o3
+  - domain_raw_material
+  - IS_A
+- - v2o5
+  - domain_raw_material
+  - IS_A
+- - sio2
+  - domain_raw_material
+  - IS_A
+- - batio3
+  - domain_raw_material
+  - IS_A
+- - mol_ratio
+  - domain_weighing
+  - IS_A
+- - wt_conversion
+  - domain_weighing
+  - IS_A
+- - batch_id
+  - domain_summary
+  - IS_A
+- - total
+  - domain_weighing
+  - IS_A
+- - mw
+  - domain_calculation
+  - IS_A
+- - add_amount
+  - domain_weighing
+  - IS_A
+- - base_composition
+  - domain_summary
+  - IS_A
+- - bh3
+  - domain_apex
+  - IS_A
+- - byk103
+  - domain_summary
+  - IS_A
+- - bl1
+  - domain_summary
+  - IS_A
+- - weight_g
+  - domain_weighing
+  - IS_A
+- - add_code
+  - domain_summary
+  - IS_A
+- - dy2o3
+  - viscosity
+  - AFFECTS
+- - baco3
+  - specific_gravity
+  - AFFECTS
+- - mn3o4
+  - crushing_bet
+  - AFFECTS
+- - batio3
+  - viscosity
+  - AFFECTS
