@@ -120,6 +120,42 @@ class RelationReq(BaseModel):
     type: str
 
 
+class ParsingTemplateReq(BaseModel):
+    template_id: str
+    name: str
+    target_document_kg: str | None = None
+    lifecycle: str = "DRAFT"
+
+
+class ParsingVersionReq(BaseModel):
+    spec: dict
+    created_by: str | None = None
+
+
+class ParsingAssignReq(BaseModel):
+    document_version: str
+    template_id: str
+    template_version: int
+
+
+class ParsingOverrideReq(BaseModel):
+    document_version: str
+    template_mapping_id: str
+    override_source: dict
+    reason: str | None = None
+    created_by: str | None = None
+
+
+class ParsingOverridePatchReq(BaseModel):
+    override_source: dict | None = None
+    reason: str | None = None
+    status: str | None = None
+
+
+class ParsingParseReq(BaseModel):
+    document_version: str
+
+
 _CID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 _DOCID_RE = re.compile(r"^[0-9a-f]{16}$")
 _RCP_RE = re.compile(r"^RCP-[0-9a-f]{12}$")
@@ -466,6 +502,203 @@ def create_app(ws_root: str | Path) -> FastAPI:
                    WHERE c.status='ACTIVE'
                    GROUP BY c.concept_id ORDER BY sources DESC, c.concept_id""").fetchall()
         return [dict(r) for r in rows]
+
+    # ----------------------------------------------- Parsing Templates ----
+    @app.get("/api/parsing/templates")
+    def parsing_templates():
+        from kg.parsing import template_detail
+        with lock:
+            ids = [r[0] for r in store.conn.execute(
+                "SELECT template_id FROM parsing_template ORDER BY name")]
+            return [template_detail(store, template_id) for template_id in ids]
+
+    @app.post("/api/parsing/templates", status_code=201)
+    def parsing_template_create(req: ParsingTemplateReq):
+        from kg.parsing import ParsingError, create_template
+        if not _CID_RE.fullmatch(req.template_id):
+            raise HTTPException(422, "invalid template_id")
+        try:
+            with wlock():
+                result = create_template(store, req.template_id, req.name,
+                                         req.target_document_kg, req.lifecycle)
+                store.commit()
+            return result
+        except ParsingError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except Exception as exc:
+            if "UNIQUE constraint" in str(exc):
+                raise HTTPException(409, "template already exists") from exc
+            raise
+
+    @app.get("/api/parsing/templates/{template_id}")
+    def parsing_template_get(template_id: str):
+        from kg.parsing import ParsingError, template_detail
+        try:
+            with lock:
+                return template_detail(store, template_id)
+        except ParsingError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/api/parsing/templates/{template_id}/versions", status_code=201)
+    def parsing_version_create(template_id: str, req: ParsingVersionReq):
+        from kg.parsing import ParsingError, add_version
+        try:
+            with wlock():
+                result = add_version(store, template_id, req.spec, req.created_by)
+                store.commit()
+            return result
+        except ParsingError as exc:
+            code = 404 if str(exc) == "unknown template" else 422
+            raise HTTPException(code, str(exc)) from exc
+
+    @app.get("/api/parsing/templates/{template_id}/versions/{version}")
+    def parsing_version_get(template_id: str, version: int):
+        from kg.parsing import ParsingError, version_detail
+        try:
+            with lock:
+                return version_detail(store, template_id, version)
+        except ParsingError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/parsing/templates/{template_id}/versions/{version}/documents")
+    def parsing_version_documents(template_id: str, version: int):
+        with lock:
+            rows = store.conn.execute(
+                """SELECT a.*,d.filename FROM document_template_assignment a
+                     JOIN document d ON d.document_id=a.document_id
+                    WHERE a.template_id=? AND a.template_version=? ORDER BY d.filename""",
+                (template_id, version)).fetchall()
+        return [dict(r) for r in rows]
+
+    @app.post("/api/parsing/documents/{document_id}/assign")
+    def parsing_assign(document_id: str, req: ParsingAssignReq):
+        from kg.parsing import ParsingError, assign
+        try:
+            with wlock():
+                result = assign(store, document_id, req.document_version,
+                                req.template_id, req.template_version)
+                store.commit()
+            return result
+        except ParsingError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/parsing/documents/{document_id}/overrides")
+    def parsing_overrides(document_id: str, document_version: str | None = None):
+        query = "SELECT * FROM document_override WHERE document_id=?"
+        params: list = [document_id]
+        if document_version:
+            query += " AND document_version=?"
+            params.append(document_version)
+        with lock:
+            rows = store.conn.execute(query + " ORDER BY created_at", params).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["override_source"] = json.loads(item.pop("override_source_json"))
+            result.append(item)
+        return result
+
+    @app.post("/api/parsing/documents/{document_id}/overrides", status_code=201)
+    def parsing_override_create(document_id: str, req: ParsingOverrideReq):
+        from kg.parsing import ParsingError, save_override
+        try:
+            with wlock():
+                result = save_override(store, document_id, req.document_version,
+                                       req.template_mapping_id, req.override_source,
+                                       req.reason, req.created_by)
+                store.commit()
+            return result
+        except ParsingError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.patch("/api/parsing/documents/{document_id}/overrides/{override_id}")
+    def parsing_override_patch(document_id: str, override_id: str,
+                               req: ParsingOverridePatchReq):
+        from kg.parsing import ParsingError, override_detail
+        with wlock():
+            old = store.conn.execute(
+                "SELECT * FROM document_override WHERE override_id=? AND document_id=?",
+                (override_id, document_id)).fetchone()
+            if old is None:
+                raise HTTPException(404, "unknown override")
+            if req.status is not None and req.status not in {"APPROVED", "PENDING", "REJECTED"}:
+                raise HTTPException(422, "invalid override status")
+            source = req.override_source or json.loads(old["override_source_json"])
+            if not source.get("range"):
+                raise HTTPException(422, "override_source.range is required")
+            store.conn.execute(
+                """UPDATE document_override SET override_source_json=?,reason=?,status=?,updated_at=?
+                     WHERE override_id=?""",
+                (json.dumps(source, ensure_ascii=False),
+                 req.reason if req.reason is not None else old["reason"],
+                 req.status or old["status"], now_iso(), override_id))
+            store.commit()
+            try:
+                return override_detail(store, override_id)
+            except ParsingError as exc:  # defensive: row existed in same transaction
+                raise HTTPException(404, str(exc)) from exc
+
+    @app.delete("/api/parsing/documents/{document_id}/overrides/{override_id}")
+    def parsing_override_delete(document_id: str, override_id: str):
+        with wlock():
+            cur = store.conn.execute(
+                "DELETE FROM document_override WHERE override_id=? AND document_id=?",
+                (override_id, document_id))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "unknown override")
+            store.commit()
+        return {"ok": True}
+
+    @app.get("/api/parsing/documents/{document_id}/effective-mappings")
+    def parsing_effective(document_id: str, document_version: str):
+        from kg.parsing import ParsingError, effective_mappings
+        row = store.conn.execute("SELECT document_id FROM document_version WHERE version_id=?",
+                                 (document_version,)).fetchone()
+        if row is None or row["document_id"] != document_id:
+            raise HTTPException(404, "unknown document version")
+        try:
+            with lock:
+                return effective_mappings(store, document_version)
+        except ParsingError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/parsing/documents/{document_id}/parse")
+    def parsing_parse(document_id: str, req: ParsingParseReq):
+        from kg.parsing import ParsingError, run_parse
+        path = _doc_path(document_id)
+        try:
+            with wlock():
+                result = run_parse(store, document_id, req.document_version, path)
+                store.commit()
+            return result
+        except ParsingError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/parsing/documents/{document_id}/result")
+    def parsing_result(document_id: str, parse_run_id: str | None = None):
+        from kg.parsing import ParsingError, parse_result
+        with lock:
+            rid = parse_run_id
+            if rid is None:
+                row = store.conn.execute(
+                    "SELECT parse_run_id FROM parse_run WHERE document_id=? ORDER BY started_at DESC LIMIT 1",
+                    (document_id,)).fetchone()
+                rid = row[0] if row else None
+            if rid is None:
+                raise HTTPException(404, "no parse result")
+            try:
+                result = parse_result(store, rid)
+            except ParsingError as exc:
+                raise HTTPException(404, str(exc)) from exc
+        if result["document_id"] != document_id:
+            raise HTTPException(404, "unknown parse run")
+        return result
+
+    @app.get("/api/parsing/document-kg/{dkg_id}/groups")
+    def parsing_document_kg_groups(dkg_id: str):
+        from kg.parsing import grouped_documents
+        with lock:
+            return grouped_documents(store, dkg_id)
 
     @app.get("/api/search")
     def search(concept: str):

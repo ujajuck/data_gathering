@@ -256,3 +256,110 @@ CREATE TABLE IF NOT EXISTS drm_request (
     released_at  TEXT,
     updated_at   TEXT NOT NULL
 );
+
+-- ============================================= Parsing Template runtime ---
+-- Template is an operational parsing layer, not a Domain/Document KG node.
+-- Versions are immutable snapshots; documents and parse runs always reference
+-- the exact version that produced their sources.
+CREATE TABLE IF NOT EXISTS parsing_template (
+    template_id          TEXT PRIMARY KEY,
+    name                 TEXT NOT NULL,
+    target_document_kg   TEXT,
+    lifecycle            TEXT NOT NULL DEFAULT 'DRAFT'
+                         CHECK (lifecycle IN ('DRAFT','ACTIVE','DEPRECATED','ARCHIVED')),
+    created_at           TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS parsing_template_version (
+    template_id     TEXT NOT NULL REFERENCES parsing_template(template_id),
+    version          INTEGER NOT NULL,
+    spec_json        TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    created_by       TEXT,
+    PRIMARY KEY (template_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS sheet_template (
+    sheet_template_id TEXT PRIMARY KEY,
+    template_id       TEXT NOT NULL,
+    template_version  INTEGER NOT NULL,
+    name              TEXT NOT NULL,
+    matcher_json      TEXT NOT NULL,
+    ordinal           INTEGER NOT NULL,
+    FOREIGN KEY (template_id, template_version)
+      REFERENCES parsing_template_version(template_id, version),
+    UNIQUE (template_id, template_version, name)
+);
+
+CREATE TABLE IF NOT EXISTS template_mapping (
+    mapping_id        TEXT PRIMARY KEY,
+    sheet_template_id TEXT NOT NULL REFERENCES sheet_template(sheet_template_id),
+    mapping_key       TEXT NOT NULL,
+    concept_id        TEXT,
+    document_kg_node  TEXT,
+    source_json       TEXT NOT NULL,
+    value_type        TEXT,
+    unit              TEXT,
+    normalization_json TEXT,
+    UNIQUE (sheet_template_id, mapping_key)
+);
+
+CREATE TABLE IF NOT EXISTS document_template_assignment (
+    document_id      TEXT NOT NULL REFERENCES document(document_id),
+    document_version TEXT NOT NULL REFERENCES document_version(version_id),
+    template_id      TEXT NOT NULL,
+    template_version INTEGER NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'ASSIGNED',
+    assigned_at      TEXT NOT NULL,
+    FOREIGN KEY (template_id, template_version)
+      REFERENCES parsing_template_version(template_id, version),
+    PRIMARY KEY (document_id, document_version)
+);
+
+CREATE TABLE IF NOT EXISTS document_override (
+    override_id       TEXT PRIMARY KEY,
+    document_id       TEXT NOT NULL REFERENCES document(document_id),
+    document_version  TEXT NOT NULL REFERENCES document_version(version_id),
+    template_mapping_id TEXT NOT NULL REFERENCES template_mapping(mapping_id),
+    override_source_json TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'APPROVED',
+    reason            TEXT,
+    created_by        TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    UNIQUE (document_version, template_mapping_id)
+);
+CREATE INDEX IF NOT EXISTS idx_override_docver
+    ON document_override(document_version, status);
+
+CREATE TABLE IF NOT EXISTS parse_run (
+    parse_run_id      TEXT PRIMARY KEY,
+    document_id       TEXT NOT NULL REFERENCES document(document_id),
+    document_version  TEXT NOT NULL REFERENCES document_version(version_id),
+    template_id       TEXT NOT NULL,
+    template_version  INTEGER NOT NULL,
+    started_at        TEXT NOT NULL,
+    finished_at       TEXT,
+    status            TEXT NOT NULL,
+    mapping_count     INTEGER NOT NULL DEFAULT 0,
+    override_count    INTEGER NOT NULL DEFAULT 0,
+    warning_count     INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (template_id, template_version)
+      REFERENCES parsing_template_version(template_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS parsed_source (
+    parsed_source_id  TEXT PRIMARY KEY,
+    parse_run_id      TEXT NOT NULL REFERENCES parse_run(parse_run_id),
+    template_mapping_id TEXT NOT NULL REFERENCES template_mapping(mapping_id),
+    concept_id        TEXT,
+    sheet_name        TEXT,
+    source_range      TEXT,
+    mapping_source    TEXT NOT NULL, -- TEMPLATE / MANUAL
+    template_source_json TEXT NOT NULL,
+    effective_source_json TEXT NOT NULL,
+    value_json        TEXT,
+    status            TEXT NOT NULL, -- TEMPLATE/MANUAL/MISSING/REVIEW_REQUIRED
+    warning           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_parsed_source_run ON parsed_source(parse_run_id);
