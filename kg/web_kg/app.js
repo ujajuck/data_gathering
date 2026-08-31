@@ -23,6 +23,7 @@ const state = {
   selDkgDoc: null,        // Document KG 상세에서 선택한 문서
   reviewDoc: null,        // 검수 모드 대상 문서
   doc: null, sheet: null, seq: 0,
+  overlayEnabled: true,
   lastBuild: null,
 };
 
@@ -93,9 +94,12 @@ async function loadFiles() {
       <td>${dkgs.map((g) => `<span class="badge" style="border-color:${dkgColor(g.id)};color:${dkgColor(g.id)}">${esc(g.name)}</span>`).join(' ') || '—'}</td>
       <td>${f.headers}</td><td>${f.coverage_pct}%</td>
       <td>${f.review ? `<button class="secondary" data-review="${esc(f.document_id)}">${f.review}건 검수</button>` : '—'}</td>
+      <td><span class="badge ${f.drm_status === 'READY' ? 'green' : 'amber'}">${esc(f.drm_status || 'PROTECTED')}</span>
+        ${f.render_status ? `<span class="badge ${f.render_status === 'SUCCESS' ? 'green' : (f.render_status === 'FAILED' ? 'red' : '')}">Render ${esc(f.render_status)}</span>` : ''}
+        ${f.parsing_status ? `<span class="badge blue">Parse ${esc(f.parsing_status)}</span>` : ''}</td>
       <td><span class="badge ${cls}">${esc(label)}</span></td>
       <td><button class="secondary" data-open="${esc(f.document_id)}">열어보기</button></td></tr>`;
-  }).join('') || '<tr><td colspan="7" class="empty">등록된 파일이 없습니다 — kg ingest를 먼저 실행하세요</td></tr>';
+  }).join('') || '<tr><td colspan="8" class="empty">등록된 파일이 없습니다 — kg ingest를 먼저 실행하세요</td></tr>';
   $('#fileRows').querySelectorAll('[data-open]').forEach((b) => b.onclick = () => {
     state.reviewDoc = null;
     show('source');
@@ -588,6 +592,19 @@ function renderDkgDetail() {
       </select></div>` : ''}
     <div class="sub" style="font-size:11px;margin-top:4px">제외/추가는 그룹 소속만 바꿉니다 — 매핑과 빌드 소스는 유지됩니다.</div>
 
+    <div style="margin-top:13px" class="kicker">PARSING TEMPLATES</div>
+    ${(g.parsing_templates || []).length ? (g.parsing_templates || []).map((t) => `
+      <div class="dkgCard" style="cursor:default;border-left:4px solid var(--purple)">
+        <b style="color:var(--purple)">▣ ${esc(t.template_name)} <span class="badge blue">v${t.version}</span></b>
+        <div>${t.documents.length}개 문서 · Override 문서 ${t.override_documents} · 검토 ${t.review_required} · 실패 ${t.failed}</div>
+        <div style="margin-top:6px">${t.documents.map((d) => `
+          <span class="chip" title="${esc(d.status)}">▤ ${esc(d.filename)}
+            ${d.override_count ? `<b style="color:var(--amber)">override ${d.override_count}</b>` : ''}
+            ${d.status === 'REVIEW_REQUIRED' ? '<b style="color:var(--amber)">검토 필요</b>' : ''}</span>`).join('')}</div>
+      </div>`).join('')
+      : '<div class="sub" style="font-size:12px">배정된 Parsing Template이 없습니다. Document는 기존 KG/레시피 흐름으로 유지됩니다.</div>'}
+    <div class="sub" style="font-size:11px">▣ Parsing Template은 KG 개념 노드가 아닌 Document 파싱 운영 계층입니다.</div>
+
     <div style="margin-top:13px" class="kicker">EXTRACTION RECIPE</div>
     ${rec ? `<div style="font-size:12px">템플릿 ${rec.template}건
         ${rec.conflicts ? ` · <span style="color:var(--amber)">충돌 ${rec.conflicts}</span>` : ''}
@@ -974,9 +991,10 @@ async function loadSheet(doc, sheet, focusNode) {
   const data = await api(`/api/sheet?doc=${encodeURIComponent(doc)}` +
                          (sheet ? `&name=${encodeURIComponent(sheet)}` : ''));
   if (seq !== state.seq) return false;      // 추월됨 — 호출측 후속 동작도 중단
-  let overlay = [], ovErr = '';
-  try { overlay = await api(`/api/overlay?doc=${encodeURIComponent(doc)}&name=${encodeURIComponent(data.sheet)}`); }
+  let allOverlay = [], ovErr = '';
+  try { allOverlay = await api(`/api/overlay?doc=${encodeURIComponent(doc)}&name=${encodeURIComponent(data.sheet)}`); }
   catch (e) { ovErr = ` · <span style="color:var(--amber)">Overlay 조회 실패: ${esc(e.message.slice(0, 60))}</span>`; }
+  const overlay = state.overlayEnabled ? allOverlay : [];
   if (seq !== state.seq) return false;
   state.doc = doc; state.sheet = data.sheet;
   $('#inspector').innerHTML = '<div class="kicker">MAPPING</div>' +
@@ -984,8 +1002,17 @@ async function loadSheet(doc, sheet, focusNode) {
 
   $('#tabs').innerHTML = data.sheets.map((s) =>
     `<button class="sheet${s === data.sheet ? ' sel' : ''}" data-s="${esc(s)}">${esc(s)}</button>`).join('') +
-    `<span class="muted" style="margin-left:auto;padding:6px;white-space:nowrap">원본 렌더 + Semantic Overlay</span>`;
-  $('#tabs').querySelectorAll('button').forEach((b) => b.onclick = () => loadSheet(doc, b.dataset.s));
+    `<span style="margin-left:auto;display:flex;gap:5px;align-items:center;white-space:nowrap">
+      <button class="tinyTab ${state.overlayEnabled ? 'active' : ''}" data-overlay>Semantic Overlay ${state.overlayEnabled ? 'ON' : 'OFF'}</button>
+      ${data.viewer && data.viewer.render_status === 'SUCCESS' ? `<a class="tinyTab" target="_blank" rel="noopener"
+        href="/api/viewer/documents/${encodeURIComponent(doc)}/preview?document_version=${encodeURIComponent(data.document_version)}">PDF Preview</a>` : ''}
+      <span class="muted">원본 충실 렌더 · Read only</span></span>`;
+  $('#tabs').querySelectorAll('button[data-s]').forEach((b) => b.onclick = () => loadSheet(doc, b.dataset.s));
+  const overlayBtn = $('#tabs [data-overlay]');
+  if (overlayBtn) overlayBtn.onclick = () => {
+    state.overlayEnabled = !state.overlayEnabled;
+    loadSheet(doc, data.sheet, focusNode).catch((e) => setVStatus(e.message));
+  };
 
   const ovAt = new Map();
   for (const o of overlay) {
@@ -1063,15 +1090,16 @@ async function loadSheet(doc, sheet, focusNode) {
   $('#gridwrap').querySelectorAll('td.ov').forEach((td) =>
     td.onclick = () => openInspector(td.dataset.node));
   const roles = {};
-  overlay.forEach((o) => roles[o.role] = (roles[o.role] || 0) + 1);
-  const rolesTxt = overlay.length
+  allOverlay.forEach((o) => roles[o.role] = (roles[o.role] || 0) + 1);
+  const rolesTxt = !state.overlayEnabled ? '<span class="muted">Semantic Overlay 숨김</span>' : allOverlay.length
     ? `Overlay <span class="badge green">KEY ${roles.KEY || 0}</span>
        <span class="badge blue">VALUE ${roles.VALUE || 0}</span>
        <span class="badge amber">CONTEXT ${roles.CONTEXT || 0}</span>
        <span class="badge">미매핑 ${roles.IGNORE || 0}</span>`
     : '<span style="color:var(--amber)">이 시트에는 매핑된 영역이 없습니다</span>';
   setVStatus(`${esc(data.sheet)} — ${data.max_row}×${data.max_col}` +
-    `${data.truncated ? ' (잘림)' : ''} · ${rolesTxt}${ovErr}`);
+    `${data.truncated ? ' (잘림)' : ''} · ${rolesTxt}${ovErr}` +
+    `${data.viewer ? ` · DRM ${esc(data.viewer.drm_status)} · Render ${esc(data.viewer.render_status || 'PENDING')}` : ' · Viewer source 미등록'}`);
   const selCell = $('#gridwrap td.selc');
   if (selCell) selCell.scrollIntoView({ block: 'center', inline: 'center' });
 }
@@ -1087,8 +1115,13 @@ async function openInspector(nodeId) {
     ...conceptsCache.map((c) =>
       `<option value="${esc(c.concept_id)}" ${!unmapped && d.mapping.concept_id === c.concept_id ? 'selected' : ''}>` +
       `${esc(c.canonical_name)} (${esc(c.concept_id)})</option>`)].join('');
+  const sourceText = (source) => source
+    ? `${esc(source.sheet || d.sheet)}!${esc(source.range || '동적 탐색')}` : '—';
+  const ps = d.parsing_source;
+  const pt = d.parsing_template;
   $('#inspector').innerHTML = `
-    <div class="kicker">MAPPING</div><div class="title">${esc(d.range)}</div>
+    <div class="kicker">SOURCE INSPECTOR</div><div class="title">${esc(d.range)}</div>
+    <div class="sub">${esc(d.document)} · ${esc(d.document_version || 'version 없음')} · Read only</div>
     <div class="kv"><strong>${esc(d.role)} → ${esc(d.concept_name || '미매핑')}</strong>
       <p>Header: ${esc(d.header)}${d.unit ? ` · ${esc(d.unit)}` : ''}
       ${d.mapping ? ` · ${esc(d.mapping.status)} (${d.mapping.confidence})` : ''}</p>
@@ -1100,6 +1133,17 @@ async function openInspector(nodeId) {
          경로: ${esc((d.row_context.header_path || []).join(' › ') || '—')}</p></div>
     <div class="kv"><strong>CONTEXT</strong>
       <p>Sheet: ${esc(d.sheet)} · 문서: ${esc(d.document)}</p></div>
+    <div class="kv"><strong>VIEWER SOURCE</strong>
+      <p>DRM: ${esc(d.viewer ? d.viewer.drm_status : '미등록')} · Render: ${esc(d.viewer ? d.viewer.render_status : '미등록')}<br>
+      Document Version: ${esc(d.document_version || '—')}</p></div>
+    <div class="kv"><strong>PARSING TEMPLATE</strong>
+      ${pt ? `<p>▣ ${esc(pt.template_name)} v${esc(pt.template_version)} · ${esc(pt.status)}<br>
+        Mapping: ${esc(ps ? ps.mapping_source : 'Template source 미연결')}
+        ${ps && ps.override_status ? ` · ${esc(ps.override_status)}` : ''}<br>
+        Template Source: ${sourceText(ps && ps.template_source)}<br>
+        Effective Source: <b>${sourceText(ps && ps.effective_source)}</b>
+        ${ps && ps.override_reason ? `<br>사유: ${esc(ps.override_reason)}` : ''}</p>`
+        : '<p>이 Document Version에 배정된 Parsing Template이 없습니다.</p>'}</div>
     <div style="margin-top:12px" class="kicker">DOMAIN CONCEPT</div>
     <select id="conceptSel">${opts}</select>
     <div style="margin-top:12px" class="kicker">VALUE PREVIEW</div>

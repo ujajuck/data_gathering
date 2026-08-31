@@ -1,0 +1,27 @@
+"""Guard the established KG application against replacement by a parallel UI."""
+from __future__ import annotations
+
+from tests.conftest import REPO_ROOT
+
+
+def test_parsing_and_viewer_are_integrated_into_existing_kg_application():
+    html = (REPO_ROOT / "kg" / "web_kg" / "index.html").read_text(encoding="utf-8")
+    js = (REPO_ROOT / "kg" / "web_kg" / "app.js").read_text(encoding="utf-8")
+
+    # The original four-stage product and actual graph canvases must remain.
+    for text in ("1. 파일 분석", "2. KG 탐색", "3. 원본 데이터", "4. 통합 DB"):
+        assert text in html
+    for element in ('id="domainGraph"', 'id="docGraph"', 'id="gridwrap"',
+                    'id="inspector"'):
+        assert element in html
+
+    # New functionality belongs inside that flow, not in a separate app.
+    assert "PARSING TEMPLATES" in js
+    assert "Parsing Template은 KG 개념 노드가 아닌" in js
+    assert "Semantic Overlay" in js and "data-overlay" in js
+    assert "VIEWER SOURCE" in js and "Template Source:" in js
+    assert "PDF Preview" in js
+
+
+def test_no_parallel_frontend_application_is_shipped():
+    assert not (REPO_ROOT / "frontend").exists()
