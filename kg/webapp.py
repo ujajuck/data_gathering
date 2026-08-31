@@ -1030,31 +1030,53 @@ def create_app(ws_root: str | Path) -> FastAPI:
     @app.post("/api/viewer/documents/{document_id}/render")
     def viewer_render(document_id: str, req: ViewerRenderReq):
         # DRM 파일은 이미 sheet_render에 캐시됨 → 항상 SUCCESS
-        # 비DRM은 render_preview 시도 (LibreOffice)
-        doc_row = store.conn.execute(
-            "SELECT filepath FROM document WHERE document_id=?", (document_id,)).fetchone()
-        if doc_row and doc_row['filepath'] and not _is_drm_file(Path(doc_row['filepath'])):
-            from kg.viewer import ViewerError, render_preview
-            try:
-                with wlock():
-                    render_preview(store, document_id, req.document_version,
-                                   root / "data" / "viewer-cache")
-                    store.commit()
-                return {"status": "SUCCESS"}
-            except ViewerError as exc:
-                with wlock():
-                    store.conn.execute(
-                        """UPDATE viewer_document_version SET render_status='FAILED',render_error=?
-                           WHERE document_id=? AND document_version=?""",
-                        (str(exc)[:1000], document_id, req.document_version))
-                    store.commit()
-                raise HTTPException(503, str(exc)) from exc
-        return {"status": "SUCCESS", "cached": True}
+        # 비DRM은 render_preview 시도 (LibreOffice) — 스테이징: LibreOffice
+        # 서브프로세스(최대 120초)는 절대 전역 DB lock을 쥔 채 돌리지 않는다
+        from kg.viewer import (ViewerError, execute_render, finalize_render,
+                               mark_render_failed, prepare_render)
+        with lock:
+            doc_row = store.conn.execute(
+                "SELECT filepath FROM document WHERE document_id=?",
+                (document_id,)).fetchone()
+        if not (doc_row and doc_row['filepath']
+                and not _is_drm_file(Path(doc_row['filepath']))):
+            return {"status": "SUCCESS", "cached": True}
+        cache_root = root / "data" / "viewer-cache"
+        try:
+            with wlock():
+                prep = prepare_render(store, document_id, req.document_version,
+                                      cache_root)
+                store.commit()
+        except ViewerError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        if prep["cached"]:
+            return {"status": "SUCCESS", "cached": True}
+        try:
+            execute_render(prep)                     # lock 밖 — LibreOffice
+        except ViewerError as exc:
+            with wlock():
+                mark_render_failed(store, document_id, req.document_version, str(exc))
+                store.commit()
+            raise HTTPException(503, str(exc)) from exc
+        with wlock():
+            finalize_render(store, document_id, req.document_version, prep)
+            store.commit()
+        return {"status": "SUCCESS"}
 
     @app.get("/api/viewer/documents/{document_id}/render-status")
     def viewer_render_status(document_id: str, document_version: str):
-        return {"document_id": document_id, "document_version": document_version,
-                "render_status": "SUCCESS", "render_error": None}
+        # 등록된 뷰어 소스는 실제 상태를 보고, 미등록(sheet_render 경로)은
+        # 기존 동작대로 SUCCESS 스텁을 유지한다
+        from kg.viewer import ViewerError, document_metadata
+        try:
+            with lock:
+                metadata = document_metadata(store, document_id, document_version)
+            return {key: metadata[key] for key in
+                    ("document_id", "document_version", "render_status",
+                     "render_error")}
+        except ViewerError:
+            return {"document_id": document_id, "document_version": document_version,
+                    "render_status": "SUCCESS", "render_error": None}
 
     @app.get("/api/viewer/documents/{document_id}/preview")
     @app.get("/api/viewer/documents/{document_id}/preview")
