@@ -831,22 +831,33 @@ def create_app(ws_root: str | Path) -> FastAPI:
 
     @app.post("/api/viewer/documents/{document_id}/render")
     def viewer_render(document_id: str, req: ViewerRenderReq):
-        from kg.viewer import ViewerError, render_preview
+        from kg.viewer import (ViewerError, execute_render, finalize_render,
+                               mark_render_failed, prepare_render)
+        cache_root = root / "data" / "viewer-cache"
         try:
             with wlock():
-                render_preview(store, document_id, req.document_version,
-                               root / "data" / "viewer-cache")
+                prep = prepare_render(store, document_id, req.document_version,
+                                      cache_root)
                 store.commit()
-            return {"status": "SUCCESS"}
+        except ViewerError as exc:
+            # Validation failure (not registered / DRM_NOT_READY): nothing ran.
+            raise HTTPException(503, str(exc)) from exc
+        if prep["cached"]:
+            return {"status": "SUCCESS", "cached": True}
+        try:
+            # The LibreOffice subprocess can take up to two minutes — it must
+            # never run while holding the process-wide DB lock.
+            execute_render(prep)
         except ViewerError as exc:
             # Render failure is persisted independently; parsing/KG is untouched.
             with wlock():
-                store.conn.execute(
-                    """UPDATE viewer_document_version SET render_status='FAILED',render_error=?
-                       WHERE document_id=? AND document_version=?""",
-                    (str(exc)[:1000], document_id, req.document_version))
+                mark_render_failed(store, document_id, req.document_version, str(exc))
                 store.commit()
             raise HTTPException(503, str(exc)) from exc
+        with wlock():
+            finalize_render(store, document_id, req.document_version, prep)
+            store.commit()
+        return {"status": "SUCCESS"}
 
     @app.get("/api/viewer/documents/{document_id}/render-status")
     def viewer_render_status(document_id: str, document_version: str):
