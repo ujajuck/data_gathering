@@ -1,6 +1,6 @@
 // 1. 파일 분석 — 등록 파일 표 + 미등록(raw) 파일의 분석/DKG 제안/등록,
 //    잠긴 파일(암호화/DRM)의 정식 해제 요청 흐름. web_kg loadFiles/loadRawFiles 포트.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, post } from "../lib/api";
 import { useStore } from "../lib/store";
 import type { FileRow, RawFile, RawSuggestion } from "../lib/types";
@@ -10,6 +10,8 @@ const FBADGE: Record<string, [string, string]> = {
 };
 
 interface RawInfo { document_id: string; suggestions: RawSuggestion[]; picked: string }
+
+type SortKey = "filename" | "author" | "created" | "headers" | "coverage_pct" | "review";
 
 export default function FilesScreen() {
   const s = useStore();
@@ -21,6 +23,11 @@ export default function FilesScreen() {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [copyLabel, setCopyLabel] = useState<Record<string, string>>({});
   const preRefs = useRef<Record<string, HTMLPreElement | null>>({});
+  const [query, setQuery] = useState("");            // 파일명/작성자 검색
+  const [dateFrom, setDateFrom] = useState("");      // 작성일 범위 필터
+  const [dateTo, setDateTo] = useState("");
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>(
+    { key: "filename", dir: 1 });
 
   const loadRawFiles = useCallback(async () => {
     try { setRaw(await api("/api/raw-files")); } catch { setRaw([]); }
@@ -122,6 +129,31 @@ export default function FilesScreen() {
     }
   };
 
+  // 검색(파일명/작성자) → 작성일 범위 필터 → 정렬
+  const visibleFiles = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let rows = s.files.filter((f) =>
+      !q || f.filename.toLowerCase().includes(q) ||
+      (f.author || "").toLowerCase().includes(q));
+    if (dateFrom) rows = rows.filter((f) => (f.created || "").slice(0, 10) >= dateFrom);
+    if (dateTo) rows = rows.filter((f) => (f.created || "").slice(0, 10) <= dateTo);
+    return [...rows].sort((a, b) => {
+      const va = a[sort.key] ?? "", vb = b[sort.key] ?? "";
+      const cmp = typeof va === "number" && typeof vb === "number"
+        ? va - vb : String(va).localeCompare(String(vb), "ko");
+      return cmp * sort.dir;
+    });
+  }, [s.files, query, dateFrom, dateTo, sort]);
+
+  const Th = ({ k, children }: { k: SortKey; children: React.ReactNode }) => (
+    <th style={{ cursor: "pointer", whiteSpace: "nowrap", userSelect: "none" }}
+      title="클릭해서 정렬"
+      onClick={() => setSort((p) =>
+        ({ key: k, dir: p.key === k ? (-p.dir as 1 | -1) : 1 }))}>
+      {children}{sort.key === k ? (sort.dir === 1 ? " ▲" : " ▼") : ""}
+    </th>
+  );
+
   // '분석'으로 구조만 적재된 파일은 서버 목록에서 빠지므로 rawInfo 쪽을 합친다
   const names = [...new Set([...raw.map((f) => f.filename), ...Object.keys(rawInfo)])].sort();
   const byName = Object.fromEntries(raw.map((f) => [f.filename, f]));
@@ -168,8 +200,8 @@ export default function FilesScreen() {
         <>
           <div style={{ marginTop: 6, fontSize: 12 }}>
             {(info.suggestions || []).length
-              ? "같은 형식으로 보이는 Document KG — 선택하면 레시피로 매핑을 이식합니다:"
-              : "비슷한 형식의 Document KG가 없습니다."}
+              ? "같은 양식으로 보이는 문서군 — 선택하면 레시피로 매핑을 이식합니다:"
+              : "비슷한 양식의 문서군이 없습니다."}
             <br />
             {(info.suggestions || []).map((sg) => (
               <span key={sg.root_concept_id}
@@ -182,7 +214,7 @@ export default function FilesScreen() {
           </div>
           <button className="primary" style={{ marginTop: 7 }} disabled={!!busy[fn]}
             onClick={() => register(fn)}>
-            {info.picked ? "선택한 DKG로 등록" : "등록 (자동 판정)"}</button>
+            {info.picked ? "선택한 문서군으로 등록" : "등록 (자동 판정)"}</button>
         </>
       );
     } else {
@@ -220,27 +252,49 @@ export default function FilesScreen() {
       {names.length > 0 && (
         <div className="panel pad" style={{ marginBottom: 14 }}>
           <div className="kicker">미등록 파일</div>
-          <div className="sub">data/raw에 새 파일이 있습니다 — 분석하면 같은 형식의 Document KG를
+          <div className="sub">data/raw에 새 파일이 있습니다 — 분석하면 같은 양식의 문서군을
             제안하고, 배정하면 저장된 추출 레시피로 매핑을 이식합니다.</div>
           <div style={{ marginTop: 8 }}>{names.map(rawRow)}</div>
         </div>
       )}
       <div className="panel pad">
         <div className="title">파일 분석</div>
-        <div className="sub">등록된 Excel의 분석 상태와 Domain KG / Document KG 매핑 현황입니다.
+        <div className="sub">등록된 Excel의 분석 상태와 Domain KG / 문서군 매핑 현황입니다.
           파일은 data/raw에 두면 위 미등록 목록에 나타납니다.</div>
-        <table className="table" style={{ marginTop: 14 }}>
+        <div className="editForm"
+          style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
+          <input placeholder="파일명 / 작성자 검색" value={query}
+            style={{ flex: "1 1 220px", marginTop: 0 }}
+            onChange={(e) => setQuery(e.target.value)} />
+          <label style={{ fontSize: 11, color: "var(--muted)", marginTop: 0 }}>작성일</label>
+          <input type="date" value={dateFrom} style={{ width: 150, marginTop: 0 }}
+            onChange={(e) => setDateFrom(e.target.value)} />
+          <span className="muted">~</span>
+          <input type="date" value={dateTo} style={{ width: 150, marginTop: 0 }}
+            onChange={(e) => setDateTo(e.target.value)} />
+          {(query || dateFrom || dateTo) && (
+            <button className="secondary"
+              onClick={() => { setQuery(""); setDateFrom(""); setDateTo(""); }}>초기화</button>
+          )}
+          <span className="muted" style={{ fontSize: 12 }}>
+            {visibleFiles.length} / {s.files.length}건</span>
+        </div>
+        <table className="table" style={{ marginTop: 10 }}>
           <thead><tr>
-            <th>파일</th><th>Document KG</th><th>매핑 노드</th><th>KG 매핑</th>
-            <th>검토</th><th>DRM / Viewer</th><th>상태</th><th></th></tr></thead>
+            <Th k="filename">파일</Th><Th k="author">작성자</Th><Th k="created">작성일</Th>
+            <th>문서군</th><Th k="headers">매핑 노드</Th><Th k="coverage_pct">KG 매핑</Th>
+            <Th k="review">검토</Th><th>DRM / Viewer</th><th>상태</th><th></th></tr></thead>
           <tbody>
-            {s.files.length ? s.files.map((f) => {
+            {visibleFiles.length ? visibleFiles.map((f) => {
               const [cls, label] = FBADGE[f.status] || ["", f.status];
               const memberOf = s.dkgs.filter((g) =>
                 (g.member_document_ids || []).includes(f.document_id));
               return (
                 <tr key={f.document_id}>
                   <td><b>{f.filename}</b></td>
+                  <td>{f.author || "—"}</td>
+                  <td style={{ whiteSpace: "nowrap" }}
+                    title={f.created || ""}>{(f.created || "").slice(0, 10) || "—"}</td>
                   <td>{memberOf.length ? memberOf.map((g) => (
                     <span key={g.id} className="badge"
                       style={{ borderColor: s.dkgColor(g.id), color: s.dkgColor(g.id) }}>
@@ -266,8 +320,10 @@ export default function FilesScreen() {
                 </tr>
               );
             }) : (
-              <tr><td colSpan={8} className="empty">
-                등록된 파일이 없습니다 — kg ingest를 먼저 실행하세요</td></tr>
+              <tr><td colSpan={10} className="empty">
+                {s.files.length
+                  ? "검색/필터 조건에 맞는 파일이 없습니다"
+                  : "등록된 파일이 없습니다 — kg ingest를 먼저 실행하세요"}</td></tr>
             )}
           </tbody>
         </table>

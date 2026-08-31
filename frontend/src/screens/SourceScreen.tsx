@@ -144,7 +144,7 @@ export default function SourceScreen() {
           ) : (
             <>
               <div className="title">{s.selNode.name}</div>
-              <div className="sub">Document KG에 포함된 문서 중 {s.selNode.name}에 매핑된 위치</div>
+              <div className="sub">문서군에 포함된 문서 중 {s.selNode.name}에 매핑된 위치</div>
               <div className="srcList">
                 {listErr && <div className="empty">{listErr}</div>}
                 {res && res.sources.length === 0 && <div className="empty">연결된 위치 없음</div>}

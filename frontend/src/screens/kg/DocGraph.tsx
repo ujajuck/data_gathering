@@ -1,4 +1,4 @@
-// Document KG 상세: 커버 노드 + Member Documents (§4). web_kg renderDocGraph 포트.
+// 문서군 상세: 커버 노드 + Member Documents (§4). web_kg renderDocGraph 포트.
 import type { DkgDetailData, DomainKg } from "../../lib/types";
 
 interface Props {
@@ -7,9 +7,11 @@ interface Props {
   color: string;
   selDkgDoc: string | null;
   onSelectDoc: (documentId: string) => void;
+  zoom?: number;
 }
 
-export default function DocGraph({ g, domain, color, selDkgDoc, onSelectDoc }: Props) {
+export default function DocGraph({ g, domain, color, selDkgDoc, onSelectDoc,
+  zoom = 1 }: Props) {
   const nameOf = Object.fromEntries(domain.nodes.map((n) => [n.id, n.name]));
   const top = g.domain_node_ids.slice(0, 6);
   const NODEW = 128, W = 1180;
@@ -17,8 +19,9 @@ export default function DocGraph({ g, domain, color, selDkgDoc, onSelectDoc }: P
   const docs = (g.member_documents || []).slice(0, 4);
   const dx = (i: number) => 60 + i * 280;
   return (
-    <svg className="graphSvg" viewBox={`0 0 ${W} 500`} style={{ height: 520 }}
-      aria-label="Document KG와 소속 문서">
+    <svg className="graphSvg" viewBox={`0 0 ${W} 500`}
+      style={{ width: `${zoom * 100}%`, height: 520 * zoom }}
+      aria-label="문서군과 소속 문서">
       <rect x={40} y={55}
         width={Math.max(nx(top.length - 1) + NODEW + 30 - 40, 460)} height={130} rx={20}
         className="hull" style={{ fill: `${color}10`, stroke: color }} />

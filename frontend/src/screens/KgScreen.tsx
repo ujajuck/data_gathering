@@ -1,4 +1,4 @@
-// 2. KG 탐색 — 좌측 내비(전체 KG/문서 KG), 중앙 그래프(Domain/Document),
+// 2. KG 탐색 — 좌측 내비(전체 KG/문서군), 중앙 그래프(Domain/문서군),
 //    우측 상세(노드/DKG/개념 편집기). web_kg의 KG 탐색 화면 포트.
 import { useEffect, useRef, useState } from "react";
 import { api, post } from "../lib/api";
@@ -28,14 +28,14 @@ function NodeDetailPanel({ onOpenDocKg, onOpenSource, onEdit }: {
       <div className="sub">{(res && res.concept.description) || ""}</div>
       {inCart && <span className="badge blue" style={{ marginTop: 8 }}>✓ 통합 대상 포함됨</span>}
       <div className="metricGrid">
-        <div className="metric"><span>Document KG</span><b>{g ? 1 : 0}</b></div>
+        <div className="metric"><span>문서군</span><b>{g ? 1 : 0}</b></div>
         <div className="metric"><span>소속 문서</span><b>{res ? res.documents.length : 0}</b></div>
         <div className="metric"><span>데이터 위치</span><b>{res ? res.sources.length : 0}</b></div>
         <div className="metric"><span>값</span><b>{res ? res.total_rows : 0}</b></div>
       </div>
       {g && (
         <>
-          <div style={{ marginTop: 14 }} className="kicker">CONNECTED DOCUMENT KG</div>
+          <div style={{ marginTop: 14 }} className="kicker">CONNECTED DOCUMENT GROUP</div>
           <div className="dkgCard" onClick={onOpenDocKg}>
             <b style={{ color: s.dkgColor(g.id) }}>{g.name}</b>
             <div>{g.member_document_count}문서 · {g.domain_node_ids.slice(0, 4).map((i) =>
@@ -44,7 +44,7 @@ function NodeDetailPanel({ onOpenDocKg, onOpenSource, onEdit }: {
         </>
       )}
       <div className="rightBtns">
-        <button className="primary" onClick={onOpenDocKg}>Document KG 상세 보기</button>
+        <button className="primary" onClick={onOpenDocKg}>문서군 상세 보기</button>
         <button className="secondary" onClick={onOpenSource}>이 노드의 원본 데이터 보기</button>
         <button className="secondary" onClick={() => {
           if (!res) return;
@@ -67,6 +67,7 @@ export default function KgScreen() {
   const [searchInput, setSearchInput] = useState("");
   const [filter, setFilter] = useState("");
   const [docMode, setDocMode] = useState(false);
+  const [zoom, setZoom] = useState(1);          // 그래프 확대/축소 (0.5×~2.5×)
   const [detail, setDetail] = useState<Detail | null>(null);
   const [dkgDetail, setDkgDetail] = useState<DkgDetailData | null>(null);
   const [dkgFail, setDkgFail] = useState<string | null>(null);
@@ -158,7 +159,7 @@ export default function KgScreen() {
         onCreated={(id) => selectNode(id)} onBack={(cid) => selectNode(cid)} />;
     if (detail?.kind === "dkg" && s.selDkg) {
       if (dkgFail === s.selDkg)
-        return <div className="empty">Document KG 상세를 불러오지 못했습니다</div>;
+        return <div className="empty">문서군 상세를 불러오지 못했습니다</div>;
       if (!dkgDetail || dkgDetail.id !== s.selDkg)
         return <div className="empty">불러오는 중…</div>;
       return <DkgDetailPanel g={dkgDetail}
@@ -179,7 +180,7 @@ export default function KgScreen() {
         }}
         onOpenSource={() => { s.setReviewDoc(null); s.show("source"); }}
         onEdit={(cid) => setDetail({ kind: "editor", cid })} />;
-    return <div className="empty">Domain Node 또는 Document KG 영역을 클릭하세요</div>;
+    return <div className="empty">Domain Node 또는 문서군 영역을 클릭하세요</div>;
   };
 
   return (
@@ -188,7 +189,7 @@ export default function KgScreen() {
         <aside className="panel pad">
           <div className="kicker">KG NAVIGATION</div>
           <div className="title">지식 그래프</div>
-          <input className="search" placeholder="노드 / 문서 KG 검색" value={searchInput}
+          <input className="search" placeholder="노드 / 문서군 검색" value={searchInput}
             onChange={(e) => {
               const v = e.target.value;
               setSearchInput(v);
@@ -199,7 +200,7 @@ export default function KgScreen() {
             <button className={`tinyTab${navTab === "domain" ? " active" : ""}`}
               onClick={() => setNavTab("domain")}>전체 KG</button>
             <button className={`tinyTab${navTab === "doc" ? " active" : ""}`}
-              onClick={() => setNavTab("doc")}>문서 KG</button>
+              onClick={() => setNavTab("doc")}>문서군</button>
           </div>
           {navTab === "domain" ? (
             <div style={{ marginTop: 9, maxHeight: "46vh", overflowY: "auto" }}>
@@ -225,7 +226,7 @@ export default function KgScreen() {
           )}
           <button className="secondary w100" style={{ marginTop: 9 }}
             onClick={() => setDetail({ kind: "editor", cid: null })}>
-            + 새 개념 <span className="muted" style={{ fontSize: 10 }}>(L1이면 새 Document KG)</span>
+            + 새 개념 <span className="muted" style={{ fontSize: 10 }}>(L1이면 새 문서군)</span>
           </button>
           <div style={{ display: "grid", gap: 7, fontSize: 12, marginTop: 12 }}>
             {s.dkgs.map((x) => (
@@ -243,35 +244,43 @@ export default function KgScreen() {
               <div className="crumb">
                 {docMode && g
                   ? <><b>전체 Domain KG</b> › {g.name}</>
-                  : <><b>전체 Domain KG</b> · Document KG Coverage</>}
+                  : <><b>전체 Domain KG</b> · 문서군 Coverage</>}
               </div>
               <div className="title">
-                {docMode ? "Document KG에 어떤 문서가 속하는지 보기" : "전체 KG에서 Document KG 위치 보기"}
+                {docMode ? "문서군에 어떤 문서가 속하는지 보기" : "전체 KG에서 문서군 위치 보기"}
               </div>
               <div className="sub">
                 {docMode
-                  ? "선택한 Document KG의 Domain Node와 그 노드에 데이터를 제공하는 문서를 함께 봅니다."
-                  : "반투명 영역은 각 Document KG(문서군)가 Domain KG의 어느 노드들을 커버하는지 나타냅니다."}
+                  ? "선택한 문서군의 Domain Node와 그 노드에 데이터를 제공하는 문서를 함께 봅니다."
+                  : "반투명 영역은 각 문서군이 Domain KG의 어느 노드들을 커버하는지 나타냅니다."}
               </div>
             </div>
-            <div className="tabs">
+            <div className="tabs" style={{ alignItems: "center" }}>
               <button className={`tinyTab${!docMode ? " active" : ""}`}
                 onClick={() => setDocMode(false)}>전체 KG</button>
               <button className={`tinyTab${docMode ? " active" : ""}`}
-                onClick={openDocGraphTab}>Document KG 상세</button>
+                onClick={openDocGraphTab}>문서군 상세</button>
+              <span style={{ display: "inline-flex", gap: 4, marginLeft: 8, alignItems: "center" }}>
+                <button className="tinyTab" title="축소" aria-label="그래프 축소"
+                  onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 4) / 4))}>−</button>
+                <button className="tinyTab" title="원래 크기로"
+                  onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button>
+                <button className="tinyTab" title="확대" aria-label="그래프 확대"
+                  onClick={() => setZoom((z) => Math.min(2.5, Math.round((z + 0.25) * 4) / 4))}>＋</button>
+              </span>
             </div>
           </div>
           {!docMode ? (
-            <div className="graphWrap">
-              {s.domain && <DomainGraph domain={s.domain} dkgs={s.dkgs}
+            <div className="graphWrap" style={{ overflow: "auto", maxHeight: 680 }}>
+              {s.domain && <DomainGraph domain={s.domain} dkgs={s.dkgs} zoom={zoom}
                 selDkg={s.selDkg} selNode={s.selNode} dkgColor={s.dkgColor}
                 onSelectNode={selectNode} onSelectDkg={(id) => selectDkg(id)} />}
             </div>
           ) : (
-            <div className="graphWrap">
+            <div className="graphWrap" style={{ overflow: "auto", maxHeight: 680 }}>
               {s.domain && dkgDetail && dkgDetail.id === s.selDkg ? (
                 <DocGraph g={dkgDetail} domain={s.domain} color={s.dkgColor(dkgDetail.id)}
-                  selDkgDoc={s.selDkgDoc}
+                  zoom={zoom} selDkgDoc={s.selDkgDoc}
                   onSelectDoc={(id) => { s.setSelDkgDoc(id); setDetail({ kind: "dkg" }); }} />
               ) : <div className="empty">불러오는 중…</div>}
             </div>

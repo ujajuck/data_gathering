@@ -373,6 +373,43 @@ _DOC_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _SSML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 
+_PROPS_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def _doc_props(path: Path) -> dict:
+    """xlsx core 속성(작성자/작성일/수정일) — docProps/core.xml만 가볍게 읽는다.
+
+    파일 mtime 키 캐시로 목록 조회마다 재파싱하지 않는다. 작성일이 없으면
+    파일 mtime으로 대체하고, 파일이 없으면(이동/CSV 등) 전부 None.
+    """
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return {"author": None, "created": None, "modified": None}
+    hit = _PROPS_CACHE.get(str(path))
+    if hit and hit[0] == mtime:
+        return hit[1]
+    props: dict = {"author": None, "created": None, "modified": None}
+    try:
+        import xml.etree.ElementTree as ET
+        import zipfile
+        with zipfile.ZipFile(path) as zf:
+            core = ET.fromstring(zf.read("docProps/core.xml"))
+        dc = "{http://purl.org/dc/elements/1.1/}"
+        dct = "{http://purl.org/dc/terms/}"
+        props["author"] = (core.findtext(f"{dc}creator") or "").strip() or None
+        props["created"] = (core.findtext(f"{dct}created") or "").strip() or None
+        props["modified"] = (core.findtext(f"{dct}modified") or "").strip() or None
+    except Exception:
+        pass                       # 잠긴/비정형 컨테이너 — 속성 없이 진행
+    if not props["created"]:
+        from datetime import datetime, timezone
+        props["created"] = datetime.fromtimestamp(
+            mtime, tz=timezone.utc).isoformat(timespec="seconds")
+    _PROPS_CACHE[str(path)] = (mtime, props)
+    return props
+
+
 def _sheet_textboxes_raw(path: Path, sheet_name: str) -> list[dict]:
     """xlsx 드로잉 XML에서 텍스트박스/도형 텍스트를 앵커 원시값으로 추출한다.
 
@@ -1563,6 +1600,8 @@ def create_app(ws_root: str | Path) -> FastAPI:
             out[-1].update({"drm_status": r["drm_status"] or "PROTECTED",
                             "render_status": r["render_status"],
                             "parsing_status": r["parsing_status"]})
+            # 작성자/작성일 — 검색·필터·정렬용 (원본 파일의 core 속성)
+            out[-1].update(_doc_props(root / "data" / "raw" / r["filename"]))
         return out
 
     @app.get("/api/overlay")

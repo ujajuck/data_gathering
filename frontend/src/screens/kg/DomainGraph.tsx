@@ -1,4 +1,4 @@
-// 전체 Domain KG: 루트 → L1 → 리프 트리 위에 Document KG Coverage Hull을
+// 전체 Domain KG: 루트 → L1 → 리프 트리 위에 문서군 Coverage Hull을
 // 겹쳐 그린다 (§3.2 — 고정 좌표 유지). web_kg layoutDomain/renderDomainGraph 포트.
 import type { DkgSummary, DomainKg, DomainNode } from "../../lib/types";
 import type { SelNode } from "../../lib/store";
@@ -68,10 +68,11 @@ interface Props {
   dkgColor: (id: string) => string;
   onSelectNode: (id: string) => void;
   onSelectDkg: (id: string) => void;
+  zoom?: number;
 }
 
 export default function DomainGraph({ domain, dkgs, selDkg, selNode, dkgColor,
-  onSelectNode, onSelectDkg }: Props) {
+  onSelectNode, onSelectDkg, zoom = 1 }: Props) {
   const { groups, height } = layoutDomain(domain, dkgs);
   const rootX = 590, rootY = 16, ROOTW = 150, ROOTH = 40;
   const nodeAt: Record<string, LaidNode> = {};
@@ -79,8 +80,8 @@ export default function DomainGraph({ domain, dkgs, selDkg, selNode, dkgColor,
 
   return (
     <svg className="graphSvg" viewBox={`0 0 1180 ${height}`}
-      style={{ height: Math.min(660, height) }}
-      aria-label="전체 Domain KG 트리와 Document KG 커버리지">
+      style={{ width: `${zoom * 100}%`, height: Math.min(660, height) * zoom }}
+      aria-label="전체 Domain KG 트리와 문서군 커버리지">
       {/* Coverage Hull — 트리 가지(L1+리프)를 감싸는 반투명 영역, 라벨은 하단 */}
       {groups.map((g) => {
         const color = dkgColor(g.dkg.id);

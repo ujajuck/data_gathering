@@ -44,6 +44,7 @@ export interface FileRow {
   document_id: string; filename: string; status: string;
   headers: number; coverage_pct: number; review: number;
   drm_status?: string | null; render_status?: string | null; parsing_status?: string | null;
+  author?: string | null; created?: string | null; modified?: string | null;
 }
 
 export interface RawFile {

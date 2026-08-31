@@ -29,7 +29,7 @@ function Shell() {
       <header className="top">
         <div className="brand">
           <b>Semantic Excel Integration</b>
-          <div>Fixed Domain KG · Document KG · Source Location · Custom DB</div>
+          <div>Fixed Domain KG · 문서군 · Source Location · Custom DB</div>
         </div>
         <nav className="steps">
           {STEPS.map(([id, label]) => (

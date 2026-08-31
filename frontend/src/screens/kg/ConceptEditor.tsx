@@ -94,7 +94,7 @@ export default function ConceptEditor({ cid, onCreated, onBack }: Props) {
         <label>설명</label>
         <textarea rows={2} value={form.desc}
           onChange={(e) => setForm({ ...form, desc: e.target.value })} />
-        {sel("레벨", "lvl", ["", "L1", "L2", "L3"], "(L1 = Document KG 축)")}
+        {sel("레벨", "lvl", ["", "L1", "L2", "L3"], "(L1 = 문서군 축)")}
         {sel("데이터 타입", "dt", ["", "numeric", "text", "category", "datetime", "flag"])}
         <label>기준 단위</label>
         <input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />

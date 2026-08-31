@@ -1,4 +1,4 @@
-// Document KG 상세 패널 — 멤버 델타(포함/제외), PARSING TEMPLATES, 추출 레시피
+// 문서군 상세 패널 — 멤버 델타(포함/제외), PARSING TEMPLATES, 추출 레시피
 // (스냅샷/이력/롤백), 재크롤링. web_kg renderDkgDetail 포트.
 import { useState } from "react";
 import { api, post } from "../../lib/api";
@@ -91,9 +91,10 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
 
   return (
     <>
-      <div className="kicker">SELECTED DOCUMENT KG</div>
+      <div className="kicker">SELECTED DOCUMENT GROUP</div>
       <div className="title" style={{ color }}>{g.name}</div>
-      <div className="sub">이 문서군이 커버하는 Domain Node와 소속 문서입니다.</div>
+      <div className="sub">문서군은 공유 양식(템플릿)으로 정의됩니다 — 양식과,
+        그 인스턴스인 소속 문서를 보여줍니다.</div>
       <div className="metricGrid">
         <div className="metric"><span>소속 문서</span><b>{g.member_document_count}</b></div>
         <div className="metric"><span>Domain Node</span><b>{g.domain_node_ids.length}</b></div>
@@ -101,7 +102,33 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
         <div className="metric"><span>값</span><b>{g.value_count.toLocaleString()}</b></div>
       </div>
 
-      <div style={{ marginTop: 13 }} className="kicker">MEMBER DOCUMENTS</div>
+      <div style={{ marginTop: 13 }} className="kicker">TEMPLATES (양식)</div>
+      {(g.parsing_templates || []).length ? (g.parsing_templates || []).map((t) => (
+        <div key={`${t.template_name}-${t.version}`} className="dkgCard"
+          style={{ cursor: "default", borderLeft: "4px solid var(--purple)" }}>
+          <b style={{ color: "var(--purple)" }}>▣ {t.template_name}{" "}
+            <span className="badge blue">v{t.version}</span></b>
+          <div>{t.documents.length}개 문서 · Override 문서 {t.override_documents} ·
+            검토 {t.review_required} · 실패 {t.failed}</div>
+          <div style={{ marginTop: 6 }}>
+            {t.documents.map((d) => (
+              <span className="chip" title={d.status} key={d.filename}>▤ {d.filename}
+                {d.override_count ? <b style={{ color: "var(--amber)" }}> override {d.override_count}</b> : null}
+                {d.status === "REVIEW_REQUIRED" ? <b style={{ color: "var(--amber)" }}> 검토 필요</b> : null}
+              </span>
+            ))}
+          </div>
+        </div>
+      )) : (
+        <div className="sub" style={{ fontSize: 12 }}>
+          배정된 양식(Parsing Template)이 없습니다 — 이 문서군의 문서는 기존
+          KG/레시피 흐름으로 유지됩니다.</div>
+      )}
+      <div className="sub" style={{ fontSize: 11 }}>
+        ▣ 문서군의 1차 연결은 양식입니다 — 아래 문서는 양식의 인스턴스이며,
+        양식 미배정 문서도 멤버십(포함/제외)으로 직접 연결될 수 있습니다.</div>
+
+      <div style={{ marginTop: 13 }} className="kicker">MEMBER DOCUMENTS (인스턴스)</div>
       <div style={{ maxHeight: "24vh", overflowY: "auto" }}>
         {(g.member_documents || []).map((d) => (
           <div key={d.document_id}
@@ -131,30 +158,6 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
       )}
       <div className="sub" style={{ fontSize: 11, marginTop: 4 }}>
         제외/추가는 그룹 소속만 바꿉니다 — 매핑과 빌드 소스는 유지됩니다.</div>
-
-      <div style={{ marginTop: 13 }} className="kicker">PARSING TEMPLATES</div>
-      {(g.parsing_templates || []).length ? (g.parsing_templates || []).map((t) => (
-        <div key={`${t.template_name}-${t.version}`} className="dkgCard"
-          style={{ cursor: "default", borderLeft: "4px solid var(--purple)" }}>
-          <b style={{ color: "var(--purple)" }}>▣ {t.template_name}{" "}
-            <span className="badge blue">v{t.version}</span></b>
-          <div>{t.documents.length}개 문서 · Override 문서 {t.override_documents} ·
-            검토 {t.review_required} · 실패 {t.failed}</div>
-          <div style={{ marginTop: 6 }}>
-            {t.documents.map((d) => (
-              <span className="chip" title={d.status} key={d.filename}>▤ {d.filename}
-                {d.override_count ? <b style={{ color: "var(--amber)" }}> override {d.override_count}</b> : null}
-                {d.status === "REVIEW_REQUIRED" ? <b style={{ color: "var(--amber)" }}> 검토 필요</b> : null}
-              </span>
-            ))}
-          </div>
-        </div>
-      )) : (
-        <div className="sub" style={{ fontSize: 12 }}>
-          배정된 Parsing Template이 없습니다. Document는 기존 KG/레시피 흐름으로 유지됩니다.</div>
-      )}
-      <div className="sub" style={{ fontSize: 11 }}>
-        ▣ Parsing Template은 KG 개념 노드가 아닌 Document 파싱 운영 계층입니다.</div>
 
       <div style={{ marginTop: 13 }} className="kicker">EXTRACTION RECIPE</div>
       {rec ? (
