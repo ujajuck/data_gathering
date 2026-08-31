@@ -666,23 +666,38 @@ def create_app(ws_root: str | Path) -> FastAPI:
     @app.get("/api/parsing/documents/{document_id}/effective-mappings")
     def parsing_effective(document_id: str, document_version: str):
         from kg.parsing import ParsingError, effective_mappings
-        row = store.conn.execute("SELECT document_id FROM document_version WHERE version_id=?",
-                                 (document_version,)).fetchone()
-        if row is None or row["document_id"] != document_id:
-            raise HTTPException(404, "unknown document version")
         try:
             with lock:
+                row = store.conn.execute(
+                    "SELECT document_id FROM document_version WHERE version_id=?",
+                    (document_version,)).fetchone()
+                if row is None or row["document_id"] != document_id:
+                    raise HTTPException(404, "unknown document version")
                 return effective_mappings(store, document_version)
         except ParsingError as exc:
             raise HTTPException(422, str(exc)) from exc
 
     @app.post("/api/parsing/documents/{document_id}/parse")
     def parsing_parse(document_id: str, req: ParsingParseReq):
-        from kg.parsing import ParsingError, run_parse
+        from kg.parsing import (ParsingError, extract_workbook, prepare_parse,
+                                save_parse_run)
         path = _doc_path(document_id)
         try:
+            with lock:
+                assignment, mappings = prepare_parse(store, document_id,
+                                                     req.document_version)
+            # Workbook IO and extraction may be expensive; never hold the
+            # process-wide DB lock while openpyxl walks the workbook.
+            extracted = extract_workbook(path, mappings)
             with wlock():
-                result = run_parse(store, document_id, req.document_version, path)
+                current = store.conn.execute(
+                    "SELECT template_id,template_version FROM document_template_assignment WHERE document_version=?",
+                    (req.document_version,)).fetchone()
+                if current is None or (current["template_id"], current["template_version"]) != \
+                        (assignment["template_id"], assignment["template_version"]):
+                    raise HTTPException(409, "template assignment changed during parsing")
+                result = save_parse_run(store, document_id, req.document_version,
+                                        assignment, extracted)
                 store.commit()
             return result
         except ParsingError as exc:
