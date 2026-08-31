@@ -973,8 +973,9 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 "render_status": "SUCCESS", "render_error": None}
 
     @app.get("/api/viewer/documents/{document_id}/preview")
+    @app.get("/api/viewer/documents/{document_id}/preview")
     def viewer_preview(document_id: str, document_version: str = "", sheet: str | None = None):
-        """DRM 파일: sheet_render 캐시에서 JSON 반환 (PDF 대신)."""
+        """DRM 파일: sheet_render 캐시에서 JSON 반환. CSV: tree_node에서 테이블 생성."""
         with lock:
             # 시트 목록에서 첫 시트 또는 지정 시트
             if not sheet:
@@ -989,7 +990,51 @@ def create_app(ws_root: str | Path) -> FastAPI:
         if row and row["render_json"]:
             import json as _json
             return _json.loads(row["render_json"])
-        raise HTTPException(404, f"no render cache for {sheet}")
+        # CSV 문서: tree_node에서 테이블 생성
+        with lock:
+            sections = store.conn.execute("""
+                SELECT node_id, node_name, tree_path FROM tree_node
+                WHERE document_id=? AND status='ACTIVE' AND node_type='SECTION'
+                  AND tree_path LIKE ?
+                ORDER BY tree_path LIMIT 500
+            """, (document_id, f"%/{sheet}/%")).fetchall()
+            if not sections:
+                raise HTTPException(404, f"no data for {sheet}")
+            cells = []
+            col_map = {}
+            max_col = 0
+            for row_idx, sec in enumerate(sections):
+                children = store.conn.execute("""
+                    SELECT h.node_name as header, v.node_name as value,
+                           json_extract(h.metadata, '$.concept_hint') as concept_hint
+                    FROM tree_node h
+                    LEFT JOIN tree_node v ON v.parent_node_id=h.node_id
+                        AND v.node_type='VALUE' AND v.status='ACTIVE'
+                    WHERE h.parent_node_id=? AND h.node_type='HEADER' AND h.status='ACTIVE'
+                    ORDER BY h.tree_path
+                """, (sec["node_id"],)).fetchall()
+                for child in children:
+                    hdr = child["header"]
+                    if hdr not in col_map:
+                        col_map[hdr] = max_col
+                        cells.append({"r": 0, "c": max_col, "v": hdr, "b": 1,
+                                     "f": "#D9D9D9", "bd": {"t": "1px solid #8d97a5",
+                                     "r": "1px solid #8d97a5", "b": "1px solid #8d97a5",
+                                     "l": "1px solid #8d97a5"}})
+                        max_col += 1
+                    col = col_map[hdr]
+                    val = child["value"] or ""
+                    cell = {"r": row_idx + 1, "c": col, "v": val,
+                           "bd": {"t": "1px solid #ddd", "r": "1px solid #ddd",
+                                  "b": "1px solid #ddd", "l": "1px solid #ddd"}}
+                    if child["concept_hint"]:
+                        cell["concept_hint"] = child["concept_hint"]
+                    cells.append(cell)
+            return {"sheet": sheet, "cells": cells,
+                    "max_row": len(sections) + 1, "max_col": max_col,
+                    "col_widths": {str(c): 120 for c in range(max_col)},
+                    "row_heights": {str(r): 24 for r in range(len(sections) + 1)},
+                    "images": [], "gridlines": True, "source": "csv"}
 
     @app.get("/api/viewer/documents/{document_id}/source")
     def viewer_source(document_id: str, document_version: str, sheet: str,
