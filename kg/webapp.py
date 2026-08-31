@@ -16,7 +16,7 @@ from pathlib import Path
 import json
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -118,6 +118,56 @@ class RelationReq(BaseModel):
     source: str
     target: str
     type: str
+
+
+class ParsingTemplateReq(BaseModel):
+    template_id: str
+    name: str
+    target_document_kg: str | None = None
+    lifecycle: str = "DRAFT"
+
+
+class ParsingVersionReq(BaseModel):
+    spec: dict
+    created_by: str | None = None
+
+
+class ParsingAssignReq(BaseModel):
+    document_version: str
+    template_id: str
+    template_version: int
+
+
+class ParsingOverrideReq(BaseModel):
+    document_version: str
+    template_mapping_id: str
+    override_source: dict
+    reason: str | None = None
+    created_by: str | None = None
+
+
+class ParsingOverridePatchReq(BaseModel):
+    override_source: dict | None = None
+    reason: str | None = None
+    status: str | None = None
+
+
+class ParsingParseReq(BaseModel):
+    document_version: str
+
+
+class ViewerRegisterReq(BaseModel):
+    document_version: str
+    staging_name: str
+
+
+class ViewerRenderReq(BaseModel):
+    document_version: str
+
+
+class ViewerUnlockReq(BaseModel):
+    document_version: str
+    note: str = ""
 
 
 _CID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
@@ -466,6 +516,386 @@ def create_app(ws_root: str | Path) -> FastAPI:
                    WHERE c.status='ACTIVE'
                    GROUP BY c.concept_id ORDER BY sources DESC, c.concept_id""").fetchall()
         return [dict(r) for r in rows]
+
+    # ----------------------------------------------- Parsing Templates ----
+    @app.get("/api/parsing/templates")
+    def parsing_templates():
+        from kg.parsing import template_detail
+        with lock:
+            ids = [r[0] for r in store.conn.execute(
+                "SELECT template_id FROM parsing_template ORDER BY name")]
+            return [template_detail(store, template_id) for template_id in ids]
+
+    @app.post("/api/parsing/templates", status_code=201)
+    def parsing_template_create(req: ParsingTemplateReq):
+        from kg.parsing import ParsingError, create_template
+        if not _CID_RE.fullmatch(req.template_id):
+            raise HTTPException(422, "invalid template_id")
+        try:
+            with wlock():
+                result = create_template(store, req.template_id, req.name,
+                                         req.target_document_kg, req.lifecycle)
+                store.commit()
+            return result
+        except ParsingError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except Exception as exc:
+            if "UNIQUE constraint" in str(exc):
+                raise HTTPException(409, "template already exists") from exc
+            raise
+
+    @app.get("/api/parsing/templates/{template_id}")
+    def parsing_template_get(template_id: str):
+        from kg.parsing import ParsingError, template_detail
+        try:
+            with lock:
+                return template_detail(store, template_id)
+        except ParsingError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/api/parsing/templates/{template_id}/versions", status_code=201)
+    def parsing_version_create(template_id: str, req: ParsingVersionReq):
+        from kg.parsing import ParsingError, add_version
+        try:
+            with wlock():
+                result = add_version(store, template_id, req.spec, req.created_by)
+                store.commit()
+            return result
+        except ParsingError as exc:
+            code = 404 if str(exc) == "unknown template" else 422
+            raise HTTPException(code, str(exc)) from exc
+
+    @app.get("/api/parsing/templates/{template_id}/versions/{version}")
+    def parsing_version_get(template_id: str, version: int):
+        from kg.parsing import ParsingError, version_detail
+        try:
+            with lock:
+                return version_detail(store, template_id, version)
+        except ParsingError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/parsing/templates/{template_id}/versions/{version}/documents")
+    def parsing_version_documents(template_id: str, version: int):
+        with lock:
+            rows = store.conn.execute(
+                """SELECT a.*,d.filename FROM document_template_assignment a
+                     JOIN document d ON d.document_id=a.document_id
+                    WHERE a.template_id=? AND a.template_version=? ORDER BY d.filename""",
+                (template_id, version)).fetchall()
+        return [dict(r) for r in rows]
+
+    @app.post("/api/parsing/documents/{document_id}/assign")
+    def parsing_assign(document_id: str, req: ParsingAssignReq):
+        from kg.parsing import ParsingError, assign
+        try:
+            with wlock():
+                result = assign(store, document_id, req.document_version,
+                                req.template_id, req.template_version)
+                store.commit()
+            return result
+        except ParsingError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/parsing/documents/{document_id}/overrides")
+    def parsing_overrides(document_id: str, document_version: str | None = None):
+        query = "SELECT * FROM document_override WHERE document_id=?"
+        params: list = [document_id]
+        if document_version:
+            query += " AND document_version=?"
+            params.append(document_version)
+        with lock:
+            rows = store.conn.execute(query + " ORDER BY created_at", params).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["override_source"] = json.loads(item.pop("override_source_json"))
+            result.append(item)
+        return result
+
+    @app.post("/api/parsing/documents/{document_id}/overrides", status_code=201)
+    def parsing_override_create(document_id: str, req: ParsingOverrideReq):
+        from kg.parsing import ParsingError, save_override
+        try:
+            with wlock():
+                result = save_override(store, document_id, req.document_version,
+                                       req.template_mapping_id, req.override_source,
+                                       req.reason, req.created_by)
+                store.commit()
+            return result
+        except ParsingError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.patch("/api/parsing/documents/{document_id}/overrides/{override_id}")
+    def parsing_override_patch(document_id: str, override_id: str,
+                               req: ParsingOverridePatchReq):
+        from kg.parsing import ParsingError, override_detail
+        with wlock():
+            old = store.conn.execute(
+                "SELECT * FROM document_override WHERE override_id=? AND document_id=?",
+                (override_id, document_id)).fetchone()
+            if old is None:
+                raise HTTPException(404, "unknown override")
+            if req.status is not None and req.status not in {"APPROVED", "PENDING", "REJECTED"}:
+                raise HTTPException(422, "invalid override status")
+            source = req.override_source or json.loads(old["override_source_json"])
+            if not source.get("range"):
+                raise HTTPException(422, "override_source.range is required")
+            store.conn.execute(
+                """UPDATE document_override SET override_source_json=?,reason=?,status=?,updated_at=?
+                     WHERE override_id=?""",
+                (json.dumps(source, ensure_ascii=False),
+                 req.reason if req.reason is not None else old["reason"],
+                 req.status or old["status"], now_iso(), override_id))
+            store.commit()
+            try:
+                return override_detail(store, override_id)
+            except ParsingError as exc:  # defensive: row existed in same transaction
+                raise HTTPException(404, str(exc)) from exc
+
+    @app.delete("/api/parsing/documents/{document_id}/overrides/{override_id}")
+    def parsing_override_delete(document_id: str, override_id: str):
+        with wlock():
+            cur = store.conn.execute(
+                "DELETE FROM document_override WHERE override_id=? AND document_id=?",
+                (override_id, document_id))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "unknown override")
+            store.commit()
+        return {"ok": True}
+
+    @app.get("/api/parsing/documents/{document_id}/effective-mappings")
+    def parsing_effective(document_id: str, document_version: str):
+        from kg.parsing import ParsingError, effective_mappings
+        try:
+            with lock:
+                row = store.conn.execute(
+                    "SELECT document_id FROM document_version WHERE version_id=?",
+                    (document_version,)).fetchone()
+                if row is None or row["document_id"] != document_id:
+                    raise HTTPException(404, "unknown document version")
+                return effective_mappings(store, document_version)
+        except ParsingError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/parsing/documents/{document_id}/parse")
+    def parsing_parse(document_id: str, req: ParsingParseReq):
+        from kg.parsing import (ParsingError, extract_workbook, prepare_parse,
+                                save_parse_run)
+        path = _doc_path(document_id)
+        try:
+            with lock:
+                assignment, mappings = prepare_parse(store, document_id,
+                                                     req.document_version)
+            # Workbook IO and extraction may be expensive; never hold the
+            # process-wide DB lock while openpyxl walks the workbook.
+            extracted = extract_workbook(path, mappings)
+            with wlock():
+                current = store.conn.execute(
+                    "SELECT template_id,template_version FROM document_template_assignment WHERE document_version=?",
+                    (req.document_version,)).fetchone()
+                if current is None or (current["template_id"], current["template_version"]) != \
+                        (assignment["template_id"], assignment["template_version"]):
+                    raise HTTPException(409, "template assignment changed during parsing")
+                result = save_parse_run(store, document_id, req.document_version,
+                                        assignment, extracted)
+                store.commit()
+            return result
+        except ParsingError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/parsing/documents/{document_id}/result")
+    def parsing_result(document_id: str, parse_run_id: str | None = None):
+        from kg.parsing import ParsingError, parse_result
+        with lock:
+            rid = parse_run_id
+            if rid is None:
+                row = store.conn.execute(
+                    "SELECT parse_run_id FROM parse_run WHERE document_id=? ORDER BY started_at DESC LIMIT 1",
+                    (document_id,)).fetchone()
+                rid = row[0] if row else None
+            if rid is None:
+                raise HTTPException(404, "no parse result")
+            try:
+                result = parse_result(store, rid)
+            except ParsingError as exc:
+                raise HTTPException(404, str(exc)) from exc
+        if result["document_id"] != document_id:
+            raise HTTPException(404, "unknown parse run")
+        return result
+
+    @app.get("/api/parsing/document-kg/{dkg_id}/groups")
+    def parsing_document_kg_groups(dkg_id: str):
+        from kg.parsing import grouped_documents
+        with lock:
+            return grouped_documents(store, dkg_id)
+
+    # --------------------------------------------------- Read-only Viewer ----
+    # Filesystem paths are deliberately never included in these responses.
+    @app.get("/api/documents/{document_id}/drm-status")
+    def viewer_drm_status(document_id: str, document_version: str | None = None):
+        with lock:
+            version = document_version
+            if version is None:
+                doc = store.conn.execute(
+                    "SELECT current_version,filename FROM document WHERE document_id=?",
+                    (document_id,)).fetchone()
+                if doc is None:
+                    raise HTTPException(404, "unknown document")
+                version = doc["current_version"]
+            row = store.conn.execute(
+                """SELECT drm_status,drm_error FROM viewer_document_version
+                   WHERE document_id=? AND document_version=?""",
+                (document_id, version)).fetchone()
+            if row:
+                return {"document_id": document_id, "document_version": version,
+                        "drm_status": row["drm_status"], "error": row["drm_error"]}
+            doc = store.conn.execute(
+                "SELECT filename FROM document WHERE document_id=?", (document_id,)).fetchone()
+            request = request_row(store, doc["filename"]) if doc else None
+        if doc is None:
+            raise HTTPException(404, "unknown document")
+        state = "UNLOCKING" if request and request["status"] == "REQUESTED" else "PROTECTED"
+        return {"document_id": document_id, "document_version": version,
+                "drm_status": state, "error": None}
+
+    @app.post("/api/documents/{document_id}/drm-unlock", status_code=202)
+    def viewer_request_unlock(document_id: str, req: ViewerUnlockReq):
+        """Submit to the existing authorized unlock-request workflow only."""
+        with wlock():
+            doc = store.conn.execute(
+                """SELECT d.filename FROM document d JOIN document_version v
+                     ON v.document_id=d.document_id
+                    WHERE d.document_id=? AND v.version_id=?""",
+                (document_id, req.document_version)).fetchone()
+            if doc is None:
+                raise HTTPException(404, "unknown document version")
+            try:
+                request = create_request(store, root / "data" / "raw",
+                                         doc["filename"], req.note)
+            except (FileNotFoundError, ValueError) as exc:
+                raise HTTPException(422, str(exc)) from exc
+            store.conn.execute(
+                """INSERT INTO viewer_document_version
+                     (document_id,document_version,sha256,unlocked_path,drm_status,
+                      drm_error,render_status,render_error,sheet_count,registered_at,rendered_at)
+                   VALUES (?,?,NULL,NULL,'UNLOCKING',NULL,'PENDING',NULL,NULL,?,NULL)
+                   ON CONFLICT(document_id,document_version) DO UPDATE SET
+                     drm_status='UNLOCKING',drm_error=NULL""",
+                (document_id, req.document_version, now_iso()))
+            store.commit()
+        return {"document_id": document_id, "document_version": req.document_version,
+                "drm_status": "UNLOCKING", "request_id": request["request_id"]}
+
+    @app.post("/api/viewer/documents/{document_id}/register-unlocked", status_code=201)
+    def viewer_register(document_id: str, req: ViewerRegisterReq):
+        """Register output from an authorized external DRM service.
+
+        This endpoint performs no unlock/decryption. It accepts only a basename
+        already delivered into the configured staging directory.
+        """
+        from kg.viewer import ViewerError, mark_validation_failed, register_unlocked
+        if Path(req.staging_name).name != req.staging_name or not req.staging_name:
+            raise HTTPException(422, "invalid staging filename")
+        try:
+            with wlock():
+                result = register_unlocked(
+                    store, document_id, req.document_version,
+                    root / "data" / "unlocked-staging" / req.staging_name,
+                    root / "data" / "unlocked-staging", root / "data" / "unlocked")
+                store.commit()
+            return result
+        except ViewerError as exc:
+            with wlock():
+                mark_validation_failed(store, document_id, req.document_version, str(exc))
+                store.commit()
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/viewer/documents/{document_id}/versions/{document_version}")
+    def viewer_document(document_id: str, document_version: str):
+        from kg.viewer import ViewerError, document_metadata
+        try:
+            with lock:
+                return document_metadata(store, document_id, document_version)
+        except ViewerError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/viewer/documents/{document_id}/sheets")
+    def viewer_sheets(document_id: str, document_version: str,
+                      include_hidden: bool = True):
+        from kg.viewer import ViewerError, sheets
+        try:
+            with lock:
+                return sheets(store, document_id, document_version, include_hidden)
+        except ViewerError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/api/viewer/documents/{document_id}/render")
+    def viewer_render(document_id: str, req: ViewerRenderReq):
+        from kg.viewer import (ViewerError, execute_render, finalize_render,
+                               mark_render_failed, prepare_render)
+        cache_root = root / "data" / "viewer-cache"
+        try:
+            with wlock():
+                prep = prepare_render(store, document_id, req.document_version,
+                                      cache_root)
+                store.commit()
+        except ViewerError as exc:
+            # Validation failure (not registered / DRM_NOT_READY): nothing ran.
+            raise HTTPException(503, str(exc)) from exc
+        if prep["cached"]:
+            return {"status": "SUCCESS", "cached": True}
+        try:
+            # The LibreOffice subprocess can take up to two minutes — it must
+            # never run while holding the process-wide DB lock.
+            execute_render(prep)
+        except ViewerError as exc:
+            # Render failure is persisted independently; parsing/KG is untouched.
+            with wlock():
+                mark_render_failed(store, document_id, req.document_version, str(exc))
+                store.commit()
+            raise HTTPException(503, str(exc)) from exc
+        with wlock():
+            finalize_render(store, document_id, req.document_version, prep)
+            store.commit()
+        return {"status": "SUCCESS"}
+
+    @app.get("/api/viewer/documents/{document_id}/render-status")
+    def viewer_render_status(document_id: str, document_version: str):
+        from kg.viewer import ViewerError, document_metadata
+        try:
+            with lock:
+                metadata = document_metadata(store, document_id, document_version)
+            return {key: metadata[key] for key in
+                    ("document_id", "document_version", "render_status", "render_error")}
+        except ViewerError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/viewer/documents/{document_id}/preview")
+    def viewer_preview(document_id: str, document_version: str):
+        from kg.viewer import ViewerError, cache_paths, document_metadata
+        try:
+            with lock:
+                metadata = document_metadata(store, document_id, document_version)
+            if metadata["drm_status"] != "READY":
+                raise ViewerError("DRM_NOT_READY")
+            pdf, _, _ = cache_paths(root / "data" / "viewer-cache", metadata["sha256"])
+            if metadata["render_status"] != "SUCCESS" or not pdf.is_file():
+                raise ViewerError("PREVIEW_NOT_READY")
+            return FileResponse(pdf, media_type="application/pdf",
+                                filename=f"{document_id}-{document_version}.pdf")
+        except ViewerError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/api/viewer/documents/{document_id}/source")
+    def viewer_source(document_id: str, document_version: str, sheet: str,
+                      a1_range: str, concept_id: str | None = None):
+        from kg.viewer import ViewerError, source_locator
+        try:
+            with lock:
+                return source_locator(store, document_id, document_version,
+                                      sheet, a1_range, concept_id)
+        except ViewerError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @app.get("/api/search")
     def search(concept: str):
