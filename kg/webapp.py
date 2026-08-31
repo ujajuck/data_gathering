@@ -1018,14 +1018,23 @@ def create_app(ws_root: str | Path) -> FastAPI:
         if row and row["render_json"]:
             import json as _json
             return _json.loads(row["render_json"])
-        # CSV 문서: tree_node에서 테이블 생성
+        # 캐시 없음: tree_node에서 테이블 생성 (CSV SECTION 또는 DRM TABLE)
         with lock:
+            # SECTION 기반 (CSV)
             sections = store.conn.execute("""
                 SELECT node_id, node_name, tree_path FROM tree_node
                 WHERE document_id=? AND status='ACTIVE' AND node_type='SECTION'
                   AND tree_path LIKE ?
                 ORDER BY tree_path LIMIT 500
             """, (document_id, f"%/{sheet}/%")).fetchall()
+            # TABLE 기반 (DRM 체크시트)
+            if not sections:
+                sections = store.conn.execute("""
+                    SELECT node_id, node_name, tree_path FROM tree_node
+                    WHERE document_id=? AND status='ACTIVE' AND node_type='TABLE'
+                      AND tree_path LIKE ?
+                    ORDER BY tree_path LIMIT 500
+                """, (document_id, f"%/{sheet}/%")).fetchall()
             if not sections:
                 raise HTTPException(404, f"no data for {sheet}")
             cells = []
@@ -1062,7 +1071,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
                     "max_row": len(sections) + 1, "max_col": max_col,
                     "col_widths": {str(c): 120 for c in range(max_col)},
                     "row_heights": {str(r): 24 for r in range(len(sections) + 1)},
-                    "images": [], "gridlines": True, "source": "csv"}
+                    "images": [], "gridlines": True, "source": "tree_node"}
 
     @app.get("/api/viewer/documents/{document_id}/source")
     def viewer_source(document_id: str, document_version: str, sheet: str,

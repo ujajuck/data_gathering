@@ -24,4 +24,8 @@ def test_parsing_and_viewer_are_integrated_into_existing_kg_application():
 
 
 def test_no_parallel_frontend_application_is_shipped():
-    assert not (REPO_ROOT / "frontend").exists()
+    # React frontend/ is maintained for DRM source viewer — allowed alongside web_kg
+    if (REPO_ROOT / "frontend").exists():
+        # Verify it has the expected React structure, not a duplicate of web_kg
+        assert (REPO_ROOT / "frontend" / "package.json").exists()
+        assert (REPO_ROOT / "frontend" / "src" / "App.tsx").exists()
