@@ -602,6 +602,15 @@ def create_app(ws_root: str | Path) -> FastAPI:
         with lock:
             rows = store.conn.execute(
                 """SELECT d.document_id, d.filename,
+                     (SELECT drm_status FROM viewer_document_version v
+                       WHERE v.document_id=d.document_id
+                         AND v.document_version=d.current_version) drm_status,
+                     (SELECT render_status FROM viewer_document_version v
+                       WHERE v.document_id=d.document_id
+                         AND v.document_version=d.current_version) render_status,
+                     (SELECT a.status FROM document_template_assignment a
+                       WHERE a.document_id=d.document_id
+                         AND a.document_version=d.current_version) parsing_status,
                           count(DISTINCT n.node_id) nodes
                    FROM document d
                    LEFT JOIN tree_node n ON n.document_id=d.document_id
@@ -965,6 +974,25 @@ def create_app(ws_root: str | Path) -> FastAPI:
     @app.post("/api/viewer/documents/{document_id}/render")
     def viewer_render(document_id: str, req: ViewerRenderReq):
         # DRM 파일은 이미 sheet_render에 캐시됨 → 항상 SUCCESS
+        # 비DRM은 render_preview 시도 (LibreOffice)
+        doc_row = store.conn.execute(
+            "SELECT filepath FROM document WHERE document_id=?", (document_id,)).fetchone()
+        if doc_row and doc_row['filepath'] and not _is_drm_file(Path(doc_row['filepath'])):
+            from kg.viewer import ViewerError, render_preview
+            try:
+                with wlock():
+                    render_preview(store, document_id, req.document_version,
+                                   root / "data" / "viewer-cache")
+                    store.commit()
+                return {"status": "SUCCESS"}
+            except ViewerError as exc:
+                with wlock():
+                    store.conn.execute(
+                        """UPDATE viewer_document_version SET render_status='FAILED',render_error=?
+                           WHERE document_id=? AND document_version=?""",
+                        (str(exc)[:1000], document_id, req.document_version))
+                    store.commit()
+                raise HTTPException(503, str(exc)) from exc
         return {"status": "SUCCESS", "cached": True}
 
     @app.get("/api/viewer/documents/{document_id}/render-status")
@@ -1161,7 +1189,19 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 render_cache[key] = _render_sheet_drm(path, name)
             else:
                 render_cache[key] = _render_sheet(path, name)
-        return {"document_id": doc, **render_cache[key]}
+        with lock:
+            meta = store.conn.execute(
+                """SELECT d.current_version,v.drm_status,v.render_status
+                     FROM document d LEFT JOIN viewer_document_version v
+                       ON v.document_id=d.document_id
+                      AND v.document_version=d.current_version
+                    WHERE d.document_id=?""", (doc,)).fetchone()
+        return {"document_id": doc,
+                "document_version": meta["current_version"] if meta else None,
+                "viewer": ({"drm_status": meta["drm_status"],
+                            "render_status": meta["render_status"]} if meta and
+                           meta["drm_status"] else None),
+                **render_cache[key]}
 
     # ---------------------------------------------- KG View Models (§8 v3) ----
     # DKG 파생은 kg/groups.py로 이관 — 사람 델타(INCLUDED/EXCLUDED) 반영 포함.
@@ -1169,7 +1209,8 @@ def create_app(ws_root: str | Path) -> FastAPI:
         return document_kgs(store)
 
     def _attach_group_meta(g: dict) -> dict:
-        """DKG에 활성 레시피 요약 + 최근 재크롤링 상태를 붙인다 (lock 안 호출)."""
+        """DKG에 레시피, Parsing Template, 최근 실행 상태를 붙인다."""
+        from kg.parsing import grouped_documents
         rec = active_recipe(store, g["id"])
         if rec is not None:
             spec = json.loads(rec["spec_json"])
@@ -1191,6 +1232,9 @@ def create_app(ws_root: str | Path) -> FastAPI:
             "FROM recrawl_run WHERE root_concept_id=? "
             "ORDER BY started_at DESC LIMIT 1", (g["id"],)).fetchone()
         g["last_recrawl"] = dict(run) if run else None
+        # Parsing Template is an operational layer below Document KG, not a KG
+        # node. Keep the established graph view and expose it as grouped detail.
+        g["parsing_templates"] = grouped_documents(store, g["id"])
         return g
 
     @app.get("/api/kg/domain")
@@ -1268,6 +1312,9 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 "sheets": r["sheets"] or 0, "headers": headers,
                 "coverage_pct": round(100 * mapped / headers, 1) if headers else 0,
                 "review": review, "status": status})
+            out[-1].update({"drm_status": r["drm_status"] or "PROTECTED",
+                            "render_status": r["render_status"],
+                            "parsing_status": r["parsing_status"]})
         return out
 
     @app.get("/api/overlay")
@@ -1327,12 +1374,44 @@ def create_app(ws_root: str | Path) -> FastAPI:
                    WHERE p.tree_node_id=? AND p.is_current=1
                    ORDER BY pv.row_idx LIMIT 8""", (node_id,)).fetchall()
             doc = store.conn.execute(
-                "SELECT filename FROM document WHERE document_id=?",
+                "SELECT filename,current_version FROM document WHERE document_id=?",
                 (n["document_id"],)).fetchone()
+            viewer = store.conn.execute(
+                """SELECT drm_status,render_status,render_error,sha256
+                     FROM viewer_document_version
+                    WHERE document_id=? AND document_version=?""",
+                (n["document_id"], doc["current_version"] if doc else None)).fetchone()
+            assignment = store.conn.execute(
+                """SELECT a.template_id,a.template_version,a.status,t.name template_name
+                     FROM document_template_assignment a JOIN parsing_template t
+                       ON t.template_id=a.template_id
+                    WHERE a.document_id=? AND a.document_version=?""",
+                (n["document_id"], doc["current_version"] if doc else None)).fetchone()
+            parsing_source = None
+            if assignment:
+                from kg.parsing import effective_mappings
+                node_range = (n["locator"] or "").rsplit("!", 1)[-1]
+                node_sheet = (n["locator"] or "").rsplit("!", 1)[0]
+                candidates = effective_mappings(store, doc["current_version"])
+                match = next((x for x in candidates
+                              if (not m or not m["concept_id"] or
+                                  x["concept_id"] == m["concept_id"])
+                              and x["effective_source"].get("range") == node_range
+                              and x["effective_source"].get("sheet", node_sheet) == node_sheet), None)
+                if match:
+                    parsing_source = {
+                        "mapping_key": match["mapping_key"],
+                        "mapping_source": match["mapping_source"],
+                        "template_source": match["template_source"],
+                        "effective_source": match["effective_source"],
+                        "override_status": match.get("override_status"),
+                        "override_reason": match.get("override_reason"),
+                    }
         parts = (n["tree_path"] or "").split("/")
         return {
             "node_id": node_id, "header": n["node_name"],
             "document_id": n["document_id"],
+            "document_version": doc["current_version"] if doc else None,
             "document": doc["filename"] if doc else "",
             "sheet": parts[1] if len(parts) > 1 else "",
             "range": (n["locator"] or "").rsplit("!", 1)[-1],
@@ -1346,6 +1425,9 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 "reason": (ev["reason"] if ev else None),
             } if m else None,
             "concept_name": concept["canonical_name"] if concept else None,
+            "viewer": dict(viewer) if viewer else None,
+            "parsing_template": dict(assignment) if assignment else None,
+            "parsing_source": parsing_source,
             "candidates": json.loads(ev["candidates_json"])[:5] if ev else [],
             "row_context": {
                 "keys": [h for h in (meta.get("adjacent_headers") or [])][:4],
