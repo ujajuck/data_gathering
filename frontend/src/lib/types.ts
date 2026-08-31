@@ -85,7 +85,11 @@ export interface SheetData {
   cols: number[]; rows: number[]; max_row: number; max_col: number;
   gridlines?: boolean; truncated?: boolean;
   images?: { src: string; x: number; y: number; w: number; h: number }[];
-  shapes?: { text?: string; left?: number; top?: number; width?: number; height?: number }[];
+  shapes?: {
+    text?: string;
+    x?: number; y?: number; w?: number; h?: number;              // 앵커 px (openpyxl 경로)
+    left?: number; top?: number; width?: number; height?: number; // points (COM 경로)
+  }[];
   viewer?: { drm_status: string; render_status?: string } | null;
   document_version?: string | null;
 }

@@ -366,6 +366,131 @@ def _render_sheet_drm(path: Path, sheet_name: str | None) -> dict:
             pass
 
 
+_XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+_DML = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_PKG_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
+_DOC_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_SSML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+
+def _sheet_textboxes(path: Path, sheet_name: str,
+                     cum_x: list[float], cum_y: list[float],
+                     max_r: int, max_c: int) -> list[dict]:
+    """xlsx 드로잉 XML에서 텍스트박스/도형 텍스트를 앵커 px 좌표로 추출한다.
+
+    openpyxl은 도형(xdr:sp)을 노출하지 않으므로 zip에서 드로잉 XML을 직접
+    읽는다. 좌표는 이미지와 같은 방식(누적 열폭/행높이 + EMU 오프셋)으로
+    환산해 원본 위치 그대로 그리드 위에 겹칠 수 있게 한다.
+    """
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    def rels_map(zf: zipfile.ZipFile, rels_path: str) -> dict[str, str]:
+        try:
+            root = ET.fromstring(zf.read(rels_path))
+        except (KeyError, ET.ParseError):
+            return {}
+        return {rel.get("Id"): rel.get("Target", "")
+                for rel in root.findall(f"{{{_PKG_REL}}}Relationship")}
+
+    def resolve(base_dir: str, target: str) -> str:
+        if target.startswith("/"):
+            return target.lstrip("/")
+        parts: list[str] = base_dir.split("/") if base_dir else []
+        for seg in target.split("/"):
+            if seg == "..":
+                if parts:
+                    parts.pop()
+            elif seg not in ("", "."):
+                parts.append(seg)
+        return "/".join(parts)
+
+    boxes: list[dict] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            # 시트 이름 → 워크시트 파트 경로 (workbook.xml + rels)
+            wb_root = ET.fromstring(zf.read("xl/workbook.xml"))
+            wb_rels = rels_map(zf, "xl/_rels/workbook.xml.rels")
+            ws_part = None
+            for sh in wb_root.findall(f"{{{_SSML}}}sheets/{{{_SSML}}}sheet"):
+                if sh.get("name") == sheet_name:
+                    ws_part = resolve("xl", wb_rels.get(
+                        sh.get(f"{{{_DOC_REL}}}id", ""), ""))
+                    break
+            if not ws_part:
+                return []
+            # 워크시트 → 드로잉 파트
+            ws_dir, ws_file = ws_part.rsplit("/", 1)
+            ws_rels = rels_map(zf, f"{ws_dir}/_rels/{ws_file}.rels")
+            ws_root = ET.fromstring(zf.read(ws_part))
+            drawing_parts = []
+            for dr in ws_root.findall(f"{{{_SSML}}}drawing"):
+                target = ws_rels.get(dr.get(f"{{{_DOC_REL}}}id", ""), "")
+                if target:
+                    drawing_parts.append(resolve(ws_dir, target))
+            emu = _EMU_PX
+
+            def marker_px(m) -> tuple[float, float]:
+                col = int(m.findtext(f"{{{_XDR}}}col", "0"))
+                row = int(m.findtext(f"{{{_XDR}}}row", "0"))
+                coff = int(m.findtext(f"{{{_XDR}}}colOff", "0"))
+                roff = int(m.findtext(f"{{{_XDR}}}rowOff", "0"))
+                return (cum_x[min(col, max_c)] + coff / emu,
+                        cum_y[min(row, max_r)] + roff / emu)
+
+            for part in drawing_parts:
+                try:
+                    droot = ET.fromstring(zf.read(part))
+                except (KeyError, ET.ParseError):
+                    continue
+                for anchor in droot:
+                    kind = anchor.tag.rsplit("}", 1)[-1]
+                    if kind not in ("twoCellAnchor", "oneCellAnchor",
+                                    "absoluteAnchor"):
+                        continue
+                    sp = anchor.find(f"{{{_XDR}}}sp")
+                    if sp is None:
+                        continue
+                    tx = sp.find(f"{{{_XDR}}}txBody")
+                    if tx is None:
+                        continue
+                    text = "\n".join(
+                        "".join(t.text or ""
+                                for t in p.findall(f".//{{{_DML}}}t"))
+                        for p in tx.findall(f"{{{_DML}}}p"))
+                    if not text.strip():
+                        continue
+                    frm = anchor.find(f"{{{_XDR}}}from")
+                    to = anchor.find(f"{{{_XDR}}}to")
+                    ext = anchor.find(f"{{{_XDR}}}ext")
+                    pos = anchor.find(f"{{{_XDR}}}pos")
+                    if frm is not None:
+                        x, y = marker_px(frm)
+                    elif pos is not None:
+                        x = int(pos.get("x", "0")) / emu
+                        y = int(pos.get("y", "0")) / emu
+                    else:
+                        continue
+                    if to is not None:
+                        x2, y2 = marker_px(to)
+                        w, h = x2 - x, y2 - y
+                    elif ext is not None:
+                        w = int(ext.get("cx", "0")) / emu
+                        h = int(ext.get("cy", "0")) / emu
+                    else:
+                        w, h = 160, 40
+                    if w <= 4 or h <= 4:
+                        continue
+                    boxes.append({"text": text[:4000], "x": round(x),
+                                  "y": round(y), "w": round(w),
+                                  "h": round(h)})
+                    if len(boxes) >= 60:
+                        return boxes
+    except Exception:
+        return boxes           # 드로잉이 없거나 비정형 — 셀 렌더는 그대로 진행
+    return boxes
+
+
 def _render_sheet(path: Path, sheet_name: str | None) -> dict:
     import base64
 
@@ -491,6 +616,7 @@ def _render_sheet(path: Path, sheet_name: str | None) -> dict:
 
     return {"sheet": target, "sheets": names, "max_row": max_r, "max_col": max_c,
             "cols": col_px, "rows": row_px, "cells": cells, "images": images,
+            "shapes": _sheet_textboxes(path, target, cum_x, cum_y, max_r, max_c),
             "gridlines": bool(ws.sheet_view.showGridLines),
             "truncated": (ws.max_row or 1) > _SHEET_CAP_ROWS or
                          (ws.max_column or 1) > _SHEET_CAP_COLS}

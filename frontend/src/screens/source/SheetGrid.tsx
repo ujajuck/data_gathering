@@ -90,7 +90,10 @@ export default function SheetGrid({ data, overlay, focusNode, onCellClick }: Pro
 
   return (
     <div ref={wrapRef} style={{ position: "relative", display: "inline-block" }}>
-      <table className="grid" style={{ tableLayout: "fixed", borderCollapse: "collapse" }}>
+      {/* 명시 너비 필수 — width:auto면 fixed 레이아웃이 auto로 폴백해
+          긴 nowrap 텍스트가 열을 밀어내고 이미지/도형/Overlay 정합이 깨진다 */}
+      <table className="grid" style={{ tableLayout: "fixed", borderCollapse: "collapse",
+        width: HDRW + data.cols.reduce((a, b) => a + b, 0) }}>
         <colgroup>
           <col style={{ width: HDRW }} />
           {data.cols.map((w, i) => <col key={i} style={{ width: w }} />)}
@@ -119,17 +122,25 @@ export default function SheetGrid({ data, overlay, focusNode, onCellClick }: Pro
           left: HDRW + im.x, top: HDRH + im.y, width: im.w, height: im.h,
           boxShadow: "0 1px 4px rgba(20,30,50,.18)", pointerEvents: "none" }} />
       ))}
-      {/* Shape/TextBox 오버레이 — DRM 파일의 텍스트박스 표시 */}
-      {(data.shapes || []).map((sh, i) => (
-        <div key={i} style={{ position: "absolute",
-          left: HDRW + (sh.left || 0) / 7, top: HDRH + (sh.top || 0) / 1.33,
-          width: (sh.width || 100) / 7, height: (sh.height || 30) / 1.33,
-          fontSize: 11, whiteSpace: "pre-wrap", overflow: "hidden",
-          background: "rgba(255,255,230,.85)", border: "1px solid #ccc", borderRadius: 2,
-          padding: "2px 4px", pointerEvents: "none", zIndex: 2 }}>
-          {sh.text || ""}
-        </div>
-      ))}
+      {/* Shape/TextBox 오버레이 — 원본 앵커 위치 그대로 겹친다.
+          서버가 준 앵커 px 좌표(x/y/w/h)를 우선 쓰고, COM 렌더(points 단위
+          left/top/width/height)만 있으면 96/72로 환산한다. */}
+      {(data.shapes || []).map((sh, i) => {
+        const x = sh.x ?? ((sh.left || 0) * 4) / 3;
+        const y = sh.y ?? ((sh.top || 0) * 4) / 3;
+        const w = sh.w ?? ((sh.width || 100) * 4) / 3;
+        const h = sh.h ?? ((sh.height || 30) * 4) / 3;
+        return (
+          <div key={i} style={{ position: "absolute",
+            left: HDRW + x, top: HDRH + y, width: w, height: h,
+            fontSize: 11, whiteSpace: "pre-wrap", overflow: "hidden",
+            background: "rgba(255,255,230,.85)", border: "1px solid #ccc", borderRadius: 2,
+            padding: "2px 4px", pointerEvents: "none", zIndex: 2,
+            boxSizing: "border-box" }}>
+            {sh.text || ""}
+          </div>
+        );
+      })}
     </div>
   );
 }
