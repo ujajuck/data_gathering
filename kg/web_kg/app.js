@@ -38,12 +38,19 @@ async function reloadKg() {
 }
 
 function pollRecrawl(runId, onUpdate) {
-  return api(`/api/recrawl/${encodeURIComponent(runId)}`).then((r) => {
-    onUpdate(r);
-    if (r.status === 'RUNNING')
-      setTimeout(() => pollRecrawl(runId, onUpdate).catch(() => {}), 2000);
-    return r;
-  });
+  let fails = 0;
+  const tick = () => api(`/api/recrawl/${encodeURIComponent(runId)}`)
+    .then((r) => {
+      fails = 0;
+      onUpdate(r);
+      if (r.status === 'RUNNING') setTimeout(tick, 2000);
+    })
+    .catch(() => {
+      // 일시 오류로 체인이 조용히 끊기지 않게 — 연속 5회 실패 시 중단 통보
+      if (++fails <= 5) setTimeout(tick, 3000);
+      else onUpdate({ status: 'POLL_LOST', summary: [] });
+    });
+  tick();
 }
 
 // -------------------------------------------------- 통합 초안 (Selection Basket)
@@ -110,6 +117,12 @@ async function loadRawFiles() {
                              ...Object.keys(state.rawInfo)])].sort();
   const byName = Object.fromEntries(state.raw.map((f) => [f.filename, f]));
   state.drmText = state.drmText || {};
+  state.rawBusy = state.rawBusy || {};      // 분석/등록 진행 중 재클릭 방지
+  // 전체 재렌더로 다른 행의 사유 입력값이 날아가지 않게 보존한다
+  const savedNotes = {};
+  $('#rawRows').querySelectorAll('[data-notein]').forEach((i) => {
+    if (i.value) savedNotes[i.dataset.notein] = i.value;
+  });
   $('#rawPanel').style.display = names.length ? '' : 'none';
   $('#rawRows').innerHTML = names.map((fn) => {
     const f = byName[fn] || {};
@@ -152,17 +165,22 @@ async function loadRawFiles() {
       inner = `<div style="margin-top:6px;font-size:12px">${(info.suggestions || []).length
         ? '같은 형식으로 보이는 Document KG — 선택하면 레시피로 매핑을 이식합니다:'
         : '비슷한 형식의 Document KG가 없습니다.'}<br>${chips}</div>
-        <button class="primary" style="margin-top:7px" data-reg="${esc(fn)}">
+        <button class="primary" style="margin-top:7px" data-reg="${esc(fn)}"
+          ${state.rawBusy[fn] ? 'disabled' : ''}>
           ${info.picked ? '선택한 DKG로 등록' : '등록 (자동 판정)'}</button>`;
     } else {
       if (f.drm && f.drm.status === 'RELEASED')
         badge = ' <span class="badge green">✓ 해제본 도착 — 등록 가능</span>';
       inner = `<div><button class="secondary" style="margin-top:5px"
-        data-an="${esc(fn)}">분석 · DKG 제안</button></div>`;
+        data-an="${esc(fn)}" ${state.rawBusy[fn] ? 'disabled' : ''}>분석 · DKG 제안</button></div>`;
     }
     return `<div class="fileRow" style="cursor:default"><b>${esc(fn)}</b>${badge}${inner}
       <div class="status" data-st="${esc(fn)}"></div></div>`;
   }).join('');
+  Object.entries(savedNotes).forEach(([fn, v]) => {   // 사유 입력값 복원
+    const i = $('#rawRows').querySelector(`[data-notein="${CSS.escape(fn)}"]`);
+    if (i) i.value = v;
+  });
   // DRM 요청/재발급/복사
   const drmPost = async (fn, note) => {
     const r = await post('/api/drm/request', { filename: fn, note });
@@ -183,7 +201,12 @@ async function loadRawFiles() {
   $('#rawRows').querySelectorAll('[data-drmtext]').forEach((b) => b.onclick = async () => {
     b.disabled = true;
     try { await drmPost(b.dataset.drmtext, b.dataset.note || ''); }
-    catch (e) { b.disabled = false; }
+    catch (e) {
+      const st1 = $('#rawRows').querySelector(
+        `[data-st="${CSS.escape(b.dataset.drmtext)}"]`);
+      if (st1) st1.textContent = `재발급 실패: ${e.message}`;
+      b.disabled = false;
+    }
   });
   $('#rawRows').querySelectorAll('[data-copy]').forEach((b) => b.onclick = async () => {
     try {
@@ -202,16 +225,24 @@ async function loadRawFiles() {
   });
   const st = (fn) => $('#rawRows').querySelector(`[data-st="${CSS.escape(fn)}"]`);
   $('#rawRows').querySelectorAll('[data-an]').forEach((b) => b.onclick = async () => {
+    const fn = b.dataset.an;
+    if (state.rawBusy[fn]) return;
+    state.rawBusy[fn] = true;              // 재렌더돼도 disabled 유지 (중복 분석 방지)
     b.disabled = true;
-    st(b.dataset.an).textContent = '구조 분석 중…';
+    st(fn).textContent = '구조 분석 중…';
     try {
-      const r = await post('/api/ingest', { filename: b.dataset.an, map: false });
+      const r = await post('/api/ingest', { filename: fn, map: false });
       const sugg = r.suggestions || [];
-      state.rawInfo[b.dataset.an] = {
+      state.rawInfo[fn] = {
         document_id: r.document_id, suggestions: sugg,
         picked: sugg.length ? sugg[0].root_concept_id : '' };
+      delete state.rawBusy[fn];
       loadRawFiles();
-    } catch (e) { st(b.dataset.an).textContent = e.message; b.disabled = false; }
+    } catch (e) {
+      delete state.rawBusy[fn];
+      st(fn).textContent = e.message;
+      b.disabled = false;
+    }
   });
   $('#rawRows').querySelectorAll('.chip.pick').forEach((c) => c.onclick = () => {
     state.rawInfo[c.dataset.fn].picked = c.dataset.g;
@@ -220,6 +251,8 @@ async function loadRawFiles() {
   $('#rawRows').querySelectorAll('[data-reg]').forEach((b) => b.onclick = async () => {
     const fn = b.dataset.reg;
     const info = state.rawInfo[fn];
+    if (state.rawBusy[fn]) return;
+    state.rawBusy[fn] = true;
     b.disabled = true;
     st(fn).textContent = '등록 중… (레시피 적용 + 자동 판정)';
     try {
@@ -237,10 +270,15 @@ async function loadRawFiles() {
         (r.map.REVIEW_REQUIRED ? ` (검토 ${r.map.REVIEW_REQUIRED})` : ''));
       st(fn).textContent = `✓ 등록 완료 — ${parts.join(' · ') || '변경 없음'}`;
       delete state.rawInfo[fn];
+      delete state.rawBusy[fn];
       await reloadKg();          // 파일 표의 DKG 배지가 최신 그룹으로 그려지도록
       await loadFiles();         // dkgs 갱신 이후에 렌더 (순서 중요)
       setTimeout(() => loadRawFiles().catch(() => {}), 2500);  // 토스트 읽을 시간
-    } catch (e) { st(fn).textContent = `실패: ${e.message}`; b.disabled = false; }
+    } catch (e) {
+      delete state.rawBusy[fn];
+      st(fn).textContent = `실패: ${e.message}`;
+      b.disabled = false;
+    }
   });
 }
 
@@ -485,21 +523,41 @@ async function selectNode(nodeId) {
   };
 }
 
-async function selectDkg(dkgId) {
+async function selectDkg(dkgId, keepDoc) {
   state.selDkg = dkgId;
-  state.selDkgDoc = null;
+  if (!keepDoc) state.selDkgDoc = null;
   renderDomainGraph();
   renderNav($('#kgSearch').value.trim());
+  const seq = (state.dkgSeq = (state.dkgSeq || 0) + 1);   // 연타 경쟁 가드
   try {   // 상세(오버라이드/레시피/최근 재크롤링 포함) 선조회
-    state.dkgDetail = await api(`/api/kg/document/${encodeURIComponent(dkgId)}`);
-  } catch { state.dkgDetail = null; }
+    const d = await api(`/api/kg/document/${encodeURIComponent(dkgId)}`);
+    if (seq !== state.dkgSeq) return;
+    state.dkgDetail = d;
+    state.dkgFetchFailed = null;
+  } catch {
+    if (seq !== state.dkgSeq) return;
+    state.dkgDetail = null;
+    state.dkgFetchFailed = dkgId;
+  }
   renderDkgDetail();
 }
 
 function renderDkgDetail() {
-  const g = state.dkgDetail && state.dkgDetail.id === state.selDkg
-    ? state.dkgDetail : dkgOf(state.selDkg);
-  if (!g) return;
+  const cur = state.selDkg;
+  if (!cur) return;
+  // 목록 요약(멤버 4개 잘림·오버라이드 없음)으로는 그리지 않는다 — 잘린
+  // 멤버가 '문서 추가' 후보로 오염되는 결함의 수정. 상세가 없으면 조회한다.
+  const g = state.dkgDetail && state.dkgDetail.id === cur ? state.dkgDetail : null;
+  if (!g) {
+    if (state.dkgFetchFailed === cur) {
+      $('#kgDetail').innerHTML =
+        '<div class="empty">Document KG 상세를 불러오지 못했습니다</div>';
+      return;
+    }
+    $('#kgDetail').innerHTML = '<div class="empty">불러오는 중…</div>';
+    selectDkg(cur, true);
+    return;
+  }
   const selDoc = (g.member_documents || []).find((d) => d.document_id === state.selDkgDoc);
   const rec = g.recipe;
   const memberIds = new Set((g.member_documents || []).map((d) => d.document_id));
@@ -565,13 +623,19 @@ function renderDkgDetail() {
     renderDkgDetail();
     if ($('#docGraph').style.display !== 'none') renderDocGraph(g.id).catch(() => {});
   });
+  // 멤버/레시피 변경 후 공통 갱신 — 상세 재조회 + (표시 중이면) 문서 그래프도
+  const refreshDkg = async () => {
+    await reloadKg();
+    await selectDkg(g.id, true);
+    if ($('#docGraph').style.display !== 'none')
+      renderDocGraph(g.id).catch(() => {});
+  };
   $('#kgDetail').querySelectorAll('[data-ex]').forEach((b) => b.onclick = async (ev) => {
     ev.stopPropagation();
     try {
       await post(`/api/group/${encodeURIComponent(g.id)}/member`,
                  { document_id: b.dataset.ex, state: 'EXCLUDED' });
-      await reloadKg();
-      selectDkg(g.id);
+      await refreshDkg();
     } catch (e) { $('#dkgStatus').textContent = e.message; }
   });
   const addSel = $('#dkgAddDoc');
@@ -580,8 +644,7 @@ function renderDkgDetail() {
     try {
       await post(`/api/group/${encodeURIComponent(g.id)}/member`,
                  { document_id: addSel.value, state: 'INCLUDED' });
-      await reloadKg();
-      selectDkg(g.id);
+      await refreshDkg();
     } catch (e) { $('#dkgStatus').textContent = e.message; }
   };
   $('#dkgSnapshot').onclick = async () => {
@@ -590,8 +653,7 @@ function renderDkgDetail() {
       const r = await post(`/api/group/${encodeURIComponent(g.id)}/recipe`, {});
       $('#dkgStatus').textContent =
         `✓ 레시피 저장 — 템플릿 ${r.template}건, 충돌 ${r.conflicts}, 동률 제외 ${r.dropped}`;
-      await reloadKg();
-      selectDkg(g.id);
+      await refreshDkg();
     } catch (e) { $('#dkgStatus').textContent = e.message; $('#dkgSnapshot').disabled = false; }
   };
   const hist = $('#dkgHistory');
@@ -607,8 +669,7 @@ function renderDkgDetail() {
         try {
           await post(`/api/group/${encodeURIComponent(g.id)}/recipe/${b.dataset.rb}/rollback`, {});
           $('#dkgStatus').textContent = '✓ 롤백 — 해당 버전을 복사한 새 활성 레시피를 만들었습니다.';
-          await reloadKg();
-          selectDkg(g.id);
+          await refreshDkg();
         } catch (e) { $('#dkgStatus').textContent = e.message; }
       });
     } catch (e) { $('#dkgHistBox').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -616,11 +677,25 @@ function renderDkgDetail() {
   $('#dkgRecrawl').onclick = async () => {
     $('#dkgRecrawl').disabled = true;
     const mode = $('#dkgMode').value;
+    const gid = g.id;                      // run과 DKG를 결속 — 오표시 방지
     try {
-      const r = await post(`/api/group/${encodeURIComponent(g.id)}/recrawl`, { mode });
-      const prog = () => $('#recrawlProg');
+      const r = await post(`/api/group/${encodeURIComponent(gid)}/recrawl`, { mode });
+      const btn = () => $('#dkgRecrawl');
+      const prog = () => (state.selDkg === gid ? $('#recrawlProg') : null);
       const draw = (run) => {
-        if (!prog()) return;
+        if (run.status === 'POLL_LOST') {  // 네트워크로 폴링만 끊긴 경우
+          if (prog()) prog().innerHTML =
+            '<div class="empty">진행 조회가 끊겼습니다 — 서버는 계속 실행 중일 수 있습니다. DKG를 다시 선택해 상태를 확인하세요.</div>';
+          if (btn()) btn().disabled = false;
+          return;
+        }
+        if (!prog()) {                     // 다른 DKG로 이동 — 화면은 건드리지 않되
+          if (run.status !== 'RUNNING') {  // 완료 시 데이터 갱신은 수행
+            loadFiles().catch(() => {});
+            reloadKg().catch(() => {});
+          }
+          return;
+        }
         const badge = (d) => d.error ? '<span class="badge red">오류</span>'
           : d.map === null ? '<span class="badge">진행 중</span>'
           : `${d.ingest && d.ingest.skipped !== undefined ? '<span class="badge">승계</span>' : '<span class="badge blue">재적재</span>'}
@@ -639,18 +714,18 @@ function renderDkgDetail() {
                 (d.recipe ? d.recipe.review || 0 : 0), 0);
           prog().innerHTML += `<div class="status">✓ 완료 (${esc(run.status)})` +
             (review ? ` — 검토 필요 ${review}건은 파일 탭에서 검수하세요` : '') + '</div>';
-          $('#dkgRecrawl').disabled = false;
+          if (btn()) btn().disabled = false;
           loadFiles().catch(() => {});
           reloadKg().catch(() => {});
+          if (state.selDkg === gid && $('#docGraph').style.display !== 'none')
+            renderDocGraph(gid).catch(() => {});
         }
       };
-      pollRecrawl(r.run_id, draw).catch((e) => {
-        if (prog()) prog().innerHTML = `<div class="empty">${esc(e.message)}</div>`;
-        $('#dkgRecrawl').disabled = false;
-      });
+      pollRecrawl(r.run_id, draw);
     } catch (e) {
       $('#dkgStatus').textContent = e.message;
-      $('#dkgRecrawl').disabled = false;
+      const btn0 = $('#dkgRecrawl');
+      if (btn0) btn0.disabled = false;
     }
   };
   $('#docToSource').onclick = () => {
@@ -719,6 +794,7 @@ async function openConceptEditor(cid) {
     <div class="status" id="efStatus"></div>`;
   const status = (m) => { $('#efStatus').textContent = m; };
   $('#efSave').onclick = async () => {
+    $('#efSave').disabled = true;          // 연타 시 새 개념 이중 생성 방지
     const body = {
       concept_id: cid || undefined,
       canonical_name: $('#efName').value.trim() || null,
@@ -734,7 +810,11 @@ async function openConceptEditor(cid) {
       status(`✓ 저장됨 (${r.concept_id})`);
       if (r.created) selectNode(r.concept_id);
       else openConceptEditor(cid);
-    } catch (e) { status(e.message); }
+    } catch (e) {
+      status(e.message);
+      const btn = $('#efSave');
+      if (btn) btn.disabled = false;
+    }
   };
   if (!cid) return;
   $('#efBack').onclick = () => selectNode(cid);
@@ -748,11 +828,16 @@ async function openConceptEditor(cid) {
   $('#efAddAlias').onclick = async () => {
     const a = $('#efNewAlias').value.trim();
     if (!a) return;
+    $('#efAddAlias').disabled = true;
     try {
       await post('/api/kg/alias', { concept_id: cid, alias: a });
       status('✓ 별칭 추가 — 미매핑을 재평가하려면 해당 DKG에서 재크롤링(fill)하세요');
       openConceptEditor(cid);
-    } catch (e) { status(e.message); }
+    } catch (e) {
+      status(e.message);
+      const btn = $('#efAddAlias');
+      if (btn) btn.disabled = false;
+    }
   };
   $('#kgDetail').querySelectorAll('[data-dr]').forEach((b) => b.onclick = async () => {
     const [s, t, ty] = b.dataset.dr.split('|');
@@ -764,13 +849,18 @@ async function openConceptEditor(cid) {
     } catch (e) { status(e.message); }
   });
   $('#efAddRel').onclick = async () => {
+    $('#efAddRel').disabled = true;
     try {
       const r = await post('/api/kg/relation', {
         source: cid, target: $('#efRelTarget').value, type: $('#efRelType').value });
       if (r.warning) status(`⚠ ${r.warning}`);
       await reloadKg();
       openConceptEditor(cid);
-    } catch (e) { status(e.message); }
+    } catch (e) {
+      status(e.message);
+      const btn = $('#efAddRel');
+      if (btn) btn.disabled = false;
+    }
   };
   const dep = $('#efDeprecate');
   if (dep) dep.onclick = async () => {
@@ -852,7 +942,8 @@ function jumpTo(documentId, locator, nodeId) {
   const cut = (locator || '').lastIndexOf('!');
   const sheet = cut > 0 ? locator.slice(0, cut) : null;
   loadSheet(documentId, sheet, nodeId)
-    .then(() => nodeId && openInspector(nodeId))
+    // 추월된(loadSheet=false) 호출의 인스펙터가 화면의 시트를 덮지 않게
+    .then((applied) => applied !== false && nodeId && openInspector(nodeId))
     .catch((e) => setVStatus(e.message));
 }
 
@@ -882,11 +973,11 @@ async function loadSheet(doc, sheet, focusNode) {
   setVStatus('불러오는 중…');
   const data = await api(`/api/sheet?doc=${encodeURIComponent(doc)}` +
                          (sheet ? `&name=${encodeURIComponent(sheet)}` : ''));
-  if (seq !== state.seq) return;
+  if (seq !== state.seq) return false;      // 추월됨 — 호출측 후속 동작도 중단
   let overlay = [], ovErr = '';
   try { overlay = await api(`/api/overlay?doc=${encodeURIComponent(doc)}&name=${encodeURIComponent(data.sheet)}`); }
   catch (e) { ovErr = ` · <span style="color:var(--amber)">Overlay 조회 실패: ${esc(e.message.slice(0, 60))}</span>`; }
-  if (seq !== state.seq) return;
+  if (seq !== state.seq) return false;
   state.doc = doc; state.sheet = data.sheet;
   $('#inspector').innerHTML = '<div class="kicker">MAPPING</div>' +
     '<div class="empty">Overlay 영역이나 원본 위치를 클릭하세요</div>';
@@ -1048,6 +1139,7 @@ async function openInspector(nodeId) {
           : ('반려되었습니다.' + (d.mapping.method === 'recipe'
              ? ' 이 양식 전체를 고치려면: 매핑 수정 후 레시피 재저장 → reset_auto 재크롤링.'
              : ''));
+        state.nodeSearch = null;           // 소스 목록의 ⚠/매핑 라벨 stale 방지
         loadFiles().catch(() => {});
         if (state.reviewDoc) renderSourceScreen();
         loadSheet(state.doc, state.sheet, nodeId).catch(() => {});
@@ -1070,6 +1162,7 @@ async function openInspector(nodeId) {
     try {
       await post('/api/remap', { node_id: nodeId, concept_id });
       $('#insStatus').textContent = `✓ ${concept_id} 로 매핑을 확정했습니다.`;
+      state.nodeSearch = null;             // 소스 목록/카운트 stale 방지
       loadSheet(state.doc, state.sheet, nodeId).then(() => openInspector(nodeId)).catch(() => {});
     } catch (e) { $('#insStatus').textContent = e.message; $('#remapBtn').disabled = false; }
   };

@@ -75,17 +75,23 @@ def run_recrawl(store: KgStore, lock, ws, root: str, mode: str,
 
     def _flush(status: str | None = None) -> None:
         with lock:
-            if status:
-                store.conn.execute(
-                    "UPDATE recrawl_run SET status=?, finished_at=?, "
-                    "summary_json=? WHERE run_id=?",
-                    (status, now_iso(), json.dumps(summary, ensure_ascii=False),
-                     run_id))
-            else:
-                store.conn.execute(
-                    "UPDATE recrawl_run SET summary_json=? WHERE run_id=?",
-                    (json.dumps(summary, ensure_ascii=False), run_id))
-            store.commit()
+            try:
+                if status:
+                    store.conn.execute(
+                        "UPDATE recrawl_run SET status=?, finished_at=?, "
+                        "summary_json=? WHERE run_id=?",
+                        (status, now_iso(), json.dumps(summary, ensure_ascii=False),
+                         run_id))
+                else:
+                    store.conn.execute(
+                        "UPDATE recrawl_run SET summary_json=? WHERE run_id=?",
+                        (json.dumps(summary, ensure_ascii=False), run_id))
+                store.commit()
+            except Exception:
+                # rollback은 반드시 lock 보유 상태에서 — 미커밋 쓰기가 다른
+                # 요청의 commit에 편승하는 창을 만들지 않는다
+                store.conn.rollback()
+                raise
 
     errors = 0
     for doc_id in document_ids:
@@ -111,20 +117,26 @@ def run_recrawl(store: KgStore, lock, ws, root: str, mode: str,
                 raise RuntimeError(
                     f"문서 ID 불일치(파일 이동/개명 추정): {parsed_id[:8]}…")
             with lock:
-                entry["ingest"] = apply_parsed(
-                    store, parsed_id, path, file_hash, PARSER_VERSION, drafts)
-                entry["reset"] = reset_document_mappings(
-                    store, doc_id, mode, note=f"recrawl {mode} @ {run_id}")
-                store.commit()
-                if recipe is not None:
-                    entry["recipe"] = apply_recipe(store, recipe, doc_id)
+                # rollback은 lock을 쥔 채로 — with 블록을 예외로 탈출하면
+                # lock이 먼저 풀려 부분 쓰기가 경쟁 요청의 commit에 편승한다
+                try:
+                    entry["ingest"] = apply_parsed(
+                        store, parsed_id, path, file_hash, PARSER_VERSION, drafts)
+                    entry["reset"] = reset_document_mappings(
+                        store, doc_id, mode, note=f"recrawl {mode} @ {run_id}")
+                    store.commit()
+                    if recipe is not None:
+                        entry["recipe"] = apply_recipe(store, recipe, doc_id)
+                except Exception:
+                    store.conn.rollback()
+                    raise
             entry["map"] = map_nodes_staged(store, lock, retriever, judge, doc_id)
         except Exception as e:
             errors += 1
             entry["error"] = f"{type(e).__name__}: {e}"
             traceback.print_exc()
             with lock:
-                store.conn.rollback()      # 미커밋 쓰기가 다음 문서에 편승 방지
+                store.conn.rollback()      # 2차 방어 (이미 각 단계에서 rollback)
         _flush()
 
     status = ("FAILED" if errors == len(document_ids) and document_ids

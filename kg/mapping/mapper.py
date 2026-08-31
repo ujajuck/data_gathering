@@ -96,19 +96,31 @@ def map_nodes_staged(store: KgStore, lock, retriever: DomainRetriever, judge,
         staged = []
         for n in nodes:
             ctx = build_context(store, n)
-            staged.append((n["node_id"], ctx, retriever.retrieve(ctx)))
-    decisions = [(nid, ctx, cands, judge.judge(ctx, cands))
-                 for nid, ctx, cands in staged]
+            staged.append((n["node_id"], n["semantic_fingerprint"], ctx,
+                           retriever.retrieve(ctx)))
+    decisions = [(nid, fp, ctx, cands, judge.judge(ctx, cands))
+                 for nid, fp, ctx, cands in staged]
     stats = {"nodes": 0, "AUTO_APPROVED": 0, "REVIEW_REQUIRED": 0,
              "UNMAPPED": 0, "skipped_concurrent": 0}
     with lock:
         try:
-            for nid, ctx, cands, d in decisions:
+            for nid, fp, ctx, cands, d in decisions:
                 n = store.node(nid)
+                # 재검증 3종: judge가 lock 밖에 있던 사이 —
+                #  (a) 노드 소멸/비활성 또는 매핑 선점(human remap 등)
+                #  (b) 재적재로 노드 내용이 제자리 변경(의미 지문 불일치) —
+                #      옛 컨텍스트 판정을 새 내용에 기록하지 않는다
+                #  (c) 판정 개념이 폐기됨 — deprecate 409 가드의 TOCTOU 봉합
                 if (n is None or n["status"] != "ACTIVE"
-                        or store.active_mapping(nid) is not None):
+                        or store.active_mapping(nid) is not None
+                        or n["semantic_fingerprint"] != fp):
                     stats["skipped_concurrent"] += 1
                     continue
+                if d.concept_id is not None:
+                    c = store.concept(d.concept_id)
+                    if c is None or c["status"] != "ACTIVE":
+                        stats["skipped_concurrent"] += 1
+                        continue
                 store.save_mapping(nid, d.concept_id, d.confidence, d.method,
                                    d.status, context=ctx.as_dict(),
                                    candidates=[c.as_dict() for c in cands],

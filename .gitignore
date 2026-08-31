@@ -18,7 +18,7 @@ src/excel_canonical.egg-info/
 __pycache__/
 *.pyc
 .pytest_cache/
-.dvc/cache/
+.dvc/cache
 .idea/
 .vscode/
 *.swp
@@ -30,3 +30,7 @@ domains/*/ingest_log.txt
 
 # KG reference (derived)
 data/kg_reference.json
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
