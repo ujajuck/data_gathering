@@ -573,6 +573,62 @@ def create_app(ws_root: str | Path) -> FastAPI:
         from kg.mapping.judge import get_judge
         return get_judge()
 
+    def _tree_node_table(document_id: str, sheet: str) -> dict | None:
+        """tree_node에서 테이블 형태 JSON 생성 (CSV SECTION / DRM TABLE)."""
+        with lock:
+            # SECTION 기반 (CSV)
+            sections = store.conn.execute("""
+                SELECT node_id, node_name, tree_path FROM tree_node
+                WHERE document_id=? AND status='ACTIVE' AND node_type='SECTION'
+                  AND tree_path LIKE ?
+                ORDER BY tree_path LIMIT 500
+            """, (document_id, f"%/{sheet}/%")).fetchall()
+            # TABLE 기반 (DRM 체크시트)
+            if not sections:
+                sections = store.conn.execute("""
+                    SELECT node_id, node_name, tree_path FROM tree_node
+                    WHERE document_id=? AND status='ACTIVE' AND node_type='TABLE'
+                      AND tree_path LIKE ?
+                    ORDER BY tree_path LIMIT 500
+                """, (document_id, f"%/{sheet}/%")).fetchall()
+            if not sections:
+                return None
+            cells = []
+            col_map = {}
+            max_col = 0
+            for row_idx, sec in enumerate(sections):
+                children = store.conn.execute("""
+                    SELECT h.node_name as header, v.node_name as value,
+                           json_extract(h.metadata, '$.concept_hint') as concept_hint
+                    FROM tree_node h
+                    LEFT JOIN tree_node v ON v.parent_node_id=h.node_id
+                        AND v.node_type='VALUE' AND v.status='ACTIVE'
+                    WHERE h.parent_node_id=? AND h.node_type='HEADER' AND h.status='ACTIVE'
+                    ORDER BY h.tree_path
+                """, (sec["node_id"],)).fetchall()
+                for child in children:
+                    hdr = child["header"]
+                    if hdr not in col_map:
+                        col_map[hdr] = max_col
+                        cells.append({"r": 0, "c": max_col, "v": hdr, "b": 1,
+                                     "f": "#D9D9D9", "bd": {"t": "1px solid #8d97a5",
+                                     "r": "1px solid #8d97a5", "b": "1px solid #8d97a5",
+                                     "l": "1px solid #8d97a5"}})
+                        max_col += 1
+                    col = col_map[hdr]
+                    val = child["value"] or ""
+                    cell = {"r": row_idx + 1, "c": col, "v": val,
+                           "bd": {"t": "1px solid #ddd", "r": "1px solid #ddd",
+                                  "b": "1px solid #ddd", "l": "1px solid #ddd"}}
+                    if child["concept_hint"]:
+                        cell["concept_hint"] = child["concept_hint"]
+                    cells.append(cell)
+            return {"sheet": sheet, "cells": cells,
+                    "max_row": len(sections) + 1, "max_col": max_col,
+                    "col_widths": {str(c): 120 for c in range(max_col)},
+                    "row_heights": {str(r): 24 for r in range(len(sections) + 1)},
+                    "images": [], "gridlines": True, "source": "tree_node"}
+
     def _doc_path(document_id: str) -> Path:
         with lock:
             row = store.conn.execute(
@@ -1018,60 +1074,11 @@ def create_app(ws_root: str | Path) -> FastAPI:
         if row and row["render_json"]:
             import json as _json
             return _json.loads(row["render_json"])
-        # 캐시 없음: tree_node에서 테이블 생성 (CSV SECTION 또는 DRM TABLE)
-        with lock:
-            # SECTION 기반 (CSV)
-            sections = store.conn.execute("""
-                SELECT node_id, node_name, tree_path FROM tree_node
-                WHERE document_id=? AND status='ACTIVE' AND node_type='SECTION'
-                  AND tree_path LIKE ?
-                ORDER BY tree_path LIMIT 500
-            """, (document_id, f"%/{sheet}/%")).fetchall()
-            # TABLE 기반 (DRM 체크시트)
-            if not sections:
-                sections = store.conn.execute("""
-                    SELECT node_id, node_name, tree_path FROM tree_node
-                    WHERE document_id=? AND status='ACTIVE' AND node_type='TABLE'
-                      AND tree_path LIKE ?
-                    ORDER BY tree_path LIMIT 500
-                """, (document_id, f"%/{sheet}/%")).fetchall()
-            if not sections:
-                raise HTTPException(404, f"no data for {sheet}")
-            cells = []
-            col_map = {}
-            max_col = 0
-            for row_idx, sec in enumerate(sections):
-                children = store.conn.execute("""
-                    SELECT h.node_name as header, v.node_name as value,
-                           json_extract(h.metadata, '$.concept_hint') as concept_hint
-                    FROM tree_node h
-                    LEFT JOIN tree_node v ON v.parent_node_id=h.node_id
-                        AND v.node_type='VALUE' AND v.status='ACTIVE'
-                    WHERE h.parent_node_id=? AND h.node_type='HEADER' AND h.status='ACTIVE'
-                    ORDER BY h.tree_path
-                """, (sec["node_id"],)).fetchall()
-                for child in children:
-                    hdr = child["header"]
-                    if hdr not in col_map:
-                        col_map[hdr] = max_col
-                        cells.append({"r": 0, "c": max_col, "v": hdr, "b": 1,
-                                     "f": "#D9D9D9", "bd": {"t": "1px solid #8d97a5",
-                                     "r": "1px solid #8d97a5", "b": "1px solid #8d97a5",
-                                     "l": "1px solid #8d97a5"}})
-                        max_col += 1
-                    col = col_map[hdr]
-                    val = child["value"] or ""
-                    cell = {"r": row_idx + 1, "c": col, "v": val,
-                           "bd": {"t": "1px solid #ddd", "r": "1px solid #ddd",
-                                  "b": "1px solid #ddd", "l": "1px solid #ddd"}}
-                    if child["concept_hint"]:
-                        cell["concept_hint"] = child["concept_hint"]
-                    cells.append(cell)
-            return {"sheet": sheet, "cells": cells,
-                    "max_row": len(sections) + 1, "max_col": max_col,
-                    "col_widths": {str(c): 120 for c in range(max_col)},
-                    "row_heights": {str(r): 24 for r in range(len(sections) + 1)},
-                    "images": [], "gridlines": True, "source": "tree_node"}
+        # 캐시 없음: tree_node 기반 테이블
+        result = _tree_node_table(document_id, sheet)
+        if result:
+            return result
+        raise HTTPException(404, f"no data for {sheet}")
 
     @app.get("/api/viewer/documents/{document_id}/source")
     def viewer_source(document_id: str, document_version: str, sheet: str,
@@ -1188,7 +1195,15 @@ def create_app(ws_root: str | Path) -> FastAPI:
                     cached["sheets"] = all_sheets
                     return {"document_id": doc, **cached}
 
-        # 2) DB에 없으면 파일에서 읽기 (비DRM만, DRM은 ingest 필요)
+        # 2) tree_node 기반 테이블 생성 (CSV / 캐시 없는 DRM)
+        target_sheet = name or (all_sheets[0] if all_sheets else None)
+        if target_sheet:
+            tn_result = _tree_node_table(doc, target_sheet)
+            if tn_result:
+                tn_result["sheets"] = all_sheets
+                return {"document_id": doc, **tn_result}
+
+        # 3) DB에 없으면 파일에서 읽기 (비DRM만, DRM은 ingest 필요)
         path = _doc_path(doc)
         key = (str(path), path.stat().st_mtime, name or "")
         if key not in render_cache:
