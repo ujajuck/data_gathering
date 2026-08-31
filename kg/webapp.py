@@ -373,14 +373,12 @@ _DOC_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _SSML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 
-def _sheet_textboxes(path: Path, sheet_name: str,
-                     cum_x: list[float], cum_y: list[float],
-                     max_r: int, max_c: int) -> list[dict]:
-    """xlsx 드로잉 XML에서 텍스트박스/도형 텍스트를 앵커 px 좌표로 추출한다.
+def _sheet_textboxes_raw(path: Path, sheet_name: str) -> list[dict]:
+    """xlsx 드로잉 XML에서 텍스트박스/도형 텍스트를 앵커 원시값으로 추출한다.
 
     openpyxl은 도형(xdr:sp)을 노출하지 않으므로 zip에서 드로잉 XML을 직접
-    읽는다. 좌표는 이미지와 같은 방식(누적 열폭/행높이 + EMU 오프셋)으로
-    환산해 원본 위치 그대로 그리드 위에 겹칠 수 있게 한다.
+    읽는다. px 환산은 _textboxes_px가 그리드 확정 후에 수행한다 — 그리드
+    범위를 드로잉까지 확장하는 계산에도 이 원시 앵커가 쓰인다.
     """
     import xml.etree.ElementTree as ET
     import zipfile
@@ -428,15 +426,11 @@ def _sheet_textboxes(path: Path, sheet_name: str,
                 target = ws_rels.get(dr.get(f"{{{_DOC_REL}}}id", ""), "")
                 if target:
                     drawing_parts.append(resolve(ws_dir, target))
-            emu = _EMU_PX
-
-            def marker_px(m) -> tuple[float, float]:
-                col = int(m.findtext(f"{{{_XDR}}}col", "0"))
-                row = int(m.findtext(f"{{{_XDR}}}row", "0"))
-                coff = int(m.findtext(f"{{{_XDR}}}colOff", "0"))
-                roff = int(m.findtext(f"{{{_XDR}}}rowOff", "0"))
-                return (cum_x[min(col, max_c)] + coff / emu,
-                        cum_y[min(row, max_r)] + roff / emu)
+            def marker(m) -> tuple[int, int, int, int]:
+                return (int(m.findtext(f"{{{_XDR}}}col", "0")),
+                        int(m.findtext(f"{{{_XDR}}}colOff", "0")),
+                        int(m.findtext(f"{{{_XDR}}}row", "0")),
+                        int(m.findtext(f"{{{_XDR}}}rowOff", "0")))
 
             for part in drawing_parts:
                 try:
@@ -464,31 +458,55 @@ def _sheet_textboxes(path: Path, sheet_name: str,
                     to = anchor.find(f"{{{_XDR}}}to")
                     ext = anchor.find(f"{{{_XDR}}}ext")
                     pos = anchor.find(f"{{{_XDR}}}pos")
+                    box: dict = {"text": text[:4000]}
                     if frm is not None:
-                        x, y = marker_px(frm)
+                        box["frm"] = marker(frm)
                     elif pos is not None:
-                        x = int(pos.get("x", "0")) / emu
-                        y = int(pos.get("y", "0")) / emu
+                        box["pos"] = (int(pos.get("x", "0")),
+                                      int(pos.get("y", "0")))
                     else:
                         continue
                     if to is not None:
-                        x2, y2 = marker_px(to)
-                        w, h = x2 - x, y2 - y
+                        box["to"] = marker(to)
                     elif ext is not None:
-                        w = int(ext.get("cx", "0")) / emu
-                        h = int(ext.get("cy", "0")) / emu
-                    else:
-                        w, h = 160, 40
-                    if w <= 4 or h <= 4:
-                        continue
-                    boxes.append({"text": text[:4000], "x": round(x),
-                                  "y": round(y), "w": round(w),
-                                  "h": round(h)})
+                        box["ext"] = (int(ext.get("cx", "0")),
+                                      int(ext.get("cy", "0")))
+                    boxes.append(box)
                     if len(boxes) >= 60:
                         return boxes
     except Exception:
         return boxes           # 드로잉이 없거나 비정형 — 셀 렌더는 그대로 진행
     return boxes
+
+
+def _textboxes_px(raw: list[dict], cum_x: list[float], cum_y: list[float],
+                  max_r: int, max_c: int) -> list[dict]:
+    """원시 앵커를 이미지와 같은 방식(누적 열폭/행높이 + EMU)으로 px 환산."""
+    emu = _EMU_PX
+
+    def mpx(m: tuple[int, int, int, int]) -> tuple[float, float]:
+        col, coff, row, roff = m
+        return (cum_x[min(col, max_c)] + coff / emu,
+                cum_y[min(row, max_r)] + roff / emu)
+
+    out = []
+    for b in raw:
+        if "frm" in b:
+            x, y = mpx(b["frm"])
+        else:
+            x, y = b["pos"][0] / emu, b["pos"][1] / emu
+        if "to" in b:
+            x2, y2 = mpx(b["to"])
+            w, h = x2 - x, y2 - y
+        elif "ext" in b:
+            w, h = b["ext"][0] / emu, b["ext"][1] / emu
+        else:
+            w, h = 160, 40
+        if w <= 4 or h <= 4:
+            continue
+        out.append({"text": b["text"], "x": round(x), "y": round(y),
+                    "w": round(w), "h": round(h)})
+    return out
 
 
 def _render_sheet(path: Path, sheet_name: str | None) -> dict:
@@ -501,8 +519,43 @@ def _render_sheet(path: Path, sheet_name: str | None) -> dict:
     if target is None or target not in names:
         raise HTTPException(404, f"sheet not found: {sheet_name}")
     ws = wb[target]
-    max_r = min(ws.max_row or 1, _SHEET_CAP_ROWS)
-    max_c = min(ws.max_column or 1, _SHEET_CAP_COLS)
+    raw_boxes = _sheet_textboxes_raw(path, target)
+
+    # 데이터 범위 밖(아래/오른쪽)에 앵커된 이미지·텍스트박스도 원본 위치
+    # 그대로 보이도록, 그리드를 드로잉 범위까지 확장한다. 범위 밖 행/열은
+    # 기본 크기(64px/20px)라 ext 기반 앵커의 소요 칸 수 추정도 정확하다.
+    need_r, need_c = ws.max_row or 1, ws.max_column or 1
+    _DEF_W, _DEF_H = 64, 20
+
+    def _extend(frm_cr: tuple[int, int] | None, to_cr: tuple[int, int] | None,
+                ext_wh: tuple[float, float] | None) -> None:
+        nonlocal need_r, need_c
+        if frm_cr is None:
+            return
+        need_c = max(need_c, frm_cr[0] + 1)
+        need_r = max(need_r, frm_cr[1] + 1)
+        if to_cr is not None:
+            need_c = max(need_c, to_cr[0])
+            need_r = max(need_r, to_cr[1])
+        elif ext_wh is not None:
+            need_c = max(need_c, frm_cr[0] + 1 + int(ext_wh[0] // _DEF_W) + 1)
+            need_r = max(need_r, frm_cr[1] + 1 + int(ext_wh[1] // _DEF_H) + 1)
+
+    for img in getattr(ws, "_images", []):
+        frm = getattr(img.anchor, "_from", None)
+        to = getattr(img.anchor, "to", None)
+        ext = getattr(img.anchor, "ext", None)
+        _extend((frm.col, frm.row) if frm is not None else None,
+                (to.col, to.row) if to is not None else None,
+                (ext.cx / _EMU_PX, ext.cy / _EMU_PX) if ext is not None else None)
+    for b in raw_boxes:
+        frm, to, ext = b.get("frm"), b.get("to"), b.get("ext")
+        _extend((frm[0], frm[2]) if frm else None,
+                (to[0], to[2]) if to else None,
+                (ext[0] / _EMU_PX, ext[1] / _EMU_PX) if ext else None)
+
+    max_r = min(need_r, _SHEET_CAP_ROWS)
+    max_c = min(need_c, _SHEET_CAP_COLS)
 
     # 열 너비(문자폭→px) / 행 높이(pt→px) — 원본 레이아웃의 뼈대
     col_px = []
@@ -616,7 +669,7 @@ def _render_sheet(path: Path, sheet_name: str | None) -> dict:
 
     return {"sheet": target, "sheets": names, "max_row": max_r, "max_col": max_c,
             "cols": col_px, "rows": row_px, "cells": cells, "images": images,
-            "shapes": _sheet_textboxes(path, target, cum_x, cum_y, max_r, max_c),
+            "shapes": _textboxes_px(raw_boxes, cum_x, cum_y, max_r, max_c),
             "gridlines": bool(ws.sheet_view.showGridLines),
             "truncated": (ws.max_row or 1) > _SHEET_CAP_ROWS or
                          (ws.max_column or 1) > _SHEET_CAP_COLS}

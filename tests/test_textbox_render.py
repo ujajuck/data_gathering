@@ -39,6 +39,24 @@ def test_textboxes_extracted_with_anchor_px(textbox_xlsx: Path):
     assert (memo["w"], memo["h"]) == (192, 77)
 
 
+def test_images_extracted_with_anchor_px(tmp_path: Path):
+    data = _render_sheet(build_textbox_xlsx(tmp_path / "media.xlsx",
+                                            with_images=True), None)
+    col_w, row_h = data["cols"][0], data["rows"][0]
+    images = data["images"]
+    assert len(images) == 2
+    boxes = {(im["x"], im["y"], im["w"], im["h"]) for im in images}
+    # twoCellAnchor C12→E16(3열×5행 영역) + oneCellAnchor G12(ext 100×60px).
+    # 앵커가 데이터 범위(11행) 밖이어도 그리드가 확장되어 잘리지 않아야 한다.
+    assert (2 * col_w, 11 * row_h, 3 * col_w, 5 * row_h) in boxes
+    assert (6 * col_w, 11 * row_h, 100, 60) in boxes
+    assert data["max_row"] >= 16
+    for im in images:
+        assert im["src"].startswith("data:image/png;base64,")
+    # 이미지와 텍스트박스가 한 드로잉에 공존해도 둘 다 추출된다
+    assert len(data["shapes"]) == 2
+
+
 def test_sheet_without_drawings_has_no_shapes(tmp_path: Path):
     from openpyxl import Workbook
     p = tmp_path / "plain.xlsx"

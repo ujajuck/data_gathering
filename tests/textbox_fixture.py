@@ -1,14 +1,22 @@
-"""텍스트박스가 든 xlsx 생성 헬퍼.
+"""텍스트박스/이미지가 든 xlsx 생성 헬퍼.
 
 openpyxl은 도형(xdr:sp)을 쓰지 못하므로, 통상 경로로 워크북을 만든 뒤 zip을
 다시 열어 드로잉 파트를 직접 주입한다. 앵커가 알려진 두 개의 텍스트박스:
 
 - twoCellAnchor C3 → E6 (from col=2,row=2 / to col=5,row=6, off 0)
 - oneCellAnchor H2 + ext 1828800×731520 EMU (192×76.8 px)
+
+with_images=True면 앵커가 알려진 이미지 2장도 넣는다 (openpyxl 네이티브 —
+이 경우 openpyxl이 만든 드로잉 XML에 텍스트박스 앵커를 병합한다):
+
+- twoCellAnchor C12 → E16 (192×100 px 영역)
+- oneCellAnchor G12 + ext 952500×571500 EMU (100×60 px)
 """
 from __future__ import annotations
 
+import io
 import shutil
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
@@ -61,8 +69,16 @@ _SHEET_RELS = ("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 _R_NS = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
 
 
-def build_textbox_xlsx(path: Path) -> Path:
-    """앵커가 알려진 텍스트박스 2개가 든 xlsx를 path에 만든다."""
+def _solid_png(w: int, h: int, color: str) -> io.BytesIO:
+    from PIL import Image as PILImage
+    buf = io.BytesIO()
+    PILImage.new("RGB", (w, h), color).save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
+def build_textbox_xlsx(path: Path, with_images: bool = False) -> Path:
+    """앵커가 알려진 텍스트박스 2개(+옵션 이미지 2장)가 든 xlsx를 만든다."""
     path = Path(path)
     wb = Workbook()
     ws = wb.active
@@ -78,17 +94,47 @@ def build_textbox_xlsx(path: Path) -> Path:
     ws["D9"] = 180
     ws["C10"] = "부풀기"
     ws["D10"] = 9.5
+
+    if with_images:
+        from openpyxl.drawing.image import Image as XLImage
+        from openpyxl.drawing.spreadsheet_drawing import (AnchorMarker,
+                                                          OneCellAnchor,
+                                                          TwoCellAnchor)
+        from openpyxl.drawing.xdr import XDRPositiveSize2D
+        ws["C11"] = "사진 1 (C12:E16)"
+        ws["G11"] = "사진 2 (G12)"
+        img1 = XLImage(_solid_png(120, 80, "#c0392b"))
+        img1.anchor = TwoCellAnchor(
+            editAs="twoCell",
+            _from=AnchorMarker(col=2, colOff=0, row=11, rowOff=0),
+            to=AnchorMarker(col=5, colOff=0, row=16, rowOff=0))
+        ws.add_image(img1)
+        img2 = XLImage(_solid_png(100, 60, "#2980b9"))
+        img2.anchor = OneCellAnchor(
+            _from=AnchorMarker(col=6, colOff=0, row=11, rowOff=0),
+            ext=XDRPositiveSize2D(cx=952500, cy=571500))
+        ws.add_image(img2)
     wb.save(path)
 
     tmp = path.with_suffix(".tmp.xlsx")
+    has_drawing = False
+    with zipfile.ZipFile(path) as zin:
+        has_drawing = "xl/drawings/drawing1.xml" in zin.namelist()
     with zipfile.ZipFile(path) as zin, \
             zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
         for item in zin.namelist():
             data = zin.read(item)
-            if item == "[Content_Types].xml":
+            if item == "xl/drawings/drawing1.xml":
+                # openpyxl이 만든 드로잉(이미지)에 텍스트박스 앵커 병합
+                droot = ET.fromstring(data)
+                for anchor in ET.fromstring(DRAWING_XML):
+                    droot.append(anchor)
+                data = ET.tostring(droot, xml_declaration=True,
+                                   encoding="UTF-8")
+            elif not has_drawing and item == "[Content_Types].xml":
                 data = data.replace(b"</Types>",
                                     _DRAWING_CT.encode() + b"</Types>")
-            elif item == "xl/worksheets/sheet1.xml":
+            elif not has_drawing and item == "xl/worksheets/sheet1.xml":
                 text = data.decode("utf-8")
                 if "xmlns:r=" not in text:
                     text = text.replace("<worksheet ",
@@ -97,7 +143,8 @@ def build_textbox_xlsx(path: Path) -> Path:
                                     '<drawing r:id="rId99"/></worksheet>')
                 data = text.encode("utf-8")
             zout.writestr(item, data)
-        zout.writestr("xl/drawings/drawing1.xml", DRAWING_XML)
-        zout.writestr("xl/worksheets/_rels/sheet1.xml.rels", _SHEET_RELS)
+        if not has_drawing:
+            zout.writestr("xl/drawings/drawing1.xml", DRAWING_XML)
+            zout.writestr("xl/worksheets/_rels/sheet1.xml.rels", _SHEET_RELS)
     shutil.move(tmp, path)
     return path
