@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="620" viewBox="0 0 1280 620" role="img" aria-labelledby="title desc">
+  <title id="title">DRM Documents E2E Test Result</title>
+  <desc id="desc">Pytest output showing the all-document DRM ingest viewer E2E test passed.</desc>
+  <rect width="1280" height="620" fill="#0d1117"/>
+  <rect width="1280" height="10" fill="#2ea043"/>
+  <g font-family="DejaVu Sans Mono, Consolas, monospace" font-size="16" fill="#c9d1d9">
+    <text x="34" y="54" font-size="24" font-weight="700" fill="#f0f6fc">DRM Documents E2E Test Result</text>
+    <text x="34" y="94">Command: pytest -vv --color=no tests/test_drm_documents_e2e.py</text>
+    <text x="34" y="122">Run date: 2026-08-31 UTC</text>
+    <text x="34" y="174">============================= test session starts ==============================</text>
+    <text x="34" y="202">platform linux -- Python 3.14.4, pytest-9.0.3, pluggy-1.6.0</text>
+    <text x="34" y="230">rootdir: /workspace/data_gathering</text>
+    <text x="34" y="258">configfile: pyproject.toml</text>
+    <text x="34" y="286">collecting ... collected 1 item</text>
+    <text x="34" y="338" fill="#3fb950">tests/test_drm_documents_e2e.py::test_all_documents_complete_drm_ingest_viewer_e2e PASSED [100%]</text>
+    <text x="34" y="390" fill="#d29922">=============================== warnings summary ===============================</text>
+    <text x="34" y="418">openpyxl: Unknown worksheet extension is not supported and will be removed</text>
+    <text x="34" y="446">openpyxl: Conditional Formatting extension is not supported and will be removed</text>
+    <text x="34" y="498" fill="#3fb950">======================== 1 passed, 2 warnings in 3.04s =========================</text>
+    <text x="34" y="554" fill="#8b949e">Coverage: protected rejection → authorized unlock → ingest → immutable Viewer → locator → hash check</text>
+  </g>
+</svg>
