@@ -1,0 +1,58 @@
+csv_name: dc_db_table
+description: 조성평가 DC DB — DC 특성 요약
+row_count: 160
+categories:
+  dc_db_experiment:
+    name: DC실험식별
+    name_en: DC Experiment Identity
+    headers:
+    - _source_file
+    - exp_id
+    - 조성
+    - 최종몰비
+    concepts:
+    - source_file
+    - exp_id
+    - composition
+    - final_mole_ratio
+  dc_db_structure:
+    name: 적층구조
+    name_en: Layer Structure
+    headers:
+    - S/T
+    - L/D
+    - Layer
+    - 1차소성
+    concepts:
+    - s_t_ratio
+    - l_d_ratio
+    - layer_count
+    - 1st_calcination
+  dc_db_firing:
+    name: 소성조건
+    name_en: Firing Conditions
+    headers:
+    - 수소농도
+    - keep
+    - 소성온도
+    concepts:
+    - hydrogen_concentration
+    - keep_condition
+    - firing_temperature
+  dc_db_measurement:
+    name: DC측정
+    name_en: DC Measurement
+    headers:
+    - 측정조건
+    - 유지시간
+    - DC전압
+    - Cp
+    - DF
+    - ΔCp%
+    concepts:
+    - measurement_condition
+    - hold_time
+    - dc_voltage
+    - cp
+    - df
+    - delta_cp_pct

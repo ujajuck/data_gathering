@@ -1,0 +1,113 @@
+csv_name: data_table
+url: http://166.79.21.126:8600/raw/data_table.csv
+file_col: _source_file
+l1_prefix: data
+node_types:
+  data_experiment:
+    type: SECTION
+    name: 실험식별정보
+    children:
+      _source_file:
+        type: HEADER
+        concept_hint: source_file
+        value_type: VALUE
+      차수:
+        type: HEADER
+        concept_hint: batch_no
+        value_type: VALUE
+      구분:
+        type: HEADER
+        concept_hint: category
+        value_type: VALUE
+      모재/조성:
+        type: HEADER
+        concept_hint: base_composition
+        value_type: VALUE
+      기종:
+        type: HEADER
+        concept_hint: model
+        value_type: VALUE
+      lot:
+        type: HEADER
+        concept_hint: lot
+        value_type: VALUE
+  data_firing:
+    type: SECTION
+    name: 소성조건
+    children:
+      소성Profile:
+        type: HEADER
+        concept_hint: firing_profile
+        value_type: VALUE
+      소성조건-2차가소:
+        type: HEADER
+        concept_hint: firing_2nd_calcination
+        value_type: VALUE
+      소성조건-1차소성:
+        type: HEADER
+        concept_hint: firing_1st
+        value_type: VALUE
+      소성조건-본소성수소+keep:
+        type: HEADER
+        concept_hint: firing_hydrogen_keep
+        value_type: VALUE
+      소성조건-재산화+소성일자:
+        type: HEADER
+        concept_hint: firing_reoxidation
+        value_type: VALUE
+  data_electrical:
+    type: SECTION
+    name: 전기특성
+    children:
+      Cp:
+        type: HEADER
+        concept_hint: cp
+        value_type: VALUE
+      DF:
+        type: HEADER
+        concept_hint: df
+        value_type: VALUE
+      BDV AVG:
+        type: HEADER
+        concept_hint: bdv_avg
+        value_type: VALUE
+      BDV MIN:
+        type: HEADER
+        concept_hint: bdv_min
+        value_type: VALUE
+      Cp STDEV:
+        type: HEADER
+        concept_hint: cp_stdev
+        value_type: VALUE
+      DF STDEV:
+        type: HEADER
+        concept_hint: df_stdev
+        value_type: VALUE
+      BDV STDEV:
+        type: HEADER
+        concept_hint: bdv_stdev
+        value_type: VALUE
+      Short:
+        type: HEADER
+        concept_hint: short_rate
+        value_type: VALUE
+      일반조건:
+        type: HEADER
+        concept_hint: normal_condition
+        value_type: VALUE
+      특수조건:
+        type: HEADER
+        concept_hint: special_condition
+        value_type: VALUE
+      Cp/Df AVG:
+        type: HEADER
+        concept_hint: cp_df_avg
+        value_type: VALUE
+      Cp/Df MIN:
+        type: HEADER
+        concept_hint: cp_df_min
+        value_type: VALUE
+      Cp/Df MAX:
+        type: HEADER
+        concept_hint: cp_df_max
+        value_type: VALUE

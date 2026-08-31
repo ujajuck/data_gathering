@@ -1,0 +1,1330 @@
+version: '2'
+domain: mlcc_composition
+description: MLCC 조성평가 통합 Domain KG — CSV 헤더 기반 자동 생성
+concepts:
+- concept_id: experiment_info
+  canonical_name: 실험식별정보
+  canonical_name_en: Experiment Identity
+  description: 실험의 기본 식별 정보 (파일, 차수, 기종, LOT 등)
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: additive_composition
+  canonical_name: 첨가제구성
+  canonical_name_en: Additive Composition
+  description: 첨가제의 구성 성분 (Additive, Powder, Binder 등)
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: weighing_input
+  canonical_name: 칭량투입량
+  canonical_name_en: Weighing Input
+  description: 칭량 및 투입량 (용매, 바인더, 파우더 등)
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: property_measurement
+  canonical_name: 물성측정값
+  canonical_name_en: Property Measurement
+  description: 슬러리/분말 물성 측정값 (비중, 고형분, BET, 점도)
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: apex_process
+  canonical_name: APEX공정
+  canonical_name_en: APEX Process
+  description: APEX 해쇄/분산 공정 조건
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: mfd_process
+  canonical_name: MFD공정
+  canonical_name_en: MFD Process
+  description: MFD 분산 공정 조건
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: firing_condition
+  canonical_name: 소성조건
+  canonical_name_en: Firing Conditions
+  description: 소성 공정 조건 (프로파일, 온도, 수소농도 등)
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: electrical_property
+  canonical_name: 전기특성
+  canonical_name_en: Electrical Properties
+  description: 정전용량, 손실, 내전압 등 전기 특성
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: dc_property
+  canonical_name: DC특성
+  canonical_name_en: DC Properties
+  description: DC 특성 (DC 전압, Cp, DF, ΔCp%)
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: layer_structure
+  canonical_name: 적층구조
+  canonical_name_en: Layer Structure
+  description: 적층 구조 파라미터 (S/T, L/D, Layer)
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: composition_info
+  canonical_name: 조성정보
+  canonical_name_en: Composition Info
+  description: 조성 관련 정보 (조성, 최종몰비)
+  concept_type: category
+  data_type: null
+  domain_level: L1
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: source_file
+  canonical_name: 원본파일
+  canonical_name_en: Source File
+  description: 원본 실험 데이터 파일명
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 파일명
+  - _source_file
+- concept_id: exp_id
+  canonical_name: 실험ID
+  canonical_name_en: Experiment ID
+  description: 실험 차수 ID
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: batch_no
+  canonical_name: 차수
+  canonical_name_en: Batch Number
+  description: 실험 차수
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: category
+  canonical_name: 구분
+  canonical_name_en: Category
+  description: 실험 구분 (연검 등)
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: base_composition
+  canonical_name: 모재/조성
+  canonical_name_en: Base/Composition
+  description: 모재 또는 조성명
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 모재/조성
+- concept_id: model
+  canonical_name: 기종
+  canonical_name_en: Model
+  description: 제품 기종 코드
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: lot
+  canonical_name: LOT
+  canonical_name_en: LOT
+  description: LOT 번호
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: title
+  canonical_name: 제목
+  canonical_name_en: Title
+  description: 실험 제목
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: data_code
+  canonical_name: 자료코드
+  canonical_name_en: Data Code
+  description: 자료 관리 코드
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: input_date
+  canonical_name: 투입일
+  canonical_name_en: Input Date
+  description: 실험 투입 일자
+  concept_type: property
+  data_type: date
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: author
+  canonical_name: 작성자
+  canonical_name_en: Author
+  description: 실험 작성자
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: additive
+  canonical_name: Additive
+  canonical_name_en: Additive
+  description: 첨가제 코드
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: powder
+  canonical_name: Powder
+  canonical_name_en: Powder
+  description: 파우더 종류
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: binder_composition
+  canonical_name: Binder조성
+  canonical_name_en: Binder Composition
+  description: 바인더 조성
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - Binder조성
+- concept_id: binder
+  canonical_name: Binder
+  canonical_name_en: Binder
+  description: 바인더 종류
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: sr_ratio
+  canonical_name: S/R비
+  canonical_name_en: S/R Ratio
+  description: Solid/Resin 비
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: dispersant
+  canonical_name: 분산제
+  canonical_name_en: Dispersant
+  description: 분산제 종류
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: solid_content
+  canonical_name: 고형분
+  canonical_name_en: Solid Content
+  description: 고형분 비율
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: solvent
+  canonical_name: 솔벤트
+  canonical_name_en: Solvent
+  description: 용매 종류
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: etoh_g
+  canonical_name: Etoh [g]
+  canonical_name_en: Ethanol
+  description: 에탄올 투입량
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: byk103_g
+  canonical_name: BYK103 [g]
+  canonical_name_en: BYK103
+  description: BYK103 분산제 투입량
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: bl1_g
+  canonical_name: BL-1 [g]
+  canonical_name_en: BL-1
+  description: BL-1 투입량
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: powder_g
+  canonical_name: 파우더 [g]
+  canonical_name_en: Powder Weight
+  description: 파우더 투입량
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: binder1_g
+  canonical_name: 1차 바인더 [g]
+  canonical_name_en: 1st Binder
+  description: 1차 바인더 투입량
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: binder2_g
+  canonical_name: 2차 바인더 [g]
+  canonical_name_en: 2nd Binder
+  description: 2차 바인더 투입량
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: plasticizer_g
+  canonical_name: 가소제 [g]
+  canonical_name_en: Plasticizer
+  description: 가소제 투입량
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: g
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: weighing_1
+  canonical_name: 칭량_1
+  canonical_name_en: Weighing 1
+  description: 칭량 정보 1
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: weighing_2
+  canonical_name: 칭량_2
+  canonical_name_en: Weighing 2
+  description: 칭량 정보 2
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: weighing_3
+  canonical_name: 칭량_3
+  canonical_name_en: Weighing 3
+  description: 칭량 정보 3
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: weighing_4
+  canonical_name: 칭량_4
+  canonical_name_en: Weighing 4
+  description: 칭량 정보 4
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: specific_gravity
+  canonical_name: 비중
+  canonical_name_en: Specific Gravity
+  description: 슬러리 비중
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: g/cc
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 비 중(g/cc) (참고치)
+- concept_id: solid_content_pct
+  canonical_name: 고형분(%)
+  canonical_name_en: Solid Content %
+  description: 슬러리 고형분율
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: '%'
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 고형분(%) (참고치)
+- concept_id: crushing_bet
+  canonical_name: 해쇄BET
+  canonical_name_en: Crushing BET
+  description: 해쇄 후 BET 비표면적
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: ㎡/g
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 해쇄BET (가소BET, 참고치)
+- concept_id: final_bet
+  canonical_name: 최종BET
+  canonical_name_en: Final BET
+  description: 최종 BET 비표면적
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: ㎡/g
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 최종BET (가소BET, 참고치)
+- concept_id: viscosity
+  canonical_name: 점도
+  canonical_name_en: Viscosity
+  description: 슬러리 점도
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: cP·s
+  unit_dimension: null
+  status: ACTIVE
+  aliases:
+  - 점 도(cP s) (참고치)
+- concept_id: apex_input_1
+  canonical_name: APEX투입_1
+  canonical_name_en: APEX Input 1
+  description: APEX 1차 투입 정보
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: apex_input_2
+  canonical_name: APEX투입_2
+  canonical_name_en: APEX Input 2
+  description: APEX 2차 투입 정보
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: apex_tank_type
+  canonical_name: APEX Tank Type
+  canonical_name_en: APEX Tank Type
+  description: APEX 탱크 타입
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: apex_slurry_temp
+  canonical_name: APEX 슬러리온도
+  canonical_name_en: APEX Slurry Temp
+  description: APEX 슬러리 온도
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: ℃
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: apex_coolant_temp
+  canonical_name: APEX 냉각수온도
+  canonical_name_en: APEX Coolant Temp
+  description: APEX 냉각수 온도
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: ℃
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: apex_rpm
+  canonical_name: APEX RPM
+  canonical_name_en: APEX Rotor RPM
+  description: APEX 로터 회전수
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: rpm
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: apex_flow_rate
+  canonical_name: APEX 유량
+  canonical_name_en: APEX Flow Rate
+  description: APEX 유량
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: s/250cc
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: mfd_1pass_time
+  canonical_name: MFD 1pass 소요시간
+  canonical_name_en: MFD 1-pass Time
+  description: MFD 1패스 소요 시간
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: mfd_slurry_temp
+  canonical_name: MFD 슬러리온도
+  canonical_name_en: MFD Slurry Temp
+  description: MFD 슬러리 온도
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: ℃
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: mfd_cylinder_pressure
+  canonical_name: MFD 실린더압력
+  canonical_name_en: MFD Cylinder Pressure
+  description: MFD 실린더 압력
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: psi
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: mfd_flow_rate
+  canonical_name: MFD 유량
+  canonical_name_en: MFD Flow Rate
+  description: MFD 유량
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: mfd_oil_temp
+  canonical_name: MFD 오일온도
+  canonical_name_en: MFD Oil Temp
+  description: MFD 오일 온도
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: ℃
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: firing_profile
+  canonical_name: 소성Profile
+  canonical_name_en: Firing Profile
+  description: 소성 프로파일 코드
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: firing_2nd_calcination
+  canonical_name: 2차가소조건
+  canonical_name_en: 2nd Calcination
+  description: 2차 가소 소성 조건
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: firing_1st
+  canonical_name: 1차소성조건
+  canonical_name_en: 1st Firing
+  description: 1차 소성 조건
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: firing_hydrogen_keep
+  canonical_name: 본소성수소+keep
+  canonical_name_en: Hydrogen+Keep
+  description: 본소성 수소 농도 + keep
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: firing_reoxidation
+  canonical_name: 재산화+소성일자
+  canonical_name_en: Reoxidation+Date
+  description: 재산화 + 소성 일자
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: hydrogen_concentration
+  canonical_name: 수소농도
+  canonical_name_en: Hydrogen Concentration
+  description: 소성 수소 농도
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: keep_condition
+  canonical_name: keep
+  canonical_name_en: Keep
+  description: 소성 keep 조건
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: firing_temperature
+  canonical_name: 소성온도
+  canonical_name_en: Firing Temperature
+  description: 소성 온도
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: ℃
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: 1st_calcination
+  canonical_name: 1차소성
+  canonical_name_en: 1st Calcination
+  description: 1차 소성 정보
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: cp
+  canonical_name: Cp
+  canonical_name_en: Capacitance
+  description: 정전용량
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: pF
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: df
+  canonical_name: DF
+  canonical_name_en: Dissipation Factor
+  description: 유전손실
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: '%'
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: bdv_avg
+  canonical_name: BDV AVG
+  canonical_name_en: BDV Average
+  description: 내전압 평균
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: V
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: bdv_min
+  canonical_name: BDV MIN
+  canonical_name_en: BDV Minimum
+  description: 내전압 최소
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: V
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: cp_stdev
+  canonical_name: Cp STDEV
+  canonical_name_en: Cp Std Dev
+  description: 정전용량 표준편차
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: pF
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: df_stdev
+  canonical_name: DF STDEV
+  canonical_name_en: DF Std Dev
+  description: 유전손실 표준편차
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: '%'
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: bdv_stdev
+  canonical_name: BDV STDEV
+  canonical_name_en: BDV Std Dev
+  description: 내전압 표준편차
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: V
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: short_rate
+  canonical_name: Short
+  canonical_name_en: Short Rate
+  description: 단락 여부/비율
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: normal_condition
+  canonical_name: 일반조건
+  canonical_name_en: Normal Condition
+  description: 일반 측정 조건
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: special_condition
+  canonical_name: 특수조건
+  canonical_name_en: Special Condition
+  description: 특수 측정 조건
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: cp_df_avg
+  canonical_name: Cp/Df AVG
+  canonical_name_en: Cp/DF Average
+  description: Cp/DF 비 평균
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: cp_df_min
+  canonical_name: Cp/Df MIN
+  canonical_name_en: Cp/DF Minimum
+  description: Cp/DF 비 최소
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: cp_df_max
+  canonical_name: Cp/Df MAX
+  canonical_name_en: Cp/DF Maximum
+  description: Cp/DF 비 최대
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: dc_voltage
+  canonical_name: DC전압
+  canonical_name_en: DC Voltage
+  description: DC 인가 전압
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: V
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: dc_cp
+  canonical_name: DC_Cp
+  canonical_name_en: DC Capacitance
+  description: DC 측정 정전용량
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: pF
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: dc_df
+  canonical_name: DC_DF
+  canonical_name_en: DC Dissipation Factor
+  description: DC 측정 유전손실
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: '%'
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: delta_cp_pct
+  canonical_name: ΔCp%
+  canonical_name_en: Delta Cp %
+  description: Cp 변화율 (%)
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: '%'
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: cp_change_rate
+  canonical_name: Cp변화율
+  canonical_name_en: Cp Change Rate
+  description: Cp 변화율
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: '%'
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: measurement_condition
+  canonical_name: 측정조건
+  canonical_name_en: Measurement Condition
+  description: 측정 조건 (주파수, 전압 등)
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: hold_time
+  canonical_name: 유지시간
+  canonical_name_en: Hold Time
+  description: DC 전압 유지 시간
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: s
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: s_t_ratio
+  canonical_name: S/T
+  canonical_name_en: S/T Ratio
+  description: Screen/Thickness 비
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: l_d_ratio
+  canonical_name: L/D
+  canonical_name_en: L/D Ratio
+  description: Length/Diameter 비
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: layer_count
+  canonical_name: Layer
+  canonical_name_en: Layer Count
+  description: 적층 수
+  concept_type: property
+  data_type: number
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: composition
+  canonical_name: 조성
+  canonical_name_en: Composition
+  description: 조성명
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: final_mole_ratio
+  canonical_name: 최종몰비
+  canonical_name_en: Final Mole Ratio
+  description: 최종 몰비
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: dc_composition
+  canonical_name: DC_조성
+  canonical_name_en: DC Composition
+  description: DC 측정용 조성
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+- concept_id: match_type
+  canonical_name: _match
+  canonical_name_en: Match Type
+  description: 조인 매치 타입
+  concept_type: property
+  data_type: text
+  domain_level: L2
+  canonical_unit: null
+  unit_dimension: null
+  status: ACTIVE
+  aliases: []
+relations:
+- - source_file
+  - experiment_info
+  - PART_OF
+- - exp_id
+  - experiment_info
+  - PART_OF
+- - batch_no
+  - experiment_info
+  - PART_OF
+- - category
+  - experiment_info
+  - PART_OF
+- - base_composition
+  - experiment_info
+  - PART_OF
+- - model
+  - experiment_info
+  - PART_OF
+- - lot
+  - experiment_info
+  - PART_OF
+- - title
+  - experiment_info
+  - PART_OF
+- - data_code
+  - experiment_info
+  - PART_OF
+- - input_date
+  - experiment_info
+  - PART_OF
+- - author
+  - experiment_info
+  - PART_OF
+- - additive
+  - additive_composition
+  - PART_OF
+- - powder
+  - additive_composition
+  - PART_OF
+- - binder_composition
+  - additive_composition
+  - PART_OF
+- - binder
+  - additive_composition
+  - PART_OF
+- - sr_ratio
+  - additive_composition
+  - PART_OF
+- - dispersant
+  - additive_composition
+  - PART_OF
+- - solid_content
+  - additive_composition
+  - PART_OF
+- - solvent
+  - additive_composition
+  - PART_OF
+- - etoh_g
+  - weighing_input
+  - PART_OF
+- - byk103_g
+  - weighing_input
+  - PART_OF
+- - bl1_g
+  - weighing_input
+  - PART_OF
+- - powder_g
+  - weighing_input
+  - PART_OF
+- - binder1_g
+  - weighing_input
+  - PART_OF
+- - binder2_g
+  - weighing_input
+  - PART_OF
+- - plasticizer_g
+  - weighing_input
+  - PART_OF
+- - weighing_1
+  - weighing_input
+  - PART_OF
+- - weighing_2
+  - weighing_input
+  - PART_OF
+- - weighing_3
+  - weighing_input
+  - PART_OF
+- - weighing_4
+  - weighing_input
+  - PART_OF
+- - specific_gravity
+  - property_measurement
+  - PART_OF
+- - solid_content_pct
+  - property_measurement
+  - PART_OF
+- - crushing_bet
+  - property_measurement
+  - PART_OF
+- - final_bet
+  - property_measurement
+  - PART_OF
+- - viscosity
+  - property_measurement
+  - PART_OF
+- - apex_input_1
+  - apex_process
+  - PART_OF
+- - apex_input_2
+  - apex_process
+  - PART_OF
+- - apex_tank_type
+  - apex_process
+  - PART_OF
+- - apex_slurry_temp
+  - apex_process
+  - PART_OF
+- - apex_coolant_temp
+  - apex_process
+  - PART_OF
+- - apex_rpm
+  - apex_process
+  - PART_OF
+- - apex_flow_rate
+  - apex_process
+  - PART_OF
+- - mfd_1pass_time
+  - mfd_process
+  - PART_OF
+- - mfd_slurry_temp
+  - mfd_process
+  - PART_OF
+- - mfd_cylinder_pressure
+  - mfd_process
+  - PART_OF
+- - mfd_flow_rate
+  - mfd_process
+  - PART_OF
+- - mfd_oil_temp
+  - mfd_process
+  - PART_OF
+- - firing_profile
+  - firing_condition
+  - PART_OF
+- - firing_2nd_calcination
+  - firing_condition
+  - PART_OF
+- - firing_1st
+  - firing_condition
+  - PART_OF
+- - firing_hydrogen_keep
+  - firing_condition
+  - PART_OF
+- - firing_reoxidation
+  - firing_condition
+  - PART_OF
+- - hydrogen_concentration
+  - firing_condition
+  - PART_OF
+- - keep_condition
+  - firing_condition
+  - PART_OF
+- - firing_temperature
+  - firing_condition
+  - PART_OF
+- - 1st_calcination
+  - firing_condition
+  - PART_OF
+- - cp
+  - electrical_property
+  - PART_OF
+- - df
+  - electrical_property
+  - PART_OF
+- - bdv_avg
+  - electrical_property
+  - PART_OF
+- - bdv_min
+  - electrical_property
+  - PART_OF
+- - cp_stdev
+  - electrical_property
+  - PART_OF
+- - df_stdev
+  - electrical_property
+  - PART_OF
+- - bdv_stdev
+  - electrical_property
+  - PART_OF
+- - short_rate
+  - electrical_property
+  - PART_OF
+- - normal_condition
+  - electrical_property
+  - PART_OF
+- - special_condition
+  - electrical_property
+  - PART_OF
+- - cp_df_avg
+  - electrical_property
+  - PART_OF
+- - cp_df_min
+  - electrical_property
+  - PART_OF
+- - cp_df_max
+  - electrical_property
+  - PART_OF
+- - dc_voltage
+  - dc_property
+  - PART_OF
+- - dc_cp
+  - dc_property
+  - PART_OF
+- - dc_df
+  - dc_property
+  - PART_OF
+- - delta_cp_pct
+  - dc_property
+  - PART_OF
+- - cp_change_rate
+  - dc_property
+  - PART_OF
+- - measurement_condition
+  - dc_property
+  - PART_OF
+- - hold_time
+  - dc_property
+  - PART_OF
+- - s_t_ratio
+  - layer_structure
+  - PART_OF
+- - l_d_ratio
+  - layer_structure
+  - PART_OF
+- - layer_count
+  - layer_structure
+  - PART_OF
+- - composition
+  - composition_info
+  - PART_OF
+- - final_mole_ratio
+  - composition_info
+  - PART_OF
+- - dc_composition
+  - composition_info
+  - PART_OF
+- - match_type
+  - experiment_info
+  - PART_OF
+- - additive_composition
+  - property_measurement
+  - AFFECTS
+- - weighing_input
+  - property_measurement
+  - AFFECTS
+- - apex_process
+  - property_measurement
+  - AFFECTS
+- - mfd_process
+  - property_measurement
+  - AFFECTS
+- - firing_condition
+  - electrical_property
+  - AFFECTS
+- - firing_condition
+  - dc_property
+  - AFFECTS
+- - layer_structure
+  - electrical_property
+  - AFFECTS
+- - composition_info
+  - electrical_property
+  - AFFECTS
+- - dc_property
+  - electrical_property
+  - RELATED_TO
+- - composition_info
+  - additive_composition
+  - RELATED_TO
+- - property_measurement
+  - electrical_property
+  - RELATED_TO

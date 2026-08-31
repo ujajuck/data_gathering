@@ -1,0 +1,42 @@
+{
+  "domain": "mlcc_composition",
+  "csv_sources": [
+    "checksheet_table",
+    "data_table",
+    "dc_db_table",
+    "dc_table",
+    "joined_data_dc"
+  ],
+  "unified_dkg": {
+    "l1_concepts": 11,
+    "l2_concepts": 83,
+    "relations": 94
+  },
+  "document_kgs": {
+    "checksheet_table": {
+      "categories": 6,
+      "headers": 42,
+      "rows": 45
+    },
+    "data_table": {
+      "categories": 3,
+      "headers": 24,
+      "rows": 429
+    },
+    "dc_db_table": {
+      "categories": 4,
+      "headers": 17,
+      "rows": 160
+    },
+    "dc_table": {
+      "categories": 4,
+      "headers": 17,
+      "rows": 1844
+    },
+    "joined_data_dc": {
+      "categories": 4,
+      "headers": 40,
+      "rows": 480
+    }
+  }
+}

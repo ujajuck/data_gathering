@@ -1,0 +1,197 @@
+csv_name: checksheet_table
+url: http://166.79.21.126:8600/raw/checksheet_table.csv
+file_col: 파일명
+l1_prefix: cs
+node_types:
+  cs_experiment:
+    type: SECTION
+    name: 실험기본정보
+    children:
+      파일명:
+        type: HEADER
+        concept_hint: source_file
+        value_type: VALUE
+      제목:
+        type: HEADER
+        concept_hint: title
+        value_type: VALUE
+      자료코드:
+        type: HEADER
+        concept_hint: data_code
+        value_type: VALUE
+      투입일:
+        type: HEADER
+        concept_hint: input_date
+        value_type: VALUE
+      작성자:
+        type: HEADER
+        concept_hint: author
+        value_type: VALUE
+      LOT:
+        type: HEADER
+        concept_hint: lot
+        value_type: VALUE
+  cs_additive:
+    type: SECTION
+    name: 첨가제구성
+    children:
+      Additive:
+        type: HEADER
+        concept_hint: additive
+        value_type: VALUE
+      Powder:
+        type: HEADER
+        concept_hint: powder
+        value_type: VALUE
+      Binder조성:
+        type: HEADER
+        concept_hint: binder_composition
+        value_type: VALUE
+      Binder:
+        type: HEADER
+        concept_hint: binder
+        value_type: VALUE
+      S/R비:
+        type: HEADER
+        concept_hint: sr_ratio
+        value_type: VALUE
+      분산제:
+        type: HEADER
+        concept_hint: dispersant
+        value_type: VALUE
+      고형분:
+        type: HEADER
+        concept_hint: solid_content
+        value_type: VALUE
+      솔벤트:
+        type: HEADER
+        concept_hint: solvent
+        value_type: VALUE
+  cs_weighing:
+    type: SECTION
+    name: 칭량투입량
+    children:
+      Etoh [g]:
+        type: HEADER
+        concept_hint: etoh_g
+        value_type: VALUE
+      BYK103 [g]:
+        type: HEADER
+        concept_hint: byk103_g
+        value_type: VALUE
+      BL-1 [g]:
+        type: HEADER
+        concept_hint: bl1_g
+        value_type: VALUE
+      파우더 [g]:
+        type: HEADER
+        concept_hint: powder_g
+        value_type: VALUE
+      1차 바인더 [g]:
+        type: HEADER
+        concept_hint: binder1_g
+        value_type: VALUE
+      2차 바인더 [g]:
+        type: HEADER
+        concept_hint: binder2_g
+        value_type: VALUE
+      가소제 [g]:
+        type: HEADER
+        concept_hint: plasticizer_g
+        value_type: VALUE
+      칭량_1:
+        type: HEADER
+        concept_hint: weighing_1
+        value_type: VALUE
+      칭량_2:
+        type: HEADER
+        concept_hint: weighing_2
+        value_type: VALUE
+      칭량_3:
+        type: HEADER
+        concept_hint: weighing_3
+        value_type: VALUE
+      칭량_4:
+        type: HEADER
+        concept_hint: weighing_4
+        value_type: VALUE
+  cs_property:
+    type: SECTION
+    name: 물성측정값
+    children:
+      비 중(g/cc) (참고치):
+        type: HEADER
+        concept_hint: specific_gravity
+        value_type: VALUE
+      고형분(%) (참고치):
+        type: HEADER
+        concept_hint: solid_content_pct
+        value_type: VALUE
+      해쇄BET (가소BET, 참고치):
+        type: HEADER
+        concept_hint: crushing_bet
+        value_type: VALUE
+      최종BET (가소BET, 참고치):
+        type: HEADER
+        concept_hint: final_bet
+        value_type: VALUE
+      점 도(cP s) (참고치):
+        type: HEADER
+        concept_hint: viscosity
+        value_type: VALUE
+  cs_apex:
+    type: SECTION
+    name: APEX공정
+    children:
+      APEX투입_1:
+        type: HEADER
+        concept_hint: apex_input_1
+        value_type: VALUE
+      APEX투입_2:
+        type: HEADER
+        concept_hint: apex_input_2
+        value_type: VALUE
+      APEX_Tank Type:
+        type: HEADER
+        concept_hint: apex_tank_type
+        value_type: VALUE
+      APEX_Slurry온도:
+        type: HEADER
+        concept_hint: apex_slurry_temp
+        value_type: VALUE
+      APEX_냉각수온도:
+        type: HEADER
+        concept_hint: apex_coolant_temp
+        value_type: VALUE
+      APEX_Rotor RPM:
+        type: HEADER
+        concept_hint: apex_rpm
+        value_type: VALUE
+      APEX_유량:
+        type: HEADER
+        concept_hint: apex_flow_rate
+        value_type: VALUE
+  cs_mfd:
+    type: SECTION
+    name: MFD공정
+    children:
+      MFD_1pass 소요시간:
+        type: HEADER
+        concept_hint: mfd_1pass_time
+        value_type: VALUE
+      MFD_슬러리온도:
+        type: HEADER
+        concept_hint: mfd_slurry_temp
+        value_type: VALUE
+      MFD_실린더압력:
+        type: HEADER
+        concept_hint: mfd_cylinder_pressure
+        value_type: VALUE
+      MFD_유량:
+        type: HEADER
+        concept_hint: mfd_flow_rate
+        value_type: VALUE
+      MFD_오일온도:
+        type: HEADER
+        concept_hint: mfd_oil_temp
+        value_type: VALUE

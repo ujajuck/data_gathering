@@ -1,0 +1,118 @@
+csv_name: checksheet_table
+description: 첨가제 CHECKSHEET — 제조 공정 기록
+row_count: 45
+categories:
+  cs_experiment:
+    name: 실험기본정보
+    name_en: Experiment Info
+    headers:
+    - 파일명
+    - 제목
+    - 자료코드
+    - 투입일
+    - 작성자
+    - LOT
+    concepts:
+    - source_file
+    - title
+    - data_code
+    - input_date
+    - author
+    - lot
+  cs_additive:
+    name: 첨가제구성
+    name_en: Additive Composition
+    headers:
+    - Additive
+    - Powder
+    - Binder조성
+    - Binder
+    - S/R비
+    - 분산제
+    - 고형분
+    - 솔벤트
+    concepts:
+    - additive
+    - powder
+    - binder_composition
+    - binder
+    - sr_ratio
+    - dispersant
+    - solid_content
+    - solvent
+  cs_weighing:
+    name: 칭량투입량
+    name_en: Weighing Input
+    headers:
+    - Etoh [g]
+    - BYK103 [g]
+    - BL-1 [g]
+    - 파우더 [g]
+    - 1차 바인더 [g]
+    - 2차 바인더 [g]
+    - 가소제 [g]
+    - 칭량_1
+    - 칭량_2
+    - 칭량_3
+    - 칭량_4
+    concepts:
+    - etoh_g
+    - byk103_g
+    - bl1_g
+    - powder_g
+    - binder1_g
+    - binder2_g
+    - plasticizer_g
+    - weighing_1
+    - weighing_2
+    - weighing_3
+    - weighing_4
+  cs_property:
+    name: 물성측정값
+    name_en: Property Measurement
+    headers:
+    - 비 중(g/cc) (참고치)
+    - 고형분(%) (참고치)
+    - 해쇄BET (가소BET, 참고치)
+    - 최종BET (가소BET, 참고치)
+    - 점 도(cP s) (참고치)
+    concepts:
+    - specific_gravity
+    - solid_content_pct
+    - crushing_bet
+    - final_bet
+    - viscosity
+  cs_apex:
+    name: APEX공정
+    name_en: APEX Process
+    headers:
+    - APEX투입_1
+    - APEX투입_2
+    - APEX_Tank Type
+    - APEX_Slurry온도
+    - APEX_냉각수온도
+    - APEX_Rotor RPM
+    - APEX_유량
+    concepts:
+    - apex_input_1
+    - apex_input_2
+    - apex_tank_type
+    - apex_slurry_temp
+    - apex_coolant_temp
+    - apex_rpm
+    - apex_flow_rate
+  cs_mfd:
+    name: MFD공정
+    name_en: MFD Process
+    headers:
+    - MFD_1pass 소요시간
+    - MFD_슬러리온도
+    - MFD_실린더압력
+    - MFD_유량
+    - MFD_오일온도
+    concepts:
+    - mfd_1pass_time
+    - mfd_slurry_temp
+    - mfd_cylinder_pressure
+    - mfd_flow_rate
+    - mfd_oil_temp

@@ -1,0 +1,67 @@
+csv_name: data_table
+description: 조성평가 Data 시트 — 소성/전기특성
+row_count: 429
+categories:
+  data_experiment:
+    name: 실험식별정보
+    name_en: Experiment Identity
+    headers:
+    - _source_file
+    - 차수
+    - 구분
+    - 모재/조성
+    - 기종
+    - lot
+    concepts:
+    - source_file
+    - batch_no
+    - category
+    - base_composition
+    - model
+    - lot
+  data_firing:
+    name: 소성조건
+    name_en: Firing Conditions
+    headers:
+    - 소성Profile
+    - 소성조건-2차가소
+    - 소성조건-1차소성
+    - 소성조건-본소성수소+keep
+    - 소성조건-재산화+소성일자
+    concepts:
+    - firing_profile
+    - firing_2nd_calcination
+    - firing_1st
+    - firing_hydrogen_keep
+    - firing_reoxidation
+  data_electrical:
+    name: 전기특성
+    name_en: Electrical Properties
+    headers:
+    - Cp
+    - DF
+    - BDV AVG
+    - BDV MIN
+    - Cp STDEV
+    - DF STDEV
+    - BDV STDEV
+    - Short
+    - 일반조건
+    - 특수조건
+    - Cp/Df AVG
+    - Cp/Df MIN
+    - Cp/Df MAX
+    concepts:
+    - cp
+    - df
+    - bdv_avg
+    - bdv_min
+    - cp_stdev
+    - df_stdev
+    - bdv_stdev
+    - short_rate
+    - normal_condition
+    - special_condition
+    - cp_df_avg
+    - cp_df_min
+    - cp_df_max

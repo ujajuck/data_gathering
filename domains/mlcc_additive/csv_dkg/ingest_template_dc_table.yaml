@@ -1,0 +1,89 @@
+csv_name: dc_table
+url: http://166.79.21.126:8600/raw/dc_table.csv
+file_col: _source_file
+l1_prefix: dc
+node_types:
+  dc_experiment:
+    type: SECTION
+    name: DC실험식별
+    children:
+      _source_file:
+        type: HEADER
+        concept_hint: source_file
+        value_type: VALUE
+      exp_id:
+        type: HEADER
+        concept_hint: exp_id
+        value_type: VALUE
+      조성:
+        type: HEADER
+        concept_hint: composition
+        value_type: VALUE
+      최종몰비:
+        type: HEADER
+        concept_hint: final_mole_ratio
+        value_type: VALUE
+  dc_structure:
+    type: SECTION
+    name: 적층구조
+    children:
+      S/T:
+        type: HEADER
+        concept_hint: s_t_ratio
+        value_type: VALUE
+      L/D:
+        type: HEADER
+        concept_hint: l_d_ratio
+        value_type: VALUE
+      Layer:
+        type: HEADER
+        concept_hint: layer_count
+        value_type: VALUE
+      1차소성:
+        type: HEADER
+        concept_hint: 1st_calcination
+        value_type: VALUE
+  dc_firing:
+    type: SECTION
+    name: 소성조건
+    children:
+      수소농도:
+        type: HEADER
+        concept_hint: hydrogen_concentration
+        value_type: VALUE
+      keep:
+        type: HEADER
+        concept_hint: keep_condition
+        value_type: VALUE
+      소성온도:
+        type: HEADER
+        concept_hint: firing_temperature
+        value_type: VALUE
+  dc_measurement:
+    type: SECTION
+    name: DC측정
+    children:
+      측정조건:
+        type: HEADER
+        concept_hint: measurement_condition
+        value_type: VALUE
+      DC전압:
+        type: HEADER
+        concept_hint: dc_voltage
+        value_type: VALUE
+      유지시간:
+        type: HEADER
+        concept_hint: hold_time
+        value_type: VALUE
+      Cp:
+        type: HEADER
+        concept_hint: cp
+        value_type: VALUE
+      DF:
+        type: HEADER
+        concept_hint: df
+        value_type: VALUE
+      Cp변화율:
+        type: HEADER
+        concept_hint: cp_change_rate
+        value_type: VALUE

@@ -1,0 +1,181 @@
+csv_name: joined_data_dc
+url: http://166.79.21.126:8600/raw/joined_data_dc.csv
+file_col: _source_file
+l1_prefix: joined
+node_types:
+  joined_experiment:
+    type: SECTION
+    name: 통합실험식별
+    children:
+      _source_file:
+        type: HEADER
+        concept_hint: source_file
+        value_type: VALUE
+      exp_id:
+        type: HEADER
+        concept_hint: exp_id
+        value_type: VALUE
+      구분:
+        type: HEADER
+        concept_hint: category
+        value_type: VALUE
+      모재/조성:
+        type: HEADER
+        concept_hint: base_composition
+        value_type: VALUE
+      기종:
+        type: HEADER
+        concept_hint: model
+        value_type: VALUE
+      lot:
+        type: HEADER
+        concept_hint: lot
+        value_type: VALUE
+  joined_firing:
+    type: SECTION
+    name: 소성조건
+    children:
+      소성Profile:
+        type: HEADER
+        concept_hint: firing_profile
+        value_type: VALUE
+      소성조건-2차가소:
+        type: HEADER
+        concept_hint: firing_2nd_calcination
+        value_type: VALUE
+      소성조건-1차소성:
+        type: HEADER
+        concept_hint: firing_1st
+        value_type: VALUE
+      소성조건-본소성수소+keep:
+        type: HEADER
+        concept_hint: firing_hydrogen_keep
+        value_type: VALUE
+      소성조건-재산화+소성일자:
+        type: HEADER
+        concept_hint: firing_reoxidation
+        value_type: VALUE
+  joined_electrical:
+    type: SECTION
+    name: 전기특성
+    children:
+      Cp:
+        type: HEADER
+        concept_hint: cp
+        value_type: VALUE
+      DF:
+        type: HEADER
+        concept_hint: df
+        value_type: VALUE
+      BDV AVG:
+        type: HEADER
+        concept_hint: bdv_avg
+        value_type: VALUE
+      BDV MIN:
+        type: HEADER
+        concept_hint: bdv_min
+        value_type: VALUE
+      Cp STDEV:
+        type: HEADER
+        concept_hint: cp_stdev
+        value_type: VALUE
+      DF STDEV:
+        type: HEADER
+        concept_hint: df_stdev
+        value_type: VALUE
+      BDV STDEV:
+        type: HEADER
+        concept_hint: bdv_stdev
+        value_type: VALUE
+      Short:
+        type: HEADER
+        concept_hint: short_rate
+        value_type: VALUE
+      일반조건:
+        type: HEADER
+        concept_hint: normal_condition
+        value_type: VALUE
+      특수조건:
+        type: HEADER
+        concept_hint: special_condition
+        value_type: VALUE
+      Cp/Df AVG:
+        type: HEADER
+        concept_hint: cp_df_avg
+        value_type: VALUE
+      Cp/Df MIN:
+        type: HEADER
+        concept_hint: cp_df_min
+        value_type: VALUE
+      Cp/Df MAX:
+        type: HEADER
+        concept_hint: cp_df_max
+        value_type: VALUE
+  joined_dc:
+    type: SECTION
+    name: DC특성
+    children:
+      DC_조성:
+        type: HEADER
+        concept_hint: dc_composition
+        value_type: VALUE
+      최종몰비:
+        type: HEADER
+        concept_hint: final_mole_ratio
+        value_type: VALUE
+      S/T:
+        type: HEADER
+        concept_hint: s_t_ratio
+        value_type: VALUE
+      L/D:
+        type: HEADER
+        concept_hint: l_d_ratio
+        value_type: VALUE
+      Layer:
+        type: HEADER
+        concept_hint: layer_count
+        value_type: VALUE
+      1차소성:
+        type: HEADER
+        concept_hint: 1st_calcination
+        value_type: VALUE
+      수소농도:
+        type: HEADER
+        concept_hint: hydrogen_concentration
+        value_type: VALUE
+      keep:
+        type: HEADER
+        concept_hint: keep_condition
+        value_type: VALUE
+      소성온도:
+        type: HEADER
+        concept_hint: firing_temperature
+        value_type: VALUE
+      측정조건:
+        type: HEADER
+        concept_hint: measurement_condition
+        value_type: VALUE
+      유지시간:
+        type: HEADER
+        concept_hint: hold_time
+        value_type: VALUE
+      DC전압:
+        type: HEADER
+        concept_hint: dc_voltage
+        value_type: VALUE
+      DC_Cp:
+        type: HEADER
+        concept_hint: dc_cp
+        value_type: VALUE
+      DC_DF:
+        type: HEADER
+        concept_hint: dc_df
+        value_type: VALUE
+      ΔCp%:
+        type: HEADER
+        concept_hint: delta_cp_pct
+        value_type: VALUE
+      _match:
+        type: HEADER
+        concept_hint: match_type
+        value_type: VALUE
