@@ -2186,6 +2186,11 @@ def create_app(ws_root: str | Path) -> FastAPI:
             _yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
             media_type="text/yaml; charset=utf-8")
 
+    # React 포트(frontend/) 빌드가 있으면 /app 에 함께 서빙한다.
+    # web_kg는 완전 대체 전까지 / 에서 그대로 유지 (이중 유지 의도).
+    react_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    if react_dist.is_dir():
+        app.mount("/app", StaticFiles(directory=react_dist, html=True), name="react")
     app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="static")
     return app
 
