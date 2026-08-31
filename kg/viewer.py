@@ -201,26 +201,40 @@ def cache_paths(cache_root: Path, digest: str) -> tuple[Path, Path, Path]:
     return directory / "workbook.pdf", directory / "sheets.json", directory / "render_metadata.json"
 
 
-def render_preview(store: KgStore, document_id: str, document_version: str,
-                   cache_root: Path, soffice: str | None = None) -> Path:
-    """Render with LibreOffice into cache and prove the source stayed unchanged."""
+def prepare_render(store: KgStore, document_id: str, document_version: str,
+                   cache_root: Path) -> dict:
+    """DB stage 1 (call under the shared lock): validate and mark RUNNING.
+
+    Returns everything the LibreOffice stage needs so that stage can run
+    without touching the shared connection.
+    """
     row = _viewer_row(store, document_id, document_version)
     if row["drm_status"] != "READY":
         raise ViewerError("DRM_NOT_READY")
     source = Path(row["unlocked_path"])
-    before = sha256_file(source)
-    if before != row["sha256"]:
-        raise ViewerError("IMMUTABLE_SOURCE_CORRUPT")
-    pdf, sheet_json, render_json = cache_paths(cache_root, before)
+    digest = row["sha256"]
+    pdf, sheet_json, render_json = cache_paths(cache_root, digest)
     if pdf.is_file() and pdf.stat().st_size > 0:
-        return pdf
+        return {"cached": True, "pdf": pdf}
+    store.conn.execute(
+        "UPDATE viewer_document_version SET render_status='RUNNING',render_error=NULL WHERE document_id=? AND document_version=?",
+        (document_id, document_version))
+    return {"cached": False, "source": source, "digest": digest, "pdf": pdf,
+            "sheet_json": sheet_json, "render_json": render_json}
+
+
+def execute_render(prep: dict, soffice: str | None = None) -> None:
+    """Renderer stage (never hold the shared DB lock here): the LibreOffice
+    subprocess can take up to two minutes and must not stall the web app.
+    Verifies the immutable source hash before and after conversion."""
+    source, digest, pdf = prep["source"], prep["digest"], prep["pdf"]
+    before = sha256_file(source)
+    if before != digest:
+        raise ViewerError("IMMUTABLE_SOURCE_CORRUPT")
     executable = soffice or shutil.which("libreoffice") or shutil.which("soffice")
     if executable is None:
         raise ViewerError("RENDERER_UNAVAILABLE: LibreOffice is not installed")
     pdf.parent.mkdir(parents=True, exist_ok=True)
-    store.conn.execute(
-        "UPDATE viewer_document_version SET render_status='RUNNING',render_error=NULL WHERE document_id=? AND document_version=?",
-        (document_id, document_version))
     with tempfile.TemporaryDirectory(prefix="viewer-lo-") as profile:
         command = [executable, "--headless", "--nologo", "--nodefault", "--nolockcheck",
                    f"-env:UserInstallation=file://{profile}", "--convert-to", "pdf",
@@ -229,9 +243,6 @@ def render_preview(store: KgStore, document_id: str, document_version: str,
     generated = pdf.parent / f"{source.stem}.pdf"
     if completed.returncode != 0 or not generated.is_file():
         error = (completed.stderr or completed.stdout or "LibreOffice did not create a PDF").strip()
-        store.conn.execute(
-            "UPDATE viewer_document_version SET render_status='FAILED',render_error=? WHERE document_id=? AND document_version=?",
-            (error[:1000], document_id, document_version))
         raise ViewerError(f"RENDER_FAILED: {error}")
     if generated != pdf:
         os.replace(generated, pdf)
@@ -239,14 +250,43 @@ def render_preview(store: KgStore, document_id: str, document_version: str,
     if after != before:
         pdf.unlink(missing_ok=True)
         raise ViewerError("IMMUTABILITY_VIOLATION: source changed during rendering")
+
+
+def mark_render_failed(store: KgStore, document_id: str, document_version: str,
+                       error: str) -> None:
+    """DB stage (under lock): persist a renderer failure."""
+    store.conn.execute(
+        "UPDATE viewer_document_version SET render_status='FAILED',render_error=? WHERE document_id=? AND document_version=?",
+        (error[:1000], document_id, document_version))
+
+
+def finalize_render(store: KgStore, document_id: str, document_version: str,
+                    prep: dict) -> None:
+    """DB stage 2 (under lock): cache metadata + SUCCESS status."""
     sheet_data = sheets(store, document_id, document_version)
-    sheet_json.write_text(json.dumps(sheet_data, ensure_ascii=False, indent=2), encoding="utf-8")
-    render_json.write_text(json.dumps({"sha256": before, "engine": "libreoffice-pdf",
-                                      "read_only": True}, indent=2), encoding="utf-8")
+    prep["sheet_json"].write_text(
+        json.dumps(sheet_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    prep["render_json"].write_text(
+        json.dumps({"sha256": prep["digest"], "engine": "libreoffice-pdf",
+                    "read_only": True}, indent=2), encoding="utf-8")
     store.conn.execute(
         "UPDATE viewer_document_version SET render_status='SUCCESS',render_error=NULL,rendered_at=? WHERE document_id=? AND document_version=?",
         (now_iso(), document_id, document_version))
-    return pdf
+
+
+def render_preview(store: KgStore, document_id: str, document_version: str,
+                   cache_root: Path, soffice: str | None = None) -> Path:
+    """Single-caller convenience (tests/CLI): all three stages in sequence."""
+    prep = prepare_render(store, document_id, document_version, cache_root)
+    if prep["cached"]:
+        return prep["pdf"]
+    try:
+        execute_render(prep, soffice)
+    except ViewerError as exc:
+        mark_render_failed(store, document_id, document_version, str(exc))
+        raise
+    finalize_render(store, document_id, document_version, prep)
+    return prep["pdf"]
 
 
 def normalize_a1_range(value: str) -> dict:

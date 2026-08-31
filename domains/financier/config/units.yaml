@@ -1,0 +1,48 @@
+version: '3'
+aliases:
+  °C: ℃
+  degC: ℃
+  F: °F
+  degF: °F
+  원: KRW
+  won: KRW
+  원/ea: KRW
+  KR₩: KRW
+  ea: EA
+  개: EA
+  yes/no: flag
+  index: ratio
+  ₩: KRW
+  ₩/ea: KRW
+  idx: ratio
+dimensions:
+  temperature:
+    ℃: 1.0
+    K:
+      factor: 1.0
+      offset: -273.15
+    °F:
+      factor: 0.5555555555555556
+      offset: -17.77777777777778
+  mass:
+    g: 1.0
+    kg: 1000.0
+  length:
+    mm: 1.0
+    cm: 10.0
+  percent:
+    '%': 1.0
+  currency:
+    KRW: 1.0
+  duration:
+    min: 1.0
+    h: 60.0
+  score:
+    score 1~5: 1.0
+    score: 1.0
+  count:
+    EA: 1.0
+  ratio:
+    ratio: 1.0
+  flag: {}
+  time_of_day: {}

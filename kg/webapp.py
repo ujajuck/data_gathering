@@ -1030,31 +1030,53 @@ def create_app(ws_root: str | Path) -> FastAPI:
     @app.post("/api/viewer/documents/{document_id}/render")
     def viewer_render(document_id: str, req: ViewerRenderReq):
         # DRM 파일은 이미 sheet_render에 캐시됨 → 항상 SUCCESS
-        # 비DRM은 render_preview 시도 (LibreOffice)
-        doc_row = store.conn.execute(
-            "SELECT filepath FROM document WHERE document_id=?", (document_id,)).fetchone()
-        if doc_row and doc_row['filepath'] and not _is_drm_file(Path(doc_row['filepath'])):
-            from kg.viewer import ViewerError, render_preview
-            try:
-                with wlock():
-                    render_preview(store, document_id, req.document_version,
-                                   root / "data" / "viewer-cache")
-                    store.commit()
-                return {"status": "SUCCESS"}
-            except ViewerError as exc:
-                with wlock():
-                    store.conn.execute(
-                        """UPDATE viewer_document_version SET render_status='FAILED',render_error=?
-                           WHERE document_id=? AND document_version=?""",
-                        (str(exc)[:1000], document_id, req.document_version))
-                    store.commit()
-                raise HTTPException(503, str(exc)) from exc
-        return {"status": "SUCCESS", "cached": True}
+        # 비DRM은 render_preview 시도 (LibreOffice) — 스테이징: LibreOffice
+        # 서브프로세스(최대 120초)는 절대 전역 DB lock을 쥔 채 돌리지 않는다
+        from kg.viewer import (ViewerError, execute_render, finalize_render,
+                               mark_render_failed, prepare_render)
+        with lock:
+            doc_row = store.conn.execute(
+                "SELECT filepath FROM document WHERE document_id=?",
+                (document_id,)).fetchone()
+        if not (doc_row and doc_row['filepath']
+                and not _is_drm_file(Path(doc_row['filepath']))):
+            return {"status": "SUCCESS", "cached": True}
+        cache_root = root / "data" / "viewer-cache"
+        try:
+            with wlock():
+                prep = prepare_render(store, document_id, req.document_version,
+                                      cache_root)
+                store.commit()
+        except ViewerError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        if prep["cached"]:
+            return {"status": "SUCCESS", "cached": True}
+        try:
+            execute_render(prep)                     # lock 밖 — LibreOffice
+        except ViewerError as exc:
+            with wlock():
+                mark_render_failed(store, document_id, req.document_version, str(exc))
+                store.commit()
+            raise HTTPException(503, str(exc)) from exc
+        with wlock():
+            finalize_render(store, document_id, req.document_version, prep)
+            store.commit()
+        return {"status": "SUCCESS"}
 
     @app.get("/api/viewer/documents/{document_id}/render-status")
     def viewer_render_status(document_id: str, document_version: str):
-        return {"document_id": document_id, "document_version": document_version,
-                "render_status": "SUCCESS", "render_error": None}
+        # 등록된 뷰어 소스는 실제 상태를 보고, 미등록(sheet_render 경로)은
+        # 기존 동작대로 SUCCESS 스텁을 유지한다
+        from kg.viewer import ViewerError, document_metadata
+        try:
+            with lock:
+                metadata = document_metadata(store, document_id, document_version)
+            return {key: metadata[key] for key in
+                    ("document_id", "document_version", "render_status",
+                     "render_error")}
+        except ViewerError:
+            return {"document_id": document_id, "document_version": document_version,
+                    "render_status": "SUCCESS", "render_error": None}
 
     @app.get("/api/viewer/documents/{document_id}/preview")
     @app.get("/api/viewer/documents/{document_id}/preview")
@@ -1195,16 +1217,34 @@ def create_app(ws_root: str | Path) -> FastAPI:
                     cached["sheets"] = all_sheets
                     return {"document_id": doc, **cached}
 
-        # 2) tree_node 기반 테이블 생성 (CSV / 캐시 없는 DRM)
-        target_sheet = name or (all_sheets[0] if all_sheets else None)
-        if target_sheet:
-            tn_result = _tree_node_table(doc, target_sheet)
-            if tn_result:
-                tn_result["sheets"] = all_sheets
-                return {"document_id": doc, **tn_result}
+        # 2) 원본 파일이 읽을 수 있는 xlsx면 원본 충실 렌더가 최우선 —
+        #    tree_node 폴백이 정상 xlsx까지 가로채 병합/스타일이 사라지는
+        #    회귀(머지 산물) 수정. 폴백은 CSV/DRM/파일 소실에만 쓴다.
+        path = None
+        try:
+            path = _doc_path(doc)
+        except HTTPException:
+            path = None                       # 파일 소실 → tree_node 폴백
+        renderable = (path is not None and path.suffix.lower() == ".xlsx"
+                      and not _is_drm_file(path))
+        if not renderable:
+            target_sheet = name or (all_sheets[0] if all_sheets else None)
+            if target_sheet:
+                tn_result = _tree_node_table(doc, target_sheet)
+                if tn_result:
+                    # JS 렌더 계약(cols/rows 배열)으로 정규화
+                    if "cols" not in tn_result:
+                        tn_result["cols"] = [120] * tn_result.get("max_col", 0)
+                    if "rows" not in tn_result:
+                        tn_result["rows"] = [24] * tn_result.get("max_row", 0)
+                    tn_result.setdefault("images", [])
+                    tn_result.setdefault("gridlines", True)
+                    tn_result["sheets"] = all_sheets
+                    return {"document_id": doc, **tn_result}
+        if path is None:
+            raise HTTPException(404, "file missing and no tree fallback")
 
-        # 3) DB에 없으면 파일에서 읽기 (비DRM만, DRM은 ingest 필요)
-        path = _doc_path(doc)
+        # 3) 파일에서 렌더 (비DRM은 원본 충실, DRM은 플레이스홀더)
         key = (str(path), path.stat().st_mtime, name or "")
         if key not in render_cache:
             if len(render_cache) > 24:
@@ -1318,11 +1358,16 @@ def create_app(ws_root: str | Path) -> FastAPI:
                         AND n.status='ACTIVE' AND n.node_type='SHEET') sheets,
                      count(h.node_id) headers,
                      sum(CASE WHEN m.status IN ('AUTO_APPROVED','APPROVED') THEN 1 ELSE 0 END) mapped,
-                     sum(CASE WHEN m.status='REVIEW_REQUIRED' THEN 1 ELSE 0 END) review
+                     sum(CASE WHEN m.status='REVIEW_REQUIRED' THEN 1 ELSE 0 END) review,
+                     v.drm_status, v.render_status, a.status parsing_status
                    FROM document d
                    LEFT JOIN tree_node h ON h.document_id=d.document_id
                         AND h.status='ACTIVE' AND h.node_type='HEADER'
                    LEFT JOIN semantic_mapping m ON m.tree_node_id=h.node_id AND m.is_active=1
+                   LEFT JOIN viewer_document_version v ON v.document_id=d.document_id
+                        AND v.document_version=d.current_version
+                   LEFT JOIN document_template_assignment a ON a.document_id=d.document_id
+                        AND a.document_version=d.current_version
                    GROUP BY d.document_id ORDER BY d.filename""").fetchall()
         out = []
         for r in rows:

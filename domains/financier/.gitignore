@@ -1,0 +1,5 @@
+data/staging/
+data/canonical/
+data/quarantine/
+metadata/
+*.db

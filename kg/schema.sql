@@ -401,6 +401,7 @@ CREATE TABLE IF NOT EXISTS viewer_sheet (
     document_version TEXT NOT NULL,
     sheet_index      INTEGER NOT NULL,
     sheet_name       TEXT NOT NULL,
+    state            TEXT NOT NULL, -- visible / hidden / veryHidden
     max_row          INTEGER NOT NULL,
     max_column       INTEGER NOT NULL,
     merged_ranges_json TEXT NOT NULL,
