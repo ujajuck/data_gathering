@@ -1217,16 +1217,34 @@ def create_app(ws_root: str | Path) -> FastAPI:
                     cached["sheets"] = all_sheets
                     return {"document_id": doc, **cached}
 
-        # 2) tree_node 기반 테이블 생성 (CSV / 캐시 없는 DRM)
-        target_sheet = name or (all_sheets[0] if all_sheets else None)
-        if target_sheet:
-            tn_result = _tree_node_table(doc, target_sheet)
-            if tn_result:
-                tn_result["sheets"] = all_sheets
-                return {"document_id": doc, **tn_result}
+        # 2) 원본 파일이 읽을 수 있는 xlsx면 원본 충실 렌더가 최우선 —
+        #    tree_node 폴백이 정상 xlsx까지 가로채 병합/스타일이 사라지는
+        #    회귀(머지 산물) 수정. 폴백은 CSV/DRM/파일 소실에만 쓴다.
+        path = None
+        try:
+            path = _doc_path(doc)
+        except HTTPException:
+            path = None                       # 파일 소실 → tree_node 폴백
+        renderable = (path is not None and path.suffix.lower() == ".xlsx"
+                      and not _is_drm_file(path))
+        if not renderable:
+            target_sheet = name or (all_sheets[0] if all_sheets else None)
+            if target_sheet:
+                tn_result = _tree_node_table(doc, target_sheet)
+                if tn_result:
+                    # JS 렌더 계약(cols/rows 배열)으로 정규화
+                    if "cols" not in tn_result:
+                        tn_result["cols"] = [120] * tn_result.get("max_col", 0)
+                    if "rows" not in tn_result:
+                        tn_result["rows"] = [24] * tn_result.get("max_row", 0)
+                    tn_result.setdefault("images", [])
+                    tn_result.setdefault("gridlines", True)
+                    tn_result["sheets"] = all_sheets
+                    return {"document_id": doc, **tn_result}
+        if path is None:
+            raise HTTPException(404, "file missing and no tree fallback")
 
-        # 3) DB에 없으면 파일에서 읽기 (비DRM만, DRM은 ingest 필요)
-        path = _doc_path(doc)
+        # 3) 파일에서 렌더 (비DRM은 원본 충실, DRM은 플레이스홀더)
         key = (str(path), path.stat().st_mtime, name or "")
         if key not in render_cache:
             if len(render_cache) > 24:
@@ -1340,11 +1358,16 @@ def create_app(ws_root: str | Path) -> FastAPI:
                         AND n.status='ACTIVE' AND n.node_type='SHEET') sheets,
                      count(h.node_id) headers,
                      sum(CASE WHEN m.status IN ('AUTO_APPROVED','APPROVED') THEN 1 ELSE 0 END) mapped,
-                     sum(CASE WHEN m.status='REVIEW_REQUIRED' THEN 1 ELSE 0 END) review
+                     sum(CASE WHEN m.status='REVIEW_REQUIRED' THEN 1 ELSE 0 END) review,
+                     v.drm_status, v.render_status, a.status parsing_status
                    FROM document d
                    LEFT JOIN tree_node h ON h.document_id=d.document_id
                         AND h.status='ACTIVE' AND h.node_type='HEADER'
                    LEFT JOIN semantic_mapping m ON m.tree_node_id=h.node_id AND m.is_active=1
+                   LEFT JOIN viewer_document_version v ON v.document_id=d.document_id
+                        AND v.document_version=d.current_version
+                   LEFT JOIN document_template_assignment a ON a.document_id=d.document_id
+                        AND a.document_version=d.current_version
                    GROUP BY d.document_id ORDER BY d.filename""").fetchall()
         out = []
         for r in rows:
