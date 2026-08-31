@@ -951,7 +951,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
         return result
 
     @app.get("/api/viewer/documents/{document_id}/sheets")
-    def viewer_sheets(document_id: str, document_version: str,
+    def viewer_sheets(document_id: str, document_version: str = "",
                       include_hidden: bool = True):
         with lock:
             # tree_node(SHEET)에서 시트 목록
@@ -973,7 +973,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 "render_status": "SUCCESS", "render_error": None}
 
     @app.get("/api/viewer/documents/{document_id}/preview")
-    def viewer_preview(document_id: str, document_version: str, sheet: str | None = None):
+    def viewer_preview(document_id: str, document_version: str = "", sheet: str | None = None):
         """DRM 파일: sheet_render 캐시에서 JSON 반환 (PDF 대신)."""
         with lock:
             # 시트 목록에서 첫 시트 또는 지정 시트
