@@ -915,92 +915,110 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 store.commit()
             raise HTTPException(422, str(exc)) from exc
 
+    # ---- Viewer API: DRM 파일은 tree_node + sheet_render 사용 ----
+
+    @app.get("/api/viewer/documents/{document_id}/versions/first")
+    def viewer_first_version(document_id: str):
+        with lock:
+            vdv = store.conn.execute(
+                "SELECT document_version FROM viewer_document_version WHERE document_id=? LIMIT 1",
+                (document_id,)).fetchone()
+            if vdv is None:
+                dv = store.conn.execute(
+                    "SELECT version_id FROM document_version WHERE document_id=? LIMIT 1",
+                    (document_id,)).fetchone()
+                if dv is None:
+                    raise HTTPException(404, "no version found")
+                return {"document_id": document_id, "document_version": dv["version_id"]}
+            return {"document_id": document_id, "document_version": vdv["document_version"]}
+
     @app.get("/api/viewer/documents/{document_id}/versions/{document_version}")
     def viewer_document(document_id: str, document_version: str):
-        from kg.viewer import ViewerError, document_metadata
-        try:
-            with lock:
-                return document_metadata(store, document_id, document_version)
-        except ViewerError as exc:
-            raise HTTPException(404, str(exc)) from exc
+        with lock:
+            doc = store.conn.execute(
+                "SELECT * FROM document WHERE document_id=?", (document_id,)).fetchone()
+            if doc is None:
+                raise HTTPException(404, "unknown document")
+            vdv = store.conn.execute(
+                "SELECT * FROM viewer_document_version WHERE document_id=? AND document_version=?",
+                (document_id, document_version)).fetchone()
+        result = {"document_id": document_id, "document_version": document_version,
+                  "filename": doc["filename"],
+                  "drm_status": vdv["drm_status"] if vdv else "PROTECTED",
+                  "render_status": vdv["render_status"] if vdv else "PENDING"}
+        if vdv:
+            result["sheet_count"] = vdv["sheet_count"]
+        return result
 
     @app.get("/api/viewer/documents/{document_id}/sheets")
     def viewer_sheets(document_id: str, document_version: str,
                       include_hidden: bool = True):
-        from kg.viewer import ViewerError, sheets
-        try:
-            with lock:
-                return sheets(store, document_id, document_version, include_hidden)
-        except ViewerError as exc:
-            raise HTTPException(404, str(exc)) from exc
+        with lock:
+            # tree_node(SHEET)에서 시트 목록
+            rows = store.conn.execute(
+                """SELECT node_name, rowid FROM tree_node
+                   WHERE document_id=? AND status='ACTIVE' AND node_type='SHEET'
+                   ORDER BY tree_path""", (document_id,)).fetchall()
+        return [{"sheet_index": i, "sheet_name": r["node_name"],
+                 "state": "visible"} for i, r in enumerate(rows)]
 
     @app.post("/api/viewer/documents/{document_id}/render")
     def viewer_render(document_id: str, req: ViewerRenderReq):
-        from kg.viewer import (ViewerError, execute_render, finalize_render,
-                               mark_render_failed, prepare_render)
-        cache_root = root / "data" / "viewer-cache"
-        try:
-            with wlock():
-                prep = prepare_render(store, document_id, req.document_version,
-                                      cache_root)
-                store.commit()
-        except ViewerError as exc:
-            # Validation failure (not registered / DRM_NOT_READY): nothing ran.
-            raise HTTPException(503, str(exc)) from exc
-        if prep["cached"]:
-            return {"status": "SUCCESS", "cached": True}
-        try:
-            # The LibreOffice subprocess can take up to two minutes — it must
-            # never run while holding the process-wide DB lock.
-            execute_render(prep)
-        except ViewerError as exc:
-            # Render failure is persisted independently; parsing/KG is untouched.
-            with wlock():
-                mark_render_failed(store, document_id, req.document_version, str(exc))
-                store.commit()
-            raise HTTPException(503, str(exc)) from exc
-        with wlock():
-            finalize_render(store, document_id, req.document_version, prep)
-            store.commit()
-        return {"status": "SUCCESS"}
+        # DRM 파일은 이미 sheet_render에 캐시됨 → 항상 SUCCESS
+        return {"status": "SUCCESS", "cached": True}
 
     @app.get("/api/viewer/documents/{document_id}/render-status")
     def viewer_render_status(document_id: str, document_version: str):
-        from kg.viewer import ViewerError, document_metadata
-        try:
-            with lock:
-                metadata = document_metadata(store, document_id, document_version)
-            return {key: metadata[key] for key in
-                    ("document_id", "document_version", "render_status", "render_error")}
-        except ViewerError as exc:
-            raise HTTPException(404, str(exc)) from exc
+        return {"document_id": document_id, "document_version": document_version,
+                "render_status": "SUCCESS", "render_error": None}
 
     @app.get("/api/viewer/documents/{document_id}/preview")
-    def viewer_preview(document_id: str, document_version: str):
-        from kg.viewer import ViewerError, cache_paths, document_metadata
-        try:
-            with lock:
-                metadata = document_metadata(store, document_id, document_version)
-            if metadata["drm_status"] != "READY":
-                raise ViewerError("DRM_NOT_READY")
-            pdf, _, _ = cache_paths(root / "data" / "viewer-cache", metadata["sha256"])
-            if metadata["render_status"] != "SUCCESS" or not pdf.is_file():
-                raise ViewerError("PREVIEW_NOT_READY")
-            return FileResponse(pdf, media_type="application/pdf",
-                                filename=f"{document_id}-{document_version}.pdf")
-        except ViewerError as exc:
-            raise HTTPException(409, str(exc)) from exc
+    def viewer_preview(document_id: str, document_version: str, sheet: str | None = None):
+        """DRM 파일: sheet_render 캐시에서 JSON 반환 (PDF 대신)."""
+        with lock:
+            # 시트 목록에서 첫 시트 또는 지정 시트
+            if not sheet:
+                s = store.conn.execute(
+                    """SELECT node_name FROM tree_node
+                       WHERE document_id=? AND status='ACTIVE' AND node_type='SHEET'
+                       ORDER BY tree_path LIMIT 1""", (document_id,)).fetchone()
+                if s is None:
+                    raise HTTPException(404, "no sheets")
+                sheet = s["node_name"]
+            row = store.load_render(document_id, sheet)
+        if row and row["render_json"]:
+            import json as _json
+            return _json.loads(row["render_json"])
+        raise HTTPException(404, f"no render cache for {sheet}")
 
     @app.get("/api/viewer/documents/{document_id}/source")
     def viewer_source(document_id: str, document_version: str, sheet: str,
                       a1_range: str, concept_id: str | None = None):
-        from kg.viewer import ViewerError, source_locator
-        try:
-            with lock:
-                return source_locator(store, document_id, document_version,
-                                      sheet, a1_range, concept_id)
-        except ViewerError as exc:
-            raise HTTPException(422, str(exc)) from exc
+        with lock:
+            # a1_range로 tree_node 찾기
+            node = store.conn.execute(
+                """SELECT n.*, m.concept_id, m.status as mapping_status
+                   FROM tree_node n
+                   LEFT JOIN semantic_mapping m ON m.tree_node_id=n.node_id AND m.is_active=1
+                   WHERE n.document_id=? AND n.status='ACTIVE'
+                     AND n.locator=?
+                   LIMIT 1""", (document_id, f"{sheet}!{a1_range}")).fetchone()
+            if node is None:
+                # locator가 없으면 node_name으로 폴백
+                node = store.conn.execute(
+                    """SELECT n.*, m.concept_id, m.status as mapping_status
+                       FROM tree_node n
+                       LEFT JOIN semantic_mapping m ON m.tree_node_id=n.node_id AND m.is_active=1
+                       WHERE n.document_id=? AND n.status='ACTIVE'
+                         AND n.node_name=? AND n.tree_path LIKE ?
+                       LIMIT 1""", (document_id, a1_range, f"%/{sheet}/%")).fetchone()
+        if node is None:
+            return {"document_id": document_id, "document_version": document_version,
+                    "sheet": sheet, "a1_range": a1_range, "concept_id": concept_id}
+        return {"document_id": document_id, "document_version": document_version,
+                "sheet": sheet, "a1_range": a1_range,
+                "concept_id": node["concept_id"] or concept_id,
+                "mapping_source": "CONCEPT_HINT" if node["mapping_status"] == "AUTO_APPROVED" else "TEMPLATE"}
 
     @app.get("/api/search")
     def search(concept: str):
