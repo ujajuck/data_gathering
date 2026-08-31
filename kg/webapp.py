@@ -16,7 +16,7 @@ from pathlib import Path
 import json
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -154,6 +154,20 @@ class ParsingOverridePatchReq(BaseModel):
 
 class ParsingParseReq(BaseModel):
     document_version: str
+
+
+class ViewerRegisterReq(BaseModel):
+    document_version: str
+    staging_name: str
+
+
+class ViewerRenderReq(BaseModel):
+    document_version: str
+
+
+class ViewerUnlockReq(BaseModel):
+    document_version: str
+    note: str = ""
 
 
 _CID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
@@ -699,6 +713,163 @@ def create_app(ws_root: str | Path) -> FastAPI:
         from kg.parsing import grouped_documents
         with lock:
             return grouped_documents(store, dkg_id)
+
+    # --------------------------------------------------- Read-only Viewer ----
+    # Filesystem paths are deliberately never included in these responses.
+    @app.get("/api/documents/{document_id}/drm-status")
+    def viewer_drm_status(document_id: str, document_version: str | None = None):
+        with lock:
+            version = document_version
+            if version is None:
+                doc = store.conn.execute(
+                    "SELECT current_version,filename FROM document WHERE document_id=?",
+                    (document_id,)).fetchone()
+                if doc is None:
+                    raise HTTPException(404, "unknown document")
+                version = doc["current_version"]
+            row = store.conn.execute(
+                """SELECT drm_status,drm_error FROM viewer_document_version
+                   WHERE document_id=? AND document_version=?""",
+                (document_id, version)).fetchone()
+            if row:
+                return {"document_id": document_id, "document_version": version,
+                        "drm_status": row["drm_status"], "error": row["drm_error"]}
+            doc = store.conn.execute(
+                "SELECT filename FROM document WHERE document_id=?", (document_id,)).fetchone()
+            request = request_row(store, doc["filename"]) if doc else None
+        if doc is None:
+            raise HTTPException(404, "unknown document")
+        state = "UNLOCKING" if request and request["status"] == "REQUESTED" else "PROTECTED"
+        return {"document_id": document_id, "document_version": version,
+                "drm_status": state, "error": None}
+
+    @app.post("/api/documents/{document_id}/drm-unlock", status_code=202)
+    def viewer_request_unlock(document_id: str, req: ViewerUnlockReq):
+        """Submit to the existing authorized unlock-request workflow only."""
+        with wlock():
+            doc = store.conn.execute(
+                """SELECT d.filename FROM document d JOIN document_version v
+                     ON v.document_id=d.document_id
+                    WHERE d.document_id=? AND v.version_id=?""",
+                (document_id, req.document_version)).fetchone()
+            if doc is None:
+                raise HTTPException(404, "unknown document version")
+            try:
+                request = create_request(store, root / "data" / "raw",
+                                         doc["filename"], req.note)
+            except (FileNotFoundError, ValueError) as exc:
+                raise HTTPException(422, str(exc)) from exc
+            store.conn.execute(
+                """INSERT INTO viewer_document_version
+                     (document_id,document_version,sha256,unlocked_path,drm_status,
+                      drm_error,render_status,render_error,sheet_count,registered_at,rendered_at)
+                   VALUES (?,?,NULL,NULL,'UNLOCKING',NULL,'PENDING',NULL,NULL,?,NULL)
+                   ON CONFLICT(document_id,document_version) DO UPDATE SET
+                     drm_status='UNLOCKING',drm_error=NULL""",
+                (document_id, req.document_version, now_iso()))
+            store.commit()
+        return {"document_id": document_id, "document_version": req.document_version,
+                "drm_status": "UNLOCKING", "request_id": request["request_id"]}
+
+    @app.post("/api/viewer/documents/{document_id}/register-unlocked", status_code=201)
+    def viewer_register(document_id: str, req: ViewerRegisterReq):
+        """Register output from an authorized external DRM service.
+
+        This endpoint performs no unlock/decryption. It accepts only a basename
+        already delivered into the configured staging directory.
+        """
+        from kg.viewer import ViewerError, mark_validation_failed, register_unlocked
+        if Path(req.staging_name).name != req.staging_name or not req.staging_name:
+            raise HTTPException(422, "invalid staging filename")
+        try:
+            with wlock():
+                result = register_unlocked(
+                    store, document_id, req.document_version,
+                    root / "data" / "unlocked-staging" / req.staging_name,
+                    root / "data" / "unlocked-staging", root / "data" / "unlocked")
+                store.commit()
+            return result
+        except ViewerError as exc:
+            with wlock():
+                mark_validation_failed(store, document_id, req.document_version, str(exc))
+                store.commit()
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/viewer/documents/{document_id}/versions/{document_version}")
+    def viewer_document(document_id: str, document_version: str):
+        from kg.viewer import ViewerError, document_metadata
+        try:
+            with lock:
+                return document_metadata(store, document_id, document_version)
+        except ViewerError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/viewer/documents/{document_id}/sheets")
+    def viewer_sheets(document_id: str, document_version: str,
+                      include_hidden: bool = True):
+        from kg.viewer import ViewerError, sheets
+        try:
+            with lock:
+                return sheets(store, document_id, document_version, include_hidden)
+        except ViewerError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/api/viewer/documents/{document_id}/render")
+    def viewer_render(document_id: str, req: ViewerRenderReq):
+        from kg.viewer import ViewerError, render_preview
+        try:
+            with wlock():
+                render_preview(store, document_id, req.document_version,
+                               root / "data" / "viewer-cache")
+                store.commit()
+            return {"status": "SUCCESS"}
+        except ViewerError as exc:
+            # Render failure is persisted independently; parsing/KG is untouched.
+            with wlock():
+                store.conn.execute(
+                    """UPDATE viewer_document_version SET render_status='FAILED',render_error=?
+                       WHERE document_id=? AND document_version=?""",
+                    (str(exc)[:1000], document_id, req.document_version))
+                store.commit()
+            raise HTTPException(503, str(exc)) from exc
+
+    @app.get("/api/viewer/documents/{document_id}/render-status")
+    def viewer_render_status(document_id: str, document_version: str):
+        from kg.viewer import ViewerError, document_metadata
+        try:
+            with lock:
+                metadata = document_metadata(store, document_id, document_version)
+            return {key: metadata[key] for key in
+                    ("document_id", "document_version", "render_status", "render_error")}
+        except ViewerError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/viewer/documents/{document_id}/preview")
+    def viewer_preview(document_id: str, document_version: str):
+        from kg.viewer import ViewerError, cache_paths, document_metadata
+        try:
+            with lock:
+                metadata = document_metadata(store, document_id, document_version)
+            if metadata["drm_status"] != "READY":
+                raise ViewerError("DRM_NOT_READY")
+            pdf, _, _ = cache_paths(root / "data" / "viewer-cache", metadata["sha256"])
+            if metadata["render_status"] != "SUCCESS" or not pdf.is_file():
+                raise ViewerError("PREVIEW_NOT_READY")
+            return FileResponse(pdf, media_type="application/pdf",
+                                filename=f"{document_id}-{document_version}.pdf")
+        except ViewerError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/api/viewer/documents/{document_id}/source")
+    def viewer_source(document_id: str, document_version: str, sheet: str,
+                      a1_range: str, concept_id: str | None = None):
+        from kg.viewer import ViewerError, source_locator
+        try:
+            with lock:
+                return source_locator(store, document_id, document_version,
+                                      sheet, a1_range, concept_id)
+        except ViewerError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @app.get("/api/search")
     def search(concept: str):

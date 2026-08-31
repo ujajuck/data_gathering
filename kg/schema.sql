@@ -363,3 +363,39 @@ CREATE TABLE IF NOT EXISTS parsed_source (
     warning           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_parsed_source_run ON parsed_source(parse_run_id);
+
+-- ================================================= Read-only Excel Viewer --
+-- unlocked_path is backend-only and is never returned by a Viewer API.  Each
+-- row is an immutable SHA-256 addressed source; previews are disposable cache.
+CREATE TABLE IF NOT EXISTS viewer_document_version (
+    document_id      TEXT NOT NULL REFERENCES document(document_id),
+    document_version TEXT NOT NULL REFERENCES document_version(version_id),
+    sha256           TEXT,
+    unlocked_path    TEXT,
+    drm_status       TEXT NOT NULL CHECK (drm_status IN
+                         ('PROTECTED','UNLOCKING','READY','FAILED')),
+    drm_error        TEXT,
+    render_status    TEXT NOT NULL DEFAULT 'PENDING' CHECK (render_status IN
+                         ('PENDING','RUNNING','SUCCESS','FAILED')),
+    render_error     TEXT,
+    sheet_count      INTEGER,
+    registered_at    TEXT NOT NULL,
+    rendered_at      TEXT,
+    PRIMARY KEY (document_id, document_version)
+);
+
+CREATE TABLE IF NOT EXISTS viewer_sheet (
+    document_id      TEXT NOT NULL,
+    document_version TEXT NOT NULL,
+    sheet_index      INTEGER NOT NULL,
+    sheet_name       TEXT NOT NULL,
+    state            TEXT NOT NULL, -- visible / hidden / veryHidden
+    max_row          INTEGER NOT NULL,
+    max_column       INTEGER NOT NULL,
+    merged_ranges_json TEXT NOT NULL,
+    images_json      TEXT NOT NULL,
+    PRIMARY KEY (document_id, document_version, sheet_index),
+    FOREIGN KEY (document_id, document_version)
+      REFERENCES viewer_document_version(document_id, document_version)
+      ON DELETE CASCADE
+);
