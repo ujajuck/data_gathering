@@ -119,7 +119,7 @@ def document_kgs(store: KgStore) -> list[dict]:
         c = store.concept(root)
         out.append({
             "id": root,
-            "name": (c["canonical_name"] if c else root) + " KG",
+            "name": (c["canonical_name"] if c else root) + " 문서군",
             "domain_node_ids": sorted(g["nodes"], key=lambda k: -g["nodes"][k]),
             "member_document_count": len(g["docs"]),
             "member_documents": sorted(

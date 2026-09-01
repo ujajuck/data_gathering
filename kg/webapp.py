@@ -68,6 +68,7 @@ class BuildReq(BaseModel):
     name: str
     fields: list[BuildField]
     include_nodes: dict[str, list[str]] = {}
+    raw_node_ids: list[str] = []     # 양식별 '원값 유지' — 단위 변환 생략할 노드
 
 
 class IngestReq(BaseModel):
@@ -366,6 +367,186 @@ def _render_sheet_drm(path: Path, sheet_name: str | None) -> dict:
             pass
 
 
+_XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+_DML = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_PKG_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
+_DOC_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_SSML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+
+_PROPS_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def _doc_props(path: Path) -> dict:
+    """xlsx core 속성(작성자/작성일/수정일) — docProps/core.xml만 가볍게 읽는다.
+
+    파일 mtime 키 캐시로 목록 조회마다 재파싱하지 않는다. 작성일이 없으면
+    파일 mtime으로 대체하고, 파일이 없으면(이동/CSV 등) 전부 None.
+    """
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return {"author": None, "created": None, "modified": None}
+    hit = _PROPS_CACHE.get(str(path))
+    if hit and hit[0] == mtime:
+        return hit[1]
+    props: dict = {"author": None, "created": None, "modified": None}
+    try:
+        import xml.etree.ElementTree as ET
+        import zipfile
+        with zipfile.ZipFile(path) as zf:
+            core = ET.fromstring(zf.read("docProps/core.xml"))
+        dc = "{http://purl.org/dc/elements/1.1/}"
+        dct = "{http://purl.org/dc/terms/}"
+        props["author"] = (core.findtext(f"{dc}creator") or "").strip() or None
+        props["created"] = (core.findtext(f"{dct}created") or "").strip() or None
+        props["modified"] = (core.findtext(f"{dct}modified") or "").strip() or None
+    except Exception:
+        pass                       # 잠긴/비정형 컨테이너 — 속성 없이 진행
+    if not props["created"]:
+        from datetime import datetime, timezone
+        props["created"] = datetime.fromtimestamp(
+            mtime, tz=timezone.utc).isoformat(timespec="seconds")
+    _PROPS_CACHE[str(path)] = (mtime, props)
+    return props
+
+
+def _sheet_textboxes_raw(path: Path, sheet_name: str) -> list[dict]:
+    """xlsx 드로잉 XML에서 텍스트박스/도형 텍스트를 앵커 원시값으로 추출한다.
+
+    openpyxl은 도형(xdr:sp)을 노출하지 않으므로 zip에서 드로잉 XML을 직접
+    읽는다. px 환산은 _textboxes_px가 그리드 확정 후에 수행한다 — 그리드
+    범위를 드로잉까지 확장하는 계산에도 이 원시 앵커가 쓰인다.
+    """
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    def rels_map(zf: zipfile.ZipFile, rels_path: str) -> dict[str, str]:
+        try:
+            root = ET.fromstring(zf.read(rels_path))
+        except (KeyError, ET.ParseError):
+            return {}
+        return {rel.get("Id"): rel.get("Target", "")
+                for rel in root.findall(f"{{{_PKG_REL}}}Relationship")}
+
+    def resolve(base_dir: str, target: str) -> str:
+        if target.startswith("/"):
+            return target.lstrip("/")
+        parts: list[str] = base_dir.split("/") if base_dir else []
+        for seg in target.split("/"):
+            if seg == "..":
+                if parts:
+                    parts.pop()
+            elif seg not in ("", "."):
+                parts.append(seg)
+        return "/".join(parts)
+
+    boxes: list[dict] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            # 시트 이름 → 워크시트 파트 경로 (workbook.xml + rels)
+            wb_root = ET.fromstring(zf.read("xl/workbook.xml"))
+            wb_rels = rels_map(zf, "xl/_rels/workbook.xml.rels")
+            ws_part = None
+            for sh in wb_root.findall(f"{{{_SSML}}}sheets/{{{_SSML}}}sheet"):
+                if sh.get("name") == sheet_name:
+                    ws_part = resolve("xl", wb_rels.get(
+                        sh.get(f"{{{_DOC_REL}}}id", ""), ""))
+                    break
+            if not ws_part:
+                return []
+            # 워크시트 → 드로잉 파트
+            ws_dir, ws_file = ws_part.rsplit("/", 1)
+            ws_rels = rels_map(zf, f"{ws_dir}/_rels/{ws_file}.rels")
+            ws_root = ET.fromstring(zf.read(ws_part))
+            drawing_parts = []
+            for dr in ws_root.findall(f"{{{_SSML}}}drawing"):
+                target = ws_rels.get(dr.get(f"{{{_DOC_REL}}}id", ""), "")
+                if target:
+                    drawing_parts.append(resolve(ws_dir, target))
+            def marker(m) -> tuple[int, int, int, int]:
+                return (int(m.findtext(f"{{{_XDR}}}col", "0")),
+                        int(m.findtext(f"{{{_XDR}}}colOff", "0")),
+                        int(m.findtext(f"{{{_XDR}}}row", "0")),
+                        int(m.findtext(f"{{{_XDR}}}rowOff", "0")))
+
+            for part in drawing_parts:
+                try:
+                    droot = ET.fromstring(zf.read(part))
+                except (KeyError, ET.ParseError):
+                    continue
+                for anchor in droot:
+                    kind = anchor.tag.rsplit("}", 1)[-1]
+                    if kind not in ("twoCellAnchor", "oneCellAnchor",
+                                    "absoluteAnchor"):
+                        continue
+                    sp = anchor.find(f"{{{_XDR}}}sp")
+                    if sp is None:
+                        continue
+                    tx = sp.find(f"{{{_XDR}}}txBody")
+                    if tx is None:
+                        continue
+                    text = "\n".join(
+                        "".join(t.text or ""
+                                for t in p.findall(f".//{{{_DML}}}t"))
+                        for p in tx.findall(f"{{{_DML}}}p"))
+                    if not text.strip():
+                        continue
+                    frm = anchor.find(f"{{{_XDR}}}from")
+                    to = anchor.find(f"{{{_XDR}}}to")
+                    ext = anchor.find(f"{{{_XDR}}}ext")
+                    pos = anchor.find(f"{{{_XDR}}}pos")
+                    box: dict = {"text": text[:4000]}
+                    if frm is not None:
+                        box["frm"] = marker(frm)
+                    elif pos is not None:
+                        box["pos"] = (int(pos.get("x", "0")),
+                                      int(pos.get("y", "0")))
+                    else:
+                        continue
+                    if to is not None:
+                        box["to"] = marker(to)
+                    elif ext is not None:
+                        box["ext"] = (int(ext.get("cx", "0")),
+                                      int(ext.get("cy", "0")))
+                    boxes.append(box)
+                    if len(boxes) >= 60:
+                        return boxes
+    except Exception:
+        return boxes           # 드로잉이 없거나 비정형 — 셀 렌더는 그대로 진행
+    return boxes
+
+
+def _textboxes_px(raw: list[dict], cum_x: list[float], cum_y: list[float],
+                  max_r: int, max_c: int) -> list[dict]:
+    """원시 앵커를 이미지와 같은 방식(누적 열폭/행높이 + EMU)으로 px 환산."""
+    emu = _EMU_PX
+
+    def mpx(m: tuple[int, int, int, int]) -> tuple[float, float]:
+        col, coff, row, roff = m
+        return (cum_x[min(col, max_c)] + coff / emu,
+                cum_y[min(row, max_r)] + roff / emu)
+
+    out = []
+    for b in raw:
+        if "frm" in b:
+            x, y = mpx(b["frm"])
+        else:
+            x, y = b["pos"][0] / emu, b["pos"][1] / emu
+        if "to" in b:
+            x2, y2 = mpx(b["to"])
+            w, h = x2 - x, y2 - y
+        elif "ext" in b:
+            w, h = b["ext"][0] / emu, b["ext"][1] / emu
+        else:
+            w, h = 160, 40
+        if w <= 4 or h <= 4:
+            continue
+        out.append({"text": b["text"], "x": round(x), "y": round(y),
+                    "w": round(w), "h": round(h)})
+    return out
+
+
 def _render_sheet(path: Path, sheet_name: str | None) -> dict:
     import base64
 
@@ -376,8 +557,43 @@ def _render_sheet(path: Path, sheet_name: str | None) -> dict:
     if target is None or target not in names:
         raise HTTPException(404, f"sheet not found: {sheet_name}")
     ws = wb[target]
-    max_r = min(ws.max_row or 1, _SHEET_CAP_ROWS)
-    max_c = min(ws.max_column or 1, _SHEET_CAP_COLS)
+    raw_boxes = _sheet_textboxes_raw(path, target)
+
+    # 데이터 범위 밖(아래/오른쪽)에 앵커된 이미지·텍스트박스도 원본 위치
+    # 그대로 보이도록, 그리드를 드로잉 범위까지 확장한다. 범위 밖 행/열은
+    # 기본 크기(64px/20px)라 ext 기반 앵커의 소요 칸 수 추정도 정확하다.
+    need_r, need_c = ws.max_row or 1, ws.max_column or 1
+    _DEF_W, _DEF_H = 64, 20
+
+    def _extend(frm_cr: tuple[int, int] | None, to_cr: tuple[int, int] | None,
+                ext_wh: tuple[float, float] | None) -> None:
+        nonlocal need_r, need_c
+        if frm_cr is None:
+            return
+        need_c = max(need_c, frm_cr[0] + 1)
+        need_r = max(need_r, frm_cr[1] + 1)
+        if to_cr is not None:
+            need_c = max(need_c, to_cr[0])
+            need_r = max(need_r, to_cr[1])
+        elif ext_wh is not None:
+            need_c = max(need_c, frm_cr[0] + 1 + int(ext_wh[0] // _DEF_W) + 1)
+            need_r = max(need_r, frm_cr[1] + 1 + int(ext_wh[1] // _DEF_H) + 1)
+
+    for img in getattr(ws, "_images", []):
+        frm = getattr(img.anchor, "_from", None)
+        to = getattr(img.anchor, "to", None)
+        ext = getattr(img.anchor, "ext", None)
+        _extend((frm.col, frm.row) if frm is not None else None,
+                (to.col, to.row) if to is not None else None,
+                (ext.cx / _EMU_PX, ext.cy / _EMU_PX) if ext is not None else None)
+    for b in raw_boxes:
+        frm, to, ext = b.get("frm"), b.get("to"), b.get("ext")
+        _extend((frm[0], frm[2]) if frm else None,
+                (to[0], to[2]) if to else None,
+                (ext[0] / _EMU_PX, ext[1] / _EMU_PX) if ext else None)
+
+    max_r = min(need_r, _SHEET_CAP_ROWS)
+    max_c = min(need_c, _SHEET_CAP_COLS)
 
     # 열 너비(문자폭→px) / 행 높이(pt→px) — 원본 레이아웃의 뼈대
     col_px = []
@@ -491,6 +707,7 @@ def _render_sheet(path: Path, sheet_name: str | None) -> dict:
 
     return {"sheet": target, "sheets": names, "max_row": max_r, "max_col": max_c,
             "cols": col_px, "rows": row_px, "cells": cells, "images": images,
+            "shapes": _textboxes_px(raw_boxes, cum_x, cum_y, max_r, max_c),
             "gridlines": bool(ws.sheet_view.showGridLines),
             "truncated": (ws.max_row or 1) > _SHEET_CAP_ROWS or
                          (ws.max_column or 1) > _SHEET_CAP_COLS}
@@ -1359,7 +1576,8 @@ def create_app(ws_root: str | Path) -> FastAPI:
                      count(h.node_id) headers,
                      sum(CASE WHEN m.status IN ('AUTO_APPROVED','APPROVED') THEN 1 ELSE 0 END) mapped,
                      sum(CASE WHEN m.status='REVIEW_REQUIRED' THEN 1 ELSE 0 END) review,
-                     v.drm_status, v.render_status, a.status parsing_status
+                     v.drm_status, v.render_status, a.status parsing_status,
+                     t.name template_name, a.template_version
                    FROM document d
                    LEFT JOIN tree_node h ON h.document_id=d.document_id
                         AND h.status='ACTIVE' AND h.node_type='HEADER'
@@ -1368,6 +1586,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
                         AND v.document_version=d.current_version
                    LEFT JOIN document_template_assignment a ON a.document_id=d.document_id
                         AND a.document_version=d.current_version
+                   LEFT JOIN parsing_template t ON t.template_id=a.template_id
                    GROUP BY d.document_id ORDER BY d.filename""").fetchall()
         out = []
         for r in rows:
@@ -1383,7 +1602,11 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 "review": review, "status": status})
             out[-1].update({"drm_status": r["drm_status"] or "PROTECTED",
                             "render_status": r["render_status"],
-                            "parsing_status": r["parsing_status"]})
+                            "parsing_status": r["parsing_status"],
+                            "template_name": r["template_name"],
+                            "template_version": r["template_version"]})
+            # 작성자/작성일 — 검색·필터·정렬용 (원본 파일의 core 속성)
+            out[-1].update(_doc_props(root / "data" / "raw" / r["filename"]))
         return out
 
     @app.get("/api/overlay")
@@ -1617,7 +1840,8 @@ def create_app(ws_root: str | Path) -> FastAPI:
                         "type": f.type} for f in body.fields],
             "sources": {"include_nodes": body.include_nodes or {}},
             "transform": [
-                {"op": "unit_convert"},
+                {"op": "unit_convert",
+                 "config": {"skip_nodes": body.raw_node_ids or []}},
                 {"op": "union"},
                 {"op": "deduplicate"},
             ],
@@ -2186,6 +2410,11 @@ def create_app(ws_root: str | Path) -> FastAPI:
             _yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
             media_type="text/yaml; charset=utf-8")
 
+    # React 포트(frontend/) 빌드가 있으면 /app 에 함께 서빙한다.
+    # web_kg는 완전 대체 전까지 / 에서 그대로 유지 (이중 유지 의도).
+    react_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    if react_dist.is_dir():
+        app.mount("/app", StaticFiles(directory=react_dist, html=True), name="react")
     app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="static")
     return app
 

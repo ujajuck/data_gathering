@@ -1,0 +1,129 @@
+/* web_kg/index.html의 스타일 포트 — 레거시 뷰어 CSS와 충돌하지 않게 .wk로 스코프.
+   클래스 이름은 web_kg와 동일하게 유지한다 (화면 대조 검증 용이). */
+.wk{--bg:#f5f7fb;--panel:#fff;--line:#d9dee8;--text:#20242c;--muted:#6e7685;
+ --blue:#3569e8;--blue2:#eaf0ff;--green:#3a8d6d;--green2:#e7f5ef;
+ --amber:#b57b1b;--amber2:#fff4d8;--purple:#7b61c9;--purple2:#f0ebff;--red:#b84b4b;
+ --shadow:0 1px 2px rgba(23,31,49,.04);
+ font:13px/1.5 Inter,-apple-system,'Malgun Gothic','Noto Sans KR',sans-serif;
+ color:var(--text);background:var(--bg);min-height:100vh}
+.wk *{box-sizing:border-box}
+.wk button,.wk input{font:inherit}.wk button{cursor:pointer}
+.wk .top{background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;
+ justify-content:space-between;padding:12px 26px;gap:10px;flex-wrap:wrap}
+.wk .brand b{font-size:20px}.wk .brand div{font-size:12px;color:var(--muted);margin-top:2px}
+.wk .steps{display:flex;gap:8px;flex-wrap:wrap}
+.wk .step{border:1px solid var(--line);background:#fff;border-radius:9px;padding:9px 14px}
+.wk .step.active{background:var(--blue);border-color:var(--blue);color:#fff}
+.wk .screen{display:none;padding:18px 22px}.wk .screen.active{display:block}
+.wk .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+.wk .pad{padding:15px}
+.wk .kicker{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.04em}
+.wk .title{font-weight:800;font-size:18px;margin-top:3px}
+.wk .sub{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5}
+.wk .muted{color:var(--muted)}
+.wk .crumb{font-size:12px;color:var(--muted);margin-bottom:10px}.wk .crumb b{color:var(--text)}
+.wk .badge{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 9px;
+ font-size:11px;background:#fff}
+.wk .badge.green{background:var(--green2);border-color:#cbe7dc;color:#25684f}
+.wk .badge.amber{background:var(--amber2);border-color:#edd59e;color:#835812}
+.wk .badge.red{background:#fbe9e9;border-color:#eac3c3;color:#8f3232}
+.wk .badge.blue{background:var(--blue2);border-color:#b6c8f7;color:#244ea8}
+.wk .table{width:100%;border-collapse:collapse;font-size:12px}
+.wk .table th,.wk .table td{border-bottom:1px solid var(--line);padding:10px 8px;text-align:left}
+.wk .table th{color:var(--muted);font-size:11px;background:#fafbfd}
+.wk .primary{border:0;background:var(--blue);color:#fff;border-radius:9px;padding:10px 13px;font-weight:700}
+.wk .secondary{border:1px solid var(--line);background:#fff;border-radius:9px;padding:9px 12px}
+.wk .primary:disabled,.wk .secondary:disabled{opacity:.5;cursor:default}
+.wk .w100{width:100%}
+.wk .metricGrid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:11px}
+.wk .metric{border:1px solid var(--line);border-radius:10px;padding:10px}
+.wk .metric span{font-size:11px;color:var(--muted)}.wk .metric b{display:block;font-size:20px;margin-top:4px}
+/* -------- 2. KG 탐색 -------- */
+.wk .grid3{display:grid;grid-template-columns:225px minmax(0,1fr) 305px;gap:13px}
+.wk .search{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;
+ margin:10px 0;background:#fafbfd}
+.wk .listBtn{width:100%;text-align:left;border:0;background:transparent;border-radius:8px;
+ padding:8px 10px;margin:1px 0;display:flex;justify-content:space-between;gap:6px}
+.wk .listBtn:hover,.wk .listBtn.sel{background:var(--blue2);color:#234fac}
+.wk .listBtn .n{color:var(--muted);font-size:11px}
+.wk .dkgCard{border:1px solid var(--line);border-radius:10px;padding:10px;margin:7px 0;cursor:pointer}
+.wk .dkgCard.sel{border:2px solid var(--blue);background:var(--blue2)}
+.wk .dkgCard b{font-size:13px}.wk .dkgCard div{font-size:11px;color:var(--muted);margin-top:3px}
+.wk .tabs{display:flex;gap:6px}
+.wk .tinyTab{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 10px;font-size:12px;
+ color:inherit;text-decoration:none;display:inline-block}
+.wk .tinyTab.active{background:var(--blue2);border-color:#b6c8f7;color:#244ea8}
+.wk .graphHead{display:flex;align-items:flex-start;justify-content:space-between;
+ padding:15px 17px 4px;gap:10px;flex-wrap:wrap}
+.wk .graphWrap{padding:4px 12px 12px}
+.wk .graphSvg{width:100%;height:600px}
+.wk .gnode{fill:#fff;stroke:#aeb9ca;stroke-width:1.4;cursor:pointer}
+.wk .gnode.sel{fill:#eaf0ff;stroke:var(--blue);stroke-width:3}
+.wk .gnode.dim{opacity:.35}
+.wk .ntext{font-size:12px;fill:#20242c;font-weight:700;text-anchor:middle;
+ dominant-baseline:middle;pointer-events:none}
+.wk .ncnt{font-size:10px;fill:#6e7685;text-anchor:middle;pointer-events:none}
+.wk .gedge{stroke:#c3cbd8;stroke-width:1.4;fill:none}
+.wk .hull{stroke-width:2;stroke-dasharray:6 5;cursor:pointer}
+.wk .hull.dim{opacity:.25}
+.wk .hlabel{font-size:12px;font-weight:800;cursor:pointer}
+.wk .fileRow{border-top:1px solid var(--line);padding:9px 0;cursor:pointer}
+.wk .fileRow:first-child{border-top:0}
+.wk .fileRow b{font-size:12px}.wk .fileRow div{font-size:11px;color:var(--muted);margin-top:3px}
+.wk .fileRow.sel b{color:var(--blue)}
+.wk .rightBtns{display:grid;gap:8px;margin-top:13px}
+.wk .docNode{fill:#fff;stroke:#9da9bb;stroke-width:1.4}
+.wk .docFile{fill:#f9fafc;stroke:#c7cfdb;stroke-width:1.2;cursor:pointer}
+.wk .docFile.sel{stroke:var(--blue);stroke-width:2.4;fill:var(--blue2)}
+.wk .docEdge{stroke:#c4cdda;stroke-width:1.4}.wk .docEdge.hi{stroke:var(--blue);stroke-width:2.6}
+/* -------- 3. 원본 데이터 -------- */
+.wk .excelLayout{display:grid;grid-template-columns:240px minmax(0,1fr) 305px;gap:13px}
+.wk .location{border:1px solid var(--line);border-radius:9px;padding:9px 10px;margin:7px 0;
+ background:#fff;cursor:pointer}
+.wk .location.sel{border:2px solid var(--blue);background:var(--blue2)}
+.wk .location b{font-size:12px}.wk .location .sub{margin-top:2px}
+.wk .srcList{max-height:66vh;overflow-y:auto}
+.wk .sheetTabs{display:flex;gap:4px;border-bottom:1px solid var(--line);padding:9px;overflow-x:auto}
+.wk .sheet{border:0;background:transparent;padding:6px 10px;border-radius:7px;white-space:nowrap}
+.wk .sheet.sel{background:var(--blue2);color:#244ea8;font-weight:700}
+.wk .excel{overflow:auto;background:#fff;max-height:62vh}
+.wk table.grid{border-collapse:collapse}
+.wk table.grid td{padding:1px 4px;overflow:hidden;text-overflow:ellipsis;
+ white-space:nowrap;font-size:12px;line-height:1.25;vertical-align:middle}
+.wk table.grid td.hd{background:#f1f3f7;color:#6c7481;font-size:10px;text-align:center;
+ border:1px solid #e0e4ea !important}
+.wk td.ov{cursor:pointer}
+.wk td.ov-KEY{outline:3px solid var(--green);outline-offset:-3px;background:var(--green2)!important}
+.wk td.ov-VALUE{outline:3px solid var(--blue);outline-offset:-3px;background:#eef3ff!important}
+.wk td.ov-CONTEXT{outline:2px dashed var(--purple);outline-offset:-2px}
+.wk td.selc{outline:3px solid #1c3e9c!important;outline-offset:-3px}
+.wk .kv{border:1px solid var(--line);border-radius:10px;padding:10px 11px;margin-top:9px}
+.wk .kv strong{font-size:13px}.wk .kv p{font-size:11px;color:var(--muted);margin:4px 0 0;line-height:1.5}
+.wk .vstatus{padding:6px 10px;color:var(--muted);font-size:12px;border-top:1px solid var(--line)}
+.wk .insp{max-height:66vh;overflow-y:auto}
+.wk .insp select{width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;margin-top:5px}
+.wk .status{font-size:12px;color:var(--green);margin-top:8px;min-height:15px}
+/* -------- 4. 통합 DB -------- */
+.wk .builder{display:grid;grid-template-columns:minmax(0,1fr) 335px;gap:13px}
+.wk .schemaCard{border:1px solid var(--line);border-radius:11px;padding:12px;margin:10px 0}
+.wk .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.wk .block{border:1px solid var(--line);border-radius:9px;padding:9px 11px;background:#fff;font-size:12px}
+.wk .arrow{color:#8a93a1}
+.wk .code{background:#f6f7fa;border:1px solid var(--line);border-radius:10px;padding:11px;
+ font:12px/1.7 ui-monospace,monospace;white-space:pre;overflow-x:auto}
+.wk .concept{border:1px solid var(--line);border-radius:9px;padding:9px 11px;margin:7px 0;
+ display:flex;justify-content:space-between;align-items:center;gap:8px}
+.wk .concept .x{border:none;background:none;color:var(--red);cursor:pointer;font-size:14px}
+.wk .warn{color:var(--amber);font-size:12px;margin-top:6px}
+.wk .editForm input,.wk .editForm select,.wk .editForm textarea{width:100%;border:1px solid var(--line);
+  border-radius:8px;padding:7px 9px;font:inherit;font-size:12px;margin-top:4px;background:#fff}
+.wk .editForm label{font-size:11px;color:var(--muted);display:block;margin-top:8px}
+.wk .chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);
+  border-radius:999px;padding:3px 9px;font-size:11px;margin:2px 3px 0 0;background:#fff}
+.wk .chip button{border:0;background:none;color:var(--red);cursor:pointer;font-size:11px;padding:0}
+.wk .chip.pick{cursor:pointer}
+.wk .chip.pick:hover,.wk .chip.pick.sel{background:var(--blue2);border-color:var(--blue);color:#234fac}
+.wk .progRow{display:grid;grid-template-columns:1fr auto;gap:8px;font-size:12px;
+  border-top:1px solid var(--line);padding:6px 0}
+.wk .empty{color:var(--muted);padding:8px 2px;font-size:12px}
+@media(max-width:1150px){.wk .grid3,.wk .excelLayout,.wk .builder{grid-template-columns:1fr}}
