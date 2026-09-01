@@ -95,6 +95,7 @@ export interface SheetData {
   }[];
   viewer?: { drm_status: string; render_status?: string } | null;
   document_version?: string | null;
+  degraded?: string | null;   // 저하 렌더 사유 (DRM 복사 차단, 파일 소실 등)
 }
 
 export interface OverlayItem {

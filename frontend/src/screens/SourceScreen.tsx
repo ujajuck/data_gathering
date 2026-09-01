@@ -180,7 +180,7 @@ export default function SourceScreen() {
                       href={`/api/viewer/documents/${encodeURIComponent(docId)}/preview?document_version=${encodeURIComponent(data.document_version || "")}`}>
                       PDF Preview</a>
                   )}
-                  <span className="muted">원본 충실 렌더 · Read only</span>
+                  <span className="muted">Read only</span>
                 </span>
               </>
             ) : <span className="muted" style={{ padding: 6 }}>문서를 선택하세요</span>}
@@ -194,6 +194,11 @@ export default function SourceScreen() {
                 좌측 원본 위치를 클릭하면 원본 렌더 + Semantic Overlay가 표시됩니다</div>
             )}
           </div>
+          {data?.degraded && (
+            <div style={{ padding: "6px 10px", fontSize: 12, borderTop: "1px solid var(--line)",
+              background: "var(--amber2)", color: "var(--amber)" }}>
+              ⚠ 저하 렌더: {data.degraded}</div>
+          )}
           <div className="vstatus">
             {vmsg ? vmsg : data ? (
               <>

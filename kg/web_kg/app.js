@@ -1006,7 +1006,7 @@ async function loadSheet(doc, sheet, focusNode) {
       <button class="tinyTab ${state.overlayEnabled ? 'active' : ''}" data-overlay>Semantic Overlay ${state.overlayEnabled ? 'ON' : 'OFF'}</button>
       ${data.viewer && data.viewer.render_status === 'SUCCESS' ? `<a class="tinyTab" target="_blank" rel="noopener"
         href="/api/viewer/documents/${encodeURIComponent(doc)}/preview?document_version=${encodeURIComponent(data.document_version)}">PDF Preview</a>` : ''}
-      <span class="muted">원본 충실 렌더 · Read only</span></span>`;
+      <span class="muted">Read only</span></span>`;
   $('#tabs').querySelectorAll('button[data-s]').forEach((b) => b.onclick = () => loadSheet(doc, b.dataset.s));
   const overlayBtn = $('#tabs [data-overlay]');
   if (overlayBtn) overlayBtn.onclick = () => {
@@ -1124,7 +1124,10 @@ async function loadSheet(doc, sheet, focusNode) {
        <span class="badge amber">CONTEXT ${roles.CONTEXT || 0}</span>
        <span class="badge">미매핑 ${roles.IGNORE || 0}</span>`
     : '<span style="color:var(--amber)">이 시트에는 매핑된 영역이 없습니다</span>';
-  setVStatus(`${esc(data.sheet)} — ${data.max_row}×${data.max_col}` +
+  const degraded = data.degraded
+    ? `<div style="color:var(--amber);background:var(--amber2);margin:-6px -10px 6px;
+        padding:6px 10px">⚠ 저하 렌더: ${esc(data.degraded)}</div>` : '';
+  setVStatus(degraded + `${esc(data.sheet)} — ${data.max_row}×${data.max_col}` +
     `${data.truncated ? ' (잘림)' : ''} · ${rolesTxt}${ovErr}` +
     `${data.viewer ? ` · DRM ${esc(data.viewer.drm_status)} · Render ${esc(data.viewer.render_status || 'PENDING')}` : ' · Viewer source 미등록'}`);
   const selCell = $('#gridwrap td.selc');

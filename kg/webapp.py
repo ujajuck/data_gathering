@@ -272,14 +272,20 @@ def _load_render_wb(path: Path):
 
 
 def _render_sheet_drm(path: Path, sheet_name: str | None) -> dict:
-    """Render sheet from DRM-encrypted file via Excel COM automation.
+    """DRM(NASCA) 파일 렌더 — Excel COM 경유 (Windows + Excel 필요).
 
-    Returns the same dict structure as _render_sheet but reads via COM
-    since openpyxl cannot open DRM files. Uses bulk Value read for speed;
-    skips per-cell style/merge queries (too slow over COM).
+    원본 충실이 기본이다: COM으로 연 시트를 새 워크북으로 복사해 임시 xlsx로
+    저장한 뒤, 일반 경로(_render_sheet — 병합/스타일/열폭/행높이/이미지/
+    텍스트박스)로 그린다 (src.inspect.inspector의 검증된 Copy→SaveAs 패턴).
+    DRM 정책이 시트 복사/다른 이름 저장을 막는 환경에서만 값-전용 렌더로
+    폴백하며, 이때는 degraded 사유를 내려 화면에 저하 렌더임을 명시한다 —
+    깨진 레이아웃을 '원본 충실'인 척 보여주지 않는다.
     """
-    import win32com.client
+    import os
+    import tempfile
+
     import pythoncom
+    import win32com.client
 
     try:
         pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
@@ -305,6 +311,32 @@ def _render_sheet_drm(path: Path, sheet_name: str | None) -> dict:
             raise HTTPException(404, f"sheet not found: {sheet_name}")
 
         ws = wb.Sheets(target)
+
+        # ── 1) 원본 충실: 시트 복사 → 임시 xlsx → 일반 충실 렌더러 ──
+        degraded_reason = None
+        try:
+            tmp = Path(tempfile.gettempdir()) / (
+                f"_drm_render_{os.getpid()}_{abs(hash((str(path), target)))}.xlsx")
+            ws.Copy()                          # 시트 1개짜리 새 워크북 생성
+            new_wb = excel.ActiveWorkbook
+            try:
+                new_wb.SaveAs(str(tmp), 51)    # 51 = xlOpenXMLWorkbook
+            finally:
+                new_wb.Close(SaveChanges=False)
+            try:
+                out = _render_sheet(tmp, None)     # 복사본은 시트가 1개
+            finally:
+                tmp.unlink(missing_ok=True)
+            out["sheet"] = target
+            out["sheets"] = names                  # 시트 목록은 원본 기준
+            wb.Close(SaveChanges=False)
+            return out
+        except HTTPException:
+            raise
+        except Exception as exc:                   # DRM 정책이 복사/저장 차단
+            degraded_reason = str(exc).strip()[:160] or type(exc).__name__
+
+        # ── 2) 폴백: 값-전용 (서식/병합 없음 — degraded로 명시) ──
         used = ws.UsedRange
         max_row = min(used.Rows.Count if used else 1, _SHEET_CAP_ROWS)
         max_col = min(used.Columns.Count if used else 1, _SHEET_CAP_COLS)
@@ -349,6 +381,36 @@ def _render_sheet_drm(path: Path, sheet_name: str | None) -> dict:
                             d["n"] = 1
                         cells.append(d)
 
+        # 텍스트박스만이라도 건진다 (COM points 좌표 — 프런트가 96/72 환산)
+        shapes = []
+        try:
+            for i in range(1, ws.Shapes.Count + 1):
+                sh = ws.Shapes.Item(i)
+                si: dict = {}
+                try:
+                    tf = sh.TextFrame2
+                    if tf.HasText == -1:       # msoTrue
+                        si["text"] = tf.TextRange.Text
+                except Exception:
+                    pass
+                if "text" not in si:
+                    try:
+                        si["text"] = sh.TextFrame.Characters().Text
+                    except Exception:
+                        pass
+                try:
+                    si.update({"left": round(sh.Left), "top": round(sh.Top),
+                               "width": round(sh.Width),
+                               "height": round(sh.Height)})
+                except Exception:
+                    pass
+                if si.get("text", "").strip():
+                    shapes.append(si)
+                if len(shapes) >= 60:
+                    break
+        except Exception:
+            pass
+
         total_rows = used.Rows.Count if used else 1
         total_cols = used.Columns.Count if used else 1
         wb.Close(SaveChanges=False)
@@ -356,9 +418,11 @@ def _render_sheet_drm(path: Path, sheet_name: str | None) -> dict:
             "sheet": target, "sheets": names,
             "max_row": max_row, "max_col": max_col,
             "cols": col_px, "rows": row_px,
-            "cells": cells, "images": [],
+            "cells": cells, "images": [], "shapes": shapes,
             "gridlines": True,
             "truncated": total_rows > _SHEET_CAP_ROWS or total_cols > _SHEET_CAP_COLS,
+            "degraded": "DRM 보호로 시트 복사가 차단되어 값만 표시합니다 — "
+                        f"병합/서식 없음 ({degraded_reason})",
         }
     finally:
         try:
@@ -1409,80 +1473,97 @@ def create_app(ws_root: str | Path) -> FastAPI:
 
     @app.get("/api/sheet")
     def sheet(doc: str, name: str | None = None):
+        """원본 충실 렌더 우선순위:
+
+        1) 읽을 수 있는 원본 xlsx(비DRM) → _render_sheet (항상 최신·최충실)
+        2) DB 렌더 캐시 — Windows 쪽에서 사전 생성한 DRM 고충실 렌더 서빙용
+        3) DRM 파일 + Excel COM 가능 → _render_sheet_drm
+           (시트 복사→충실 렌더; 복사 차단 환경만 값-전용 + degraded)
+        4) tree_node 폴백 (구조 트리 기반 표 — degraded 명시)
+        """
         # sheets 목록은 항상 tree_node에서 (render 캐시 유무 무관)
         all_sheets = [r["node_name"] for r in store.conn.execute(
             """SELECT node_name FROM tree_node
                WHERE document_id=? AND status='ACTIVE' AND node_type='SHEET'
                ORDER BY tree_path""", (doc,)).fetchall()]
 
-        # 1) DB 렌더 캐시 조회 (ingest 시 이미 추출됨)
-        if name:
-            row = store.load_render(doc, name)
+        def _with_meta(render: dict) -> dict:
+            with lock:
+                meta = store.conn.execute(
+                    """SELECT d.current_version,v.drm_status,v.render_status
+                         FROM document d LEFT JOIN viewer_document_version v
+                           ON v.document_id=d.document_id
+                          AND v.document_version=d.current_version
+                        WHERE d.document_id=?""", (doc,)).fetchone()
+            return {"document_id": doc,
+                    "document_version": meta["current_version"] if meta else None,
+                    "viewer": ({"drm_status": meta["drm_status"],
+                                "render_status": meta["render_status"]} if meta and
+                               meta["drm_status"] else None),
+                    **render}
+
+        path = None
+        try:
+            path = _doc_path(doc)
+        except HTTPException:
+            path = None                       # 파일 소실 → 캐시/tree 폴백
+        is_drm = path is not None and _is_drm_file(path)
+        renderable = (path is not None and path.suffix.lower() == ".xlsx"
+                      and not is_drm)
+
+        # 1) 읽을 수 있는 원본 xlsx — 원본 충실 렌더가 언제나 최우선
+        if renderable:
+            key = (str(path), path.stat().st_mtime, name or "")
+            if key not in render_cache:
+                if len(render_cache) > 24:
+                    render_cache.clear()
+                render_cache[key] = _render_sheet(path, name)
+            return _with_meta(render_cache[key])
+
+        # 2) DB 렌더 캐시 (Windows에서 사전 생성한 DRM 충실 렌더)
+        target_sheet = name or (all_sheets[0] if all_sheets else None)
+        if target_sheet:
+            row = store.load_render(doc, target_sheet)
             if row and row["render_json"]:
                 import json as _json
                 cached = _json.loads(row["render_json"])
                 cached["sheets"] = all_sheets
                 return {"document_id": doc, **cached}
-        else:
-            # 첫 시트 자동 선택
-            if all_sheets:
-                first = all_sheets[0]
-                row = store.load_render(doc, first)
-                if row and row["render_json"]:
-                    import json as _json
-                    cached = _json.loads(row["render_json"])
-                    cached["sheets"] = all_sheets
-                    return {"document_id": doc, **cached}
 
-        # 2) 원본 파일이 읽을 수 있는 xlsx면 원본 충실 렌더가 최우선 —
-        #    tree_node 폴백이 정상 xlsx까지 가로채 병합/스타일이 사라지는
-        #    회귀(머지 산물) 수정. 폴백은 CSV/DRM/파일 소실에만 쓴다.
-        path = None
-        try:
-            path = _doc_path(doc)
-        except HTTPException:
-            path = None                       # 파일 소실 → tree_node 폴백
-        renderable = (path is not None and path.suffix.lower() == ".xlsx"
-                      and not _is_drm_file(path))
-        if not renderable:
-            target_sheet = name or (all_sheets[0] if all_sheets else None)
-            if target_sheet:
-                tn_result = _tree_node_table(doc, target_sheet)
-                if tn_result:
-                    # JS 렌더 계약(cols/rows 배열)으로 정규화
-                    if "cols" not in tn_result:
-                        tn_result["cols"] = [120] * tn_result.get("max_col", 0)
-                    if "rows" not in tn_result:
-                        tn_result["rows"] = [24] * tn_result.get("max_row", 0)
-                    tn_result.setdefault("images", [])
-                    tn_result.setdefault("gridlines", True)
-                    tn_result["sheets"] = all_sheets
-                    return {"document_id": doc, **tn_result}
-        if path is None:
-            raise HTTPException(404, "file missing and no tree fallback")
+        # 3) DRM 파일 — Excel COM으로 충실 렌더 시도 (Windows + Excel 환경)
+        if is_drm:
+            key = (str(path), path.stat().st_mtime, name or "")
+            if key not in render_cache:
+                try:
+                    if len(render_cache) > 24:
+                        render_cache.clear()
+                    render_cache[key] = _render_sheet_drm(path, name)
+                except HTTPException:
+                    raise
+                except Exception:
+                    key = None                # COM 불가(리눅스 등) → tree 폴백
+            if key is not None:
+                return _with_meta(render_cache[key])
 
-        # 3) 파일에서 렌더 (비DRM은 원본 충실, DRM은 플레이스홀더)
-        key = (str(path), path.stat().st_mtime, name or "")
-        if key not in render_cache:
-            if len(render_cache) > 24:
-                render_cache.clear()
-            if _is_drm_file(path):
-                render_cache[key] = _render_sheet_drm(path, name)
-            else:
-                render_cache[key] = _render_sheet(path, name)
-        with lock:
-            meta = store.conn.execute(
-                """SELECT d.current_version,v.drm_status,v.render_status
-                     FROM document d LEFT JOIN viewer_document_version v
-                       ON v.document_id=d.document_id
-                      AND v.document_version=d.current_version
-                    WHERE d.document_id=?""", (doc,)).fetchone()
-        return {"document_id": doc,
-                "document_version": meta["current_version"] if meta else None,
-                "viewer": ({"drm_status": meta["drm_status"],
-                            "render_status": meta["render_status"]} if meta and
-                           meta["drm_status"] else None),
-                **render_cache[key]}
+        # 4) tree_node 폴백 — 구조 트리 기반 표 (저하 렌더임을 명시)
+        if target_sheet:
+            tn_result = _tree_node_table(doc, target_sheet)
+            if tn_result:
+                # JS 렌더 계약(cols/rows 배열)으로 정규화
+                if "cols" not in tn_result:
+                    tn_result["cols"] = [120] * tn_result.get("max_col", 0)
+                if "rows" not in tn_result:
+                    tn_result["rows"] = [24] * tn_result.get("max_row", 0)
+                tn_result.setdefault("images", [])
+                tn_result.setdefault("gridlines", True)
+                tn_result["sheets"] = all_sheets
+                tn_result.setdefault(
+                    "degraded",
+                    "원본 파일을 열 수 없어 구조 트리 기반 표만 표시합니다 — "
+                    "병합/서식 없음"
+                    + (" (DRM 잠김 — 해제본 등록 시 정상 표시)" if is_drm else ""))
+                return {"document_id": doc, **tn_result}
+        raise HTTPException(404, "file missing and no tree fallback")
 
     # ---------------------------------------------- KG View Models (§8 v3) ----
     # DKG 파생은 kg/groups.py로 이관 — 사람 델타(INCLUDED/EXCLUDED) 반영 포함.
