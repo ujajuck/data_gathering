@@ -259,7 +259,7 @@ export default function FilesScreen() {
       )}
       <div className="panel pad">
         <div className="title">파일 분석</div>
-        <div className="sub">등록된 Excel의 분석 상태와 Domain KG / 문서군 매핑 현황입니다.
+        <div className="sub">등록된 Excel의 분석 상태와 개념 / 문서군 매핑 현황입니다.
           파일은 data/raw에 두면 위 미등록 목록에 나타납니다.</div>
         <div className="editForm"
           style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
@@ -282,7 +282,7 @@ export default function FilesScreen() {
         <table className="table" style={{ marginTop: 10 }}>
           <thead><tr>
             <Th k="filename">파일</Th><Th k="author">작성자</Th><Th k="created">작성일</Th>
-            <th>문서군</th><Th k="headers">매핑 노드</Th><Th k="coverage_pct">KG 매핑</Th>
+            <th>문서군</th><Th k="headers">매핑 노드</Th><Th k="coverage_pct">개념 매핑</Th>
             <Th k="review">검토</Th><th>DRM / Viewer</th><th>상태</th><th></th></tr></thead>
           <tbody>
             {visibleFiles.length ? visibleFiles.map((f) => {

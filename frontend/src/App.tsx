@@ -14,7 +14,7 @@ const LegacyViewer = lazy(() => import("./LegacyViewer"));
 
 const STEPS: [Screen, string][] = [
   ["files", "1. 파일 분석"],
-  ["kg", "2. KG 탐색"],
+  ["kg", "2. 개념 탐색"],
   ["source", "3. 원본 데이터"],
   ["db", "4. 통합 DB"],
 ];
@@ -29,7 +29,7 @@ function Shell() {
       <header className="top">
         <div className="brand">
           <b>Semantic Excel Integration</b>
-          <div>Fixed Domain KG · 문서군 · Source Location · Custom DB</div>
+          <div>도메인 온톨로지 · 문서군 · Source Location · Custom DB</div>
         </div>
         <nav className="steps">
           {STEPS.map(([id, label]) => (

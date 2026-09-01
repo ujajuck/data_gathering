@@ -118,7 +118,7 @@ export default function ConceptEditor({ cid, onCreated, onBack }: Props) {
               const a = newAlias.trim();
               if (!a) return;
               await post("/api/kg/alias", { concept_id: cid, alias: a });
-              setStatus("✓ 별칭 추가 — 미매핑을 재평가하려면 해당 DKG에서 재크롤링(fill)하세요");
+              setStatus("✓ 별칭 추가 — 미매핑을 재평가하려면 해당 문서군에서 재크롤링(fill)하세요");
               setNewAlias("");
               load();
             })}>추가</button>

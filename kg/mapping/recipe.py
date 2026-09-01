@@ -310,7 +310,7 @@ def suggest_groups(store: KgStore, document_id: str) -> list[dict]:
             continue
         hit = len(keys & tpl)
         if hit:
-            out.append({"root_concept_id": root, "name": name + " KG",
+            out.append({"root_concept_id": root, "name": name + " 문서군",
                         "match_pct": round(100 * hit / len(keys), 1),
                         "has_recipe": rec is not None})
     out.sort(key=lambda s: -s["match_pct"])

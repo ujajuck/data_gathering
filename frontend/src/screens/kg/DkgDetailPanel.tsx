@@ -151,7 +151,7 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
               <div className="dkgCard"
                 style={{ cursor: "default", borderLeft: "4px solid var(--line)" }}>
                 <b style={{ color: "var(--muted)" }}>▣ 기타 (양식 미배정)</b>
-                <div>{etc.length}개 문서 — 기존 KG/레시피 흐름으로 유지됩니다</div>
+                <div>{etc.length}개 문서 — 기존 개념 매핑/레시피 흐름으로 유지됩니다</div>
                 {etc.length ? etc.map((d) => memberRow(d))
                   : <div className="empty" style={{ padding: "4px 0" }}>없음 — 모든 문서에 양식이 배정되어 있습니다</div>}
               </div>
@@ -253,7 +253,7 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
       <div className="rightBtns">
         <button className="primary" disabled={!selDoc} onClick={onOpenSource}>
           선택 문서의 원본 위치 보기</button>
-        <button className="secondary" onClick={onBackDomain}>전체 KG로 돌아가기</button>
+        <button className="secondary" onClick={onBackDomain}>전체 개념으로 돌아가기</button>
       </div>
       <div className="status">{status}</div>
     </>

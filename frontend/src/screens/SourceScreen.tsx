@@ -113,7 +113,7 @@ export default function SourceScreen() {
 
   return (
     <section className={`screen${s.screen === "source" ? " active" : ""}`}>
-      <div className="crumb"><b>전체 KG</b> › {crumbParts.join(" › ")}</div>
+      <div className="crumb"><b>전체 개념</b> › {crumbParts.join(" › ")}</div>
       <div className="excelLayout">
         <aside className="panel pad">
           <div className="kicker">SOURCE LOCATIONS</div>
@@ -139,7 +139,7 @@ export default function SourceScreen() {
           ) : !s.selNode ? (
             <>
               <div className="title">노드를 선택하세요</div>
-              <div className="sub">KG 탐색에서 Domain Node를 고르면 매핑된 위치가 나옵니다</div>
+              <div className="sub">개념 탐색에서 Domain Node를 고르면 매핑된 위치가 나옵니다</div>
             </>
           ) : (
             <>

@@ -287,7 +287,7 @@ export default function DbScreen() {
                     </tr>
                   )) : (
                     <tr><td colSpan={6} className="empty">
-                      원본 데이터 화면에서 '이 Source 포함' 또는 KG 탐색의 '통합 DB 대상에
+                      원본 데이터 화면에서 '이 Source 포함' 또는 개념 탐색의 '통합 DB 대상에
                       추가'로 담으세요</td></tr>
                   )}
                 </tbody>

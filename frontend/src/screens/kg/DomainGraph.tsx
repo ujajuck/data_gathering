@@ -34,7 +34,7 @@ function layoutDomain(domain: DomainKg, dkgs: DkgSummary[]) {
     for (const n of nodes) if (!ordered.includes(n)) ordered.push(n);
     const found = dkgs.find((g) => g.id === rootId);
     const dkg = found ||
-      { id: rootId, name: (l1s[rootId] ? l1s[rootId].name : rootId) + " KG",
+      { id: rootId, name: (l1s[rootId] ? l1s[rootId].name : rootId) + " 문서군",
         member_document_count: 0 };
     groups.push({ dkg, l1: l1s[rootId], nodes: ordered,
       x: 0, y: 0, w: 0, h: 0, l1x: 0, l1y: 0 });
@@ -81,7 +81,7 @@ export default function DomainGraph({ domain, dkgs, selDkg, selNode, dkgColor,
   return (
     <svg className="graphSvg" viewBox={`0 0 1180 ${height}`}
       style={{ width: `${zoom * 100}%`, height: Math.min(660, height) * zoom }}
-      aria-label="전체 Domain KG 트리와 문서군 커버리지">
+      aria-label="전체 개념 트리와 문서군 커버리지">
       {/* Coverage Hull — 트리 가지(L1+리프)를 감싸는 반투명 영역, 라벨은 하단 */}
       {groups.map((g) => {
         const color = dkgColor(g.dkg.id);
@@ -118,7 +118,7 @@ export default function DomainGraph({ domain, dkgs, selDkg, selNode, dkgColor,
         <text className="ntext" x={rootX + ROOTW / 2} y={rootY + ROOTH / 2 - 5}>
           {domain.domain || "Domain"}</text>
         <text className="ncnt" x={rootX + ROOTW / 2} y={rootY + ROOTH / 2 + 11}>
-          Fixed Domain KG</text>
+          고정 개념 체계</text>
       </g>
       {groups.map((g) => {
         const color = dkgColor(g.dkg.id);

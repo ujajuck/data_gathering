@@ -187,8 +187,8 @@ export default function KgScreen() {
     <section className={`screen${s.screen === "kg" ? " active" : ""}`}>
       <div className="grid3">
         <aside className="panel pad">
-          <div className="kicker">KG NAVIGATION</div>
-          <div className="title">지식 그래프</div>
+          <div className="kicker">CONCEPT NAVIGATION</div>
+          <div className="title">개념 탐색</div>
           <input className="search" placeholder="노드 / 문서군 검색" value={searchInput}
             onChange={(e) => {
               const v = e.target.value;
@@ -198,7 +198,7 @@ export default function KgScreen() {
             }} />
           <div className="tabs">
             <button className={`tinyTab${navTab === "domain" ? " active" : ""}`}
-              onClick={() => setNavTab("domain")}>전체 KG</button>
+              onClick={() => setNavTab("domain")}>전체 개념</button>
             <button className={`tinyTab${navTab === "doc" ? " active" : ""}`}
               onClick={() => setNavTab("doc")}>문서군</button>
           </div>
@@ -243,21 +243,21 @@ export default function KgScreen() {
             <div>
               <div className="crumb">
                 {docMode && g
-                  ? <><b>전체 Domain KG</b> › {g.name}</>
-                  : <><b>전체 Domain KG</b> · 문서군 Coverage</>}
+                  ? <><b>전체 개념</b> › {g.name}</>
+                  : <><b>전체 개념</b> · 문서군 Coverage</>}
               </div>
               <div className="title">
-                {docMode ? "문서군에 어떤 문서가 속하는지 보기" : "전체 KG에서 문서군 위치 보기"}
+                {docMode ? "문서군에 어떤 문서가 속하는지 보기" : "전체 개념에서 문서군 위치 보기"}
               </div>
               <div className="sub">
                 {docMode
                   ? "선택한 문서군의 Domain Node와 그 노드에 데이터를 제공하는 문서를 함께 봅니다."
-                  : "반투명 영역은 각 문서군이 Domain KG의 어느 노드들을 커버하는지 나타냅니다."}
+                  : "반투명 영역은 각 문서군이 전체 개념의 어느 노드들을 커버하는지 나타냅니다."}
               </div>
             </div>
             <div className="tabs" style={{ alignItems: "center" }}>
               <button className={`tinyTab${!docMode ? " active" : ""}`}
-                onClick={() => setDocMode(false)}>전체 KG</button>
+                onClick={() => setDocMode(false)}>전체 개념</button>
               <button className={`tinyTab${docMode ? " active" : ""}`}
                 onClick={openDocGraphTab}>문서군 상세</button>
               <span style={{ display: "inline-flex", gap: 4, marginLeft: 8, alignItems: "center" }}>
