@@ -41,6 +41,7 @@ export const CART_KEY = "kg_cart_v3";
 export interface CartItem {
   node_id: string; concept_id: string | null; header: string;
   document: string; sheet: string; range: string; role: string | null;
+  raw?: boolean;    // 양식별 전처리 '원값 유지' — 빌드 시 단위 변환 생략
 }
 export function readCart(): CartItem[] {
   try { return JSON.parse(localStorage.getItem(CART_KEY) || "") || []; } catch { return []; }

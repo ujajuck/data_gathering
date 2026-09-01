@@ -37,6 +37,7 @@ export interface Store {
   setOverlayEnabled: (v: boolean) => void;
 
   cartCount: number;
+  cartRev: number;               // 내용만 바뀌는 갱신(raw 플래그 등)도 리렌더 유발
   cartItems: () => CartItem[];
   addCart: (items: CartItem | CartItem[]) => void;
   saveCart: (items: CartItem[]) => void;
@@ -75,6 +76,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [nodeSearch, setNodeSearch] = useState<SearchResult | null>(null);
   const [overlayEnabled, setOverlayEnabled] = useState(true);
   const [cartCount, setCartCount] = useState(() => readCart().length);
+  const [cartRev, setCartRev] = useState(0);
   const [srcRequest, setSrcRequest] = useState<SrcRequest | null>(null);
   const srcSeq = useRef(0);
 
@@ -103,6 +105,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const saveCart = useCallback((items: CartItem[]) => {
     writeCart(items);
     setCartCount(items.length);
+    setCartRev((v) => v + 1);
   }, []);
   const addCart = useCallback((items: CartItem | CartItem[]) => {
     const c = readCart();
@@ -110,6 +113,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!c.some((x) => x.node_id === it.node_id)) c.push(it);
     writeCart(c);
     setCartCount(c.length);
+    setCartRev((v) => v + 1);
   }, []);
 
   const dkgOf = useCallback((id: string) => dkgs.find((g) => g.id === id), [dkgs]);
@@ -128,7 +132,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     reviewDoc, setReviewDoc,
     nodeSearch, setNodeSearch,
     overlayEnabled, setOverlayEnabled,
-    cartCount, cartItems, addCart, saveCart,
+    cartCount, cartRev, cartItems, addCart, saveCart,
     reloadKg, loadFiles, dkgOf, dkgColor,
     srcRequest, requestSheet,
   };

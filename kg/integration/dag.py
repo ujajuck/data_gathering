@@ -99,6 +99,8 @@ def _unit_convert(f: Frame, cfg: dict, env: dict) -> Frame:
     units = env.get("units")
     targets: dict[str, str] = cfg.get("targets") or env.get("field_units") or {}
     node_units: dict[str, str] = env.get("node_units") or {}
+    # 양식별 '원값 유지' 전처리 — 이 노드들에서 온 셀은 단위 변환을 생략한다
+    skip_nodes: set = set(cfg.get("skip_nodes") or [])
     if units is None:
         return f
     warn: dict[tuple, int] = {}
@@ -109,6 +111,8 @@ def _unit_convert(f: Frame, cfg: dict, env: dict) -> Frame:
                 continue
             ln = f.lineage[i].get(col) or {}
             if ln.get("derived") or ln.get("aggregated"):
+                continue
+            if ln.get("node_id") in skip_nodes:
                 continue
             src_unit = ln.get("unit") or node_units.get(ln.get("node_id") or "", None)
             if not src_unit or src_unit == tgt:

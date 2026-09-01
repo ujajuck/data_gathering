@@ -31,9 +31,10 @@ export interface DkgDetailData extends DkgSummary {
     stale_entries?: number; created_at: string;
   } | null;
   parsing_templates?: {
-    template_name: string; version: number | string;
+    template_id?: string; template_name: string; version: number | string;
     override_documents: number; review_required: number; failed: number;
-    documents: { filename: string; status: string; override_count: number }[];
+    documents: { document_id?: string; filename: string; status: string;
+      override_count: number }[];
   }[];
   last_recrawl?: { mode: string; status: string; started_at?: string } | null;
 }
@@ -45,6 +46,7 @@ export interface FileRow {
   headers: number; coverage_pct: number; review: number;
   drm_status?: string | null; render_status?: string | null; parsing_status?: string | null;
   author?: string | null; created?: string | null; modified?: string | null;
+  template_name?: string | null; template_version?: number | string | null;
 }
 
 export interface RawFile {

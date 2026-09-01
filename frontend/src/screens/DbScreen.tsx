@@ -1,9 +1,169 @@
-// 4. 통합 DB — 담은 Source 묶음으로 스키마 제안을 받고, 조정 후 DB를 생성한다.
-//    web_kg renderCartList/refreshProposal/buildDb 포트.
-import { useEffect, useState } from "react";
-import { post, ROLE_BADGE } from "../lib/api";
+// 4. 통합 DB — 개념 → 양식(양식의 문서 자동 반영) → 양식별 전처리/개별 문서
+//    가감으로 머지 대상을 만들고, 스키마 제안을 받아 DB를 생성한다.
+import { useEffect, useMemo, useState } from "react";
+import { api, post, ROLE_BADGE } from "../lib/api";
+import type { CartItem } from "../lib/api";
 import { useStore } from "../lib/store";
-import type { BuildResult, Proposal } from "../lib/types";
+import type { BuildResult, Proposal, SearchResult, SearchSource } from "../lib/types";
+
+const ETC = "기타 (양식 미배정)";
+
+// 개념 → 양식 → 문서 선택 마법사. 양식 체크 = 그 양식 소속 문서의 사용 가능
+// 소스 전부를 묶음에 반영. 양식별 전처리(정규화/원값 유지)와 개별 문서
+// 추가/제거를 지원한다. 검토 대기(REVIEW_REQUIRED) 소스는 승인 전까지 제외.
+function MergePicker() {
+  const s = useStore();
+  const [concept, setConcept] = useState("");
+  const [res, setRes] = useState<SearchResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setRes(null);
+    setErr(null);
+    if (!concept) return;
+    let dead = false;
+    api(`/api/search?concept=${encodeURIComponent(concept)}`)
+      .then((r) => { if (!dead) setRes(r); })
+      .catch((e) => { if (!dead) setErr(e.message); });
+    return () => { dead = true; };
+  }, [concept]);
+
+  const formOf = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const f of s.files)
+      if (f.template_name)
+        m.set(f.document_id, `${f.template_name} v${f.template_version}`);
+    return m;
+  }, [s.files]);
+
+  const groups = useMemo(() => {
+    if (!res) return [];
+    const by = new Map<string, { docs: Map<string, SearchSource[]>; review: number }>();
+    for (const src of res.sources) {
+      const label = formOf.get(src.document_id) || ETC;
+      const g = by.get(label) || { docs: new Map(), review: 0 };
+      if (src.status === "REVIEW_REQUIRED") g.review += 1;
+      else {
+        const list = g.docs.get(src.document_id) || [];
+        list.push(src);
+        g.docs.set(src.document_id, list);
+      }
+      by.set(label, g);
+    }
+    return [...by.entries()]
+      .sort(([a], [b]) => (a === ETC ? 1 : b === ETC ? -1 : a.localeCompare(b, "ko")))
+      .map(([label, g]) => ({ label, ...g,
+        nodeIds: [...g.docs.values()].flat().map((x) => x.node_id) }));
+  }, [res, formOf]);
+
+  const toCartItem = (src: SearchSource, raw: boolean): CartItem => ({
+    node_id: src.node_id, concept_id: concept, header: src.header,
+    document: src.document, sheet: src.sheet,
+    range: (src.locator || "").split("!").pop() || "", role: null, raw });
+
+  const cart = s.cartItems();               // cartCount 변경 시 리렌더로 최신화
+  const inCart = new Set(cart.map((x) => x.node_id));
+
+  const addSources = (sources: SearchSource[], raw: boolean) => {
+    const add = sources.filter((x) => !inCart.has(x.node_id))
+      .map((x) => toCartItem(x, raw));
+    s.saveCart([...cart, ...add]);
+  };
+  const removeNodes = (nodeIds: string[]) => {
+    const drop = new Set(nodeIds);
+    s.saveCart(cart.filter((x) => !drop.has(x.node_id)));
+  };
+
+  return (
+    <div className="schemaCard">
+      <h4 style={{ margin: "0 0 4px" }}>머지 대상 선택 — 개념 → 양식 → 문서</h4>
+      <div className="sub" style={{ marginBottom: 8 }}>
+        개념을 고르고 양식을 체크하면 그 양식에 포함된 모든 문서가 자동
+        반영됩니다. 양식별 전처리를 정하거나, 펼쳐서 문서를 개별 추가/제거하세요.</div>
+      <div className="editForm" style={{ maxWidth: 420 }}>
+        <select value={concept} onChange={(e) => setConcept(e.target.value)}>
+          <option value="">— 개념 선택 —</option>
+          {s.concepts.map((c) => (
+            <option key={c.concept_id} value={c.concept_id}>
+              {c.canonical_name} ({c.concept_id})</option>
+          ))}
+        </select>
+      </div>
+      {err && <div className="empty">{err}</div>}
+      {concept && res && !groups.length && (
+        <div className="empty">이 개념에 매핑된 사용 가능 소스가 없습니다</div>
+      )}
+      {groups.map((g) => {
+        const carted = g.nodeIds.filter((id) => inCart.has(id));
+        const all = carted.length === g.nodeIds.length && g.nodeIds.length > 0;
+        const some = carted.length > 0 && !all;
+        const cartedItems = cart.filter((x) => carted.includes(x.node_id));
+        const prep = cartedItems.length && cartedItems.every((x) => x.raw) ? "raw" : "auto";
+        const isEtc = g.label === ETC;
+        return (
+          <div key={g.label} className="dkgCard" style={{ cursor: "default",
+            borderLeft: `4px solid ${isEtc ? "var(--line)" : "var(--purple)"}` }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <label style={{ display: "flex", gap: 6, alignItems: "center",
+                cursor: "pointer", fontWeight: 700,
+                color: isEtc ? "var(--muted)" : "var(--purple)" }}>
+                <input type="checkbox" checked={all}
+                  ref={(el) => { if (el) el.indeterminate = some; }}
+                  onChange={() => all ? removeNodes(g.nodeIds)
+                    : addSources([...g.docs.values()].flat(), prep === "raw")} />
+                ▣ {g.label}
+              </label>
+              <span className="muted" style={{ fontSize: 11 }}>
+                문서 {g.docs.size} · 위치 {g.nodeIds.length}
+                {g.review ? ` · 검토 대기 ${g.review} 제외` : ""} · 반영 {carted.length}</span>
+              <select className="editForm" value={prep} disabled={!carted.length}
+                title="양식별 전처리 — 이 양식에서 반영된 위치들에 적용"
+                style={{ marginLeft: "auto", marginTop: 0, width: 190,
+                  border: "1px solid var(--line)", borderRadius: 8,
+                  padding: "4px 6px", fontSize: 11 }}
+                onChange={(e) => {
+                  const raw = e.target.value === "raw";
+                  const ids = new Set(carted);
+                  s.saveCart(cart.map((x) =>
+                    ids.has(x.node_id) ? { ...x, raw } : x));
+                }}>
+                <option value="auto">전처리: 자동 정규화 (단위→기준)</option>
+                <option value="raw">전처리: 원값 유지 (변환 생략)</option>
+              </select>
+              <button className="secondary" style={{ padding: "4px 8px", fontSize: 11 }}
+                onClick={() => setOpen((m) => ({ ...m, [g.label]: !m[g.label] }))}>
+                {open[g.label] ? "접기" : "문서별 조정"}</button>
+            </div>
+            {open[g.label] && (
+              <div style={{ marginTop: 6 }}>
+                {[...g.docs.entries()].map(([docId, sources]) => {
+                  const docCarted = sources.filter((x) => inCart.has(x.node_id));
+                  const docAll = docCarted.length === sources.length;
+                  return (
+                    <label key={docId} className="fileRow"
+                      style={{ display: "block", paddingLeft: 12, cursor: "pointer" }}>
+                      <input type="checkbox" checked={docAll}
+                        ref={(el) => {
+                          if (el) el.indeterminate = docCarted.length > 0 && !docAll;
+                        }}
+                        onChange={() => docAll
+                          ? removeNodes(sources.map((x) => x.node_id))
+                          : addSources(sources, prep === "raw")} />{" "}
+                      <b>▤ {sources[0].document}</b>
+                      <span className="muted" style={{ fontSize: 11 }}>
+                        {" "}· 위치 {sources.length} · 반영 {docCarted.length}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function DbScreen() {
   const s = useStore();
@@ -66,6 +226,8 @@ export default function DbScreen() {
           concept: f.concept_id, unit: f.target_unit, type: f.type })),
         include_nodes: Object.fromEntries(fields.map((f) => [
           f.field_name.replace(/[^A-Za-z0-9_]/g, "_") || f.concept_id, f.node_ids])),
+        // 양식별 전처리 '원값 유지' — 해당 위치는 단위 변환을 생략한다
+        raw_node_ids: cart.filter((x) => x.raw).map((x) => x.node_id),
       };
       const r: BuildResult = await post("/api/build", body);
       setBuildStatus(`✓ ${r.status} — 재실행하면 새 버전이 생성됩니다`);
@@ -86,8 +248,9 @@ export default function DbScreen() {
         <div>
           <div className="panel pad">
             <div className="title">통합 DB Builder</div>
-            <div className="sub">선택한 Domain Node와 Source들을 Row Context 기준으로 묶어
-              스키마를 제안합니다. 예외만 조정하세요.</div>
+            <div className="sub">개념 → 양식 → 문서 순서로 머지 대상을 만들고, Row Context
+              기준으로 묶은 스키마 제안에서 예외만 조정하세요.</div>
+            <MergePicker />
             <div className="schemaCard">
               <h4 style={{ margin: "0 0 8px" }}>선택된 묶음</h4>
               <div style={{ marginBottom: 8 }}>

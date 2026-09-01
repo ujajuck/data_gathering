@@ -361,6 +361,20 @@ def test_unit_convert_no_double_apply():
     assert abs(out[0].rows[0]["t"] - 25.39) < 0.01         # 한 번만 변환됨
 
 
+def test_unit_convert_skip_nodes_keeps_raw_value():
+    """양식별 전처리 '원값 유지' — skip_nodes에 든 노드의 셀은 변환하지 않는다."""
+    from src.units.converter import UnitRegistry
+    units = UnitRegistry.load(UNITS_YAML)
+    f = Frame(["t"], [{"t": 77.7}, {"t": 77.7}],
+              [{"t": {"payload_id": "p", "row_idx": 0, "node_id": "keep", "unit": "°F"}},
+               {"t": {"payload_id": "p", "row_idx": 1, "node_id": "conv", "unit": "°F"}}])
+    env = {"units": units, "field_units": {"t": "℃"}}
+    out = run_dag([f], [{"op": "unit_convert",
+                         "config": {"skip_nodes": ["keep"]}}], env)
+    assert out[0].rows[0]["t"] == 77.7                     # 원값 유지
+    assert abs(out[0].rows[1]["t"] - 25.39) < 0.01         # 나머지는 정규화
+
+
 def test_incompatible_unit_warned_not_converted():
     from src.units.converter import UnitRegistry
     units = UnitRegistry.load(UNITS_YAML)

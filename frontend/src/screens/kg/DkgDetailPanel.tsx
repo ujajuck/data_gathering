@@ -102,49 +102,66 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
         <div className="metric"><span>값</span><b>{g.value_count.toLocaleString()}</b></div>
       </div>
 
-      <div style={{ marginTop: 13 }} className="kicker">TEMPLATES (양식)</div>
-      {(g.parsing_templates || []).length ? (g.parsing_templates || []).map((t) => (
-        <div key={`${t.template_name}-${t.version}`} className="dkgCard"
-          style={{ cursor: "default", borderLeft: "4px solid var(--purple)" }}>
-          <b style={{ color: "var(--purple)" }}>▣ {t.template_name}{" "}
-            <span className="badge blue">v{t.version}</span></b>
-          <div>{t.documents.length}개 문서 · Override 문서 {t.override_documents} ·
-            검토 {t.review_required} · 실패 {t.failed}</div>
-          <div style={{ marginTop: 6 }}>
-            {t.documents.map((d) => (
-              <span className="chip" title={d.status} key={d.filename}>▤ {d.filename}
-                {d.override_count ? <b style={{ color: "var(--amber)" }}> override {d.override_count}</b> : null}
-                {d.status === "REVIEW_REQUIRED" ? <b style={{ color: "var(--amber)" }}> 검토 필요</b> : null}
-              </span>
-            ))}
-          </div>
-        </div>
-      )) : (
-        <div className="sub" style={{ fontSize: 12 }}>
-          배정된 양식(Parsing Template)이 없습니다 — 이 문서군의 문서는 기존
-          KG/레시피 흐름으로 유지됩니다.</div>
-      )}
-      <div className="sub" style={{ fontSize: 11 }}>
-        ▣ 문서군의 1차 연결은 양식입니다 — 아래 문서는 양식의 인스턴스이며,
-        양식 미배정 문서도 멤버십(포함/제외)으로 직접 연결될 수 있습니다.</div>
-
-      <div style={{ marginTop: 13 }} className="kicker">MEMBER DOCUMENTS (인스턴스)</div>
-      <div style={{ maxHeight: "24vh", overflowY: "auto" }}>
-        {(g.member_documents || []).map((d) => (
-          <div key={d.document_id}
-            className={`fileRow${s.selDkgDoc === d.document_id ? " sel" : ""}`}
-            onClick={() => s.setSelDkgDoc(d.document_id)}>
-            <b>{d.filename}</b>
-            {d.override === "INCLUDED" && <span className="badge blue"> 고정</span>}
-            <div>{d.nodes.slice(0, 4).join(" · ") || "(매핑 없음)"} · {d.sources} src{" "}
-              <button title="이 그룹에서 제외 (매핑/빌드 소스는 유지)"
-                style={{ border: 0, background: "none", color: "var(--red)", cursor: "pointer" }}
-                onClick={(ev) => { ev.stopPropagation(); member(d.document_id, "EXCLUDED"); }}>
-                제외</button>
+      {/* 양식 계층: 문서군 → 양식 → 문서(인스턴스). 양식 미배정 멤버는
+          '기타' 그룹으로 — 계층이 중간에 항상 존재한다. */}
+      <div style={{ marginTop: 13 }} className="kicker">양식 → 문서 (TEMPLATE HIERARCHY)</div>
+      <div style={{ maxHeight: "30vh", overflowY: "auto" }}>
+        {(() => {
+          const templated = new Set<string>();
+          for (const t of g.parsing_templates || [])
+            for (const d of t.documents) if (d.document_id) templated.add(d.document_id);
+          const members = g.member_documents || [];
+          const memberRow = (d: typeof members[number],
+                             extra?: { override_count?: number; status?: string }) => (
+            <div key={d.document_id}
+              className={`fileRow${s.selDkgDoc === d.document_id ? " sel" : ""}`}
+              style={{ paddingLeft: 10 }}
+              onClick={() => s.setSelDkgDoc(d.document_id)}>
+              <b>▤ {d.filename}</b>
+              {d.override === "INCLUDED" && <span className="badge blue"> 고정</span>}
+              {extra?.override_count ? <b style={{ color: "var(--amber)", fontSize: 11 }}> override {extra.override_count}</b> : null}
+              {extra?.status === "REVIEW_REQUIRED" ? <b style={{ color: "var(--amber)", fontSize: 11 }}> 검토 필요</b> : null}
+              <div>{d.nodes.slice(0, 4).join(" · ") || "(매핑 없음)"} · {d.sources} src{" "}
+                <button title="이 그룹에서 제외 (매핑/빌드 소스는 유지)"
+                  style={{ border: 0, background: "none", color: "var(--red)", cursor: "pointer" }}
+                  onClick={(ev) => { ev.stopPropagation(); member(d.document_id, "EXCLUDED"); }}>
+                  제외</button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+          const etc = members.filter((d) => !templated.has(d.document_id));
+          return (
+            <>
+              {(g.parsing_templates || []).map((t) => {
+                const byId = new Map(t.documents
+                  .filter((d) => d.document_id)
+                  .map((d) => [d.document_id as string, d]));
+                const mine = members.filter((d) => byId.has(d.document_id));
+                return (
+                  <div key={`${t.template_name}-${t.version}`} className="dkgCard"
+                    style={{ cursor: "default", borderLeft: "4px solid var(--purple)" }}>
+                    <b style={{ color: "var(--purple)" }}>▣ {t.template_name}{" "}
+                      <span className="badge blue">v{t.version}</span></b>
+                    <div>{mine.length}개 문서 · Override 문서 {t.override_documents} ·
+                      검토 {t.review_required} · 실패 {t.failed}</div>
+                    {mine.map((d) => memberRow(d, byId.get(d.document_id)))}
+                  </div>
+                );
+              })}
+              <div className="dkgCard"
+                style={{ cursor: "default", borderLeft: "4px solid var(--line)" }}>
+                <b style={{ color: "var(--muted)" }}>▣ 기타 (양식 미배정)</b>
+                <div>{etc.length}개 문서 — 기존 KG/레시피 흐름으로 유지됩니다</div>
+                {etc.length ? etc.map((d) => memberRow(d))
+                  : <div className="empty" style={{ padding: "4px 0" }}>없음 — 모든 문서에 양식이 배정되어 있습니다</div>}
+              </div>
+            </>
+          );
+        })()}
       </div>
+      <div className="sub" style={{ fontSize: 11 }}>
+        ▣ 문서군의 1차 연결은 양식입니다 — 문서는 양식의 인스턴스이며, 양식
+        미배정 문서는 '기타' 아래에서 멤버십(포함/제외)으로 직접 연결됩니다.</div>
       {addable.length > 0 && (
         <div style={{ display: "flex", gap: 6, marginTop: 7 }} className="editForm">
           <select style={{ flex: 1, marginTop: 0 }} value=""

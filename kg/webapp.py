@@ -68,6 +68,7 @@ class BuildReq(BaseModel):
     name: str
     fields: list[BuildField]
     include_nodes: dict[str, list[str]] = {}
+    raw_node_ids: list[str] = []     # 양식별 '원값 유지' — 단위 변환 생략할 노드
 
 
 class IngestReq(BaseModel):
@@ -1575,7 +1576,8 @@ def create_app(ws_root: str | Path) -> FastAPI:
                      count(h.node_id) headers,
                      sum(CASE WHEN m.status IN ('AUTO_APPROVED','APPROVED') THEN 1 ELSE 0 END) mapped,
                      sum(CASE WHEN m.status='REVIEW_REQUIRED' THEN 1 ELSE 0 END) review,
-                     v.drm_status, v.render_status, a.status parsing_status
+                     v.drm_status, v.render_status, a.status parsing_status,
+                     t.name template_name, a.template_version
                    FROM document d
                    LEFT JOIN tree_node h ON h.document_id=d.document_id
                         AND h.status='ACTIVE' AND h.node_type='HEADER'
@@ -1584,6 +1586,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
                         AND v.document_version=d.current_version
                    LEFT JOIN document_template_assignment a ON a.document_id=d.document_id
                         AND a.document_version=d.current_version
+                   LEFT JOIN parsing_template t ON t.template_id=a.template_id
                    GROUP BY d.document_id ORDER BY d.filename""").fetchall()
         out = []
         for r in rows:
@@ -1599,7 +1602,9 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 "review": review, "status": status})
             out[-1].update({"drm_status": r["drm_status"] or "PROTECTED",
                             "render_status": r["render_status"],
-                            "parsing_status": r["parsing_status"]})
+                            "parsing_status": r["parsing_status"],
+                            "template_name": r["template_name"],
+                            "template_version": r["template_version"]})
             # 작성자/작성일 — 검색·필터·정렬용 (원본 파일의 core 속성)
             out[-1].update(_doc_props(root / "data" / "raw" / r["filename"]))
         return out
@@ -1835,7 +1840,8 @@ def create_app(ws_root: str | Path) -> FastAPI:
                         "type": f.type} for f in body.fields],
             "sources": {"include_nodes": body.include_nodes or {}},
             "transform": [
-                {"op": "unit_convert"},
+                {"op": "unit_convert",
+                 "config": {"skip_nodes": body.raw_node_ids or []}},
                 {"op": "union"},
                 {"op": "deduplicate"},
             ],
