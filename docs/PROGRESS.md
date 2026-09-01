@@ -5,7 +5,15 @@
 
 ## 2026-09-01
 
-- **'KG' 표기 제거** (이 커밋)
+- **README 최신화 + 시행착오 파일 정리** (이 커밋)
+  - 루트 README를 현행 기준으로 재작성 — 빠른 시작이 `kg.webapp`(+React
+    `/app`) 하나로 통일되고, 초기 파이프라인(`src.cli`/`src.api.server`+
+    `web/` 7뷰)은 '레거시' 섹션으로 강등. kg/README의 웹 UI 절도 4탭 현행화
+  - 일회성 스크립트 삭제: `scripts/build_dkg.py`(존재하지 않는 입력),
+    `scripts/csv_ingest.py`·`csv_dkg_builder.py`(사설 서버 하드코딩),
+    `domains/mlcc_additive/*.py` 4종(윈도우 로컬 경로 하드코딩 — 도메인
+    설정 YAML은 보존)
+- **'KG' 표기 제거**
   - React UI의 사용자 노출 문구에서 리터럴 'KG' 전부 제거: 탭 `KG 탐색 →
     개념 탐색`, `전체 KG → 전체 개념`, 헤더 `Fixed Domain KG → 도메인
     온톨로지`, 루트 노드 `고정 개념 체계`, 컬럼 `KG 매핑 → 개념 매핑` 등
