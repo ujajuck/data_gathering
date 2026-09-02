@@ -1745,7 +1745,12 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 """SELECT pv.row_key, pv.value_num, pv.value_text, pv.cell_address
                    FROM payload_value pv JOIN data_payload p ON p.payload_id=pv.payload_id
                    WHERE p.tree_node_id=? AND p.is_current=1
-                   ORDER BY pv.row_idx LIMIT 8""", (node_id,)).fetchall()
+                   ORDER BY pv.row_idx LIMIT 200""", (node_id,)).fetchall()
+            value_count = store.conn.execute(
+                """SELECT count(*)
+                   FROM payload_value pv JOIN data_payload p ON p.payload_id=pv.payload_id
+                   WHERE p.tree_node_id=? AND p.is_current=1""",
+                (node_id,)).fetchone()[0]
             doc = store.conn.execute(
                 "SELECT filename,current_version FROM document WHERE document_id=?",
                 (n["document_id"],)).fetchone()
@@ -1806,6 +1811,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 "keys": [h for h in (meta.get("adjacent_headers") or [])][:4],
                 "header_path": meta.get("header_path") or [],
             },
+            "value_count": value_count,
             "values": [{
                 "key": p["row_key"],
                 "value": p["value_num"] if p["value_num"] is not None else p["value_text"],

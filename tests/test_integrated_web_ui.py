@@ -19,7 +19,9 @@ def test_parsing_and_viewer_are_integrated_into_existing_kg_application():
     assert "PARSING TEMPLATES" in js
     assert "Parsing Template은 KG 개념 노드가 아닌" in js
     assert "Semantic Overlay" in js and "data-overlay" in js
-    assert "VIEWER SOURCE" in js and "Template Source:" in js
+    # 인스펙터가 뷰어 소스(DRM/Render)와 양식 provenance를 함께 보여준다
+    # (2026-09 인스펙터 개편: 'VIEWER SOURCE' 섹션명 → '문서' 접힘 상세로 이동)
+    assert "DRM:" in js and "Render:" in js and "Template Source:" in js
     assert "PDF Preview" in js
 
 

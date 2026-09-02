@@ -1149,44 +1149,65 @@ async function openInspector(nodeId) {
     ? `${esc(source.sheet || d.sheet)}!${esc(source.range || '동적 탐색')}` : '—';
   const ps = d.parsing_source;
   const pt = d.parsing_template;
+  // 어떤 키에 어떤 값이 뽑혔는지가 주인공 — 추출 결과 표 + 접힌 메타
+  const stat = d.mapping ? d.mapping.status : null;
+  const statCls = stat === 'REVIEW_REQUIRED' ? 'amber'
+    : (stat === 'AUTO_APPROVED' || stat === 'APPROVED') ? 'green' : (stat ? 'red' : '');
+  const more = typeof d.value_count === 'number' && d.value_count > d.values.length;
   $('#inspector').innerHTML = `
-    <div class="kicker">SOURCE INSPECTOR</div><div class="title">${esc(d.range)}</div>
-    <div class="sub">${esc(d.document)} · ${esc(d.document_version || 'version 없음')} · Read only</div>
-    <div class="kv"><strong>${esc(d.role)} → ${esc(d.concept_name || '미매핑')}</strong>
-      <p>Header: ${esc(d.header)}${d.unit ? ` · ${esc(d.unit)}` : ''}
-      ${d.mapping ? ` · ${esc(d.mapping.status)} (${d.mapping.confidence})` : ''}</p>
-      ${d.mapping && d.mapping.method ? `<p style="font-size:11px;color:var(--muted)">
-        ${d.mapping.method === 'recipe' ? '<span class="badge blue">레시피</span> ' : ''}방법: ${esc(d.mapping.method)}
-        ${d.mapping.reason ? `<br>${esc(d.mapping.reason)}` : ''}</p>` : ''}</div>
-    <div class="kv"><strong>KEY · Row Context</strong>
-      <p>인접: ${esc((d.row_context.keys || []).join(', ') || '—')}<br>
-         경로: ${esc((d.row_context.header_path || []).join(' › ') || '—')}</p></div>
-    <div class="kv"><strong>CONTEXT</strong>
-      <p>Sheet: ${esc(d.sheet)} · 문서: ${esc(d.document)}</p></div>
-    <div class="kv"><strong>VIEWER SOURCE</strong>
-      <p>DRM: ${esc(d.viewer ? d.viewer.drm_status : '미등록')} · Render: ${esc(d.viewer ? d.viewer.render_status : '미등록')}<br>
-      Document Version: ${esc(d.document_version || '—')}</p></div>
-    <div class="kv"><strong>PARSING TEMPLATE</strong>
-      ${pt ? `<p>▣ ${esc(pt.template_name)} v${esc(pt.template_version)} · ${esc(pt.status)}<br>
-        Mapping: ${esc(ps ? ps.mapping_source : 'Template source 미연결')}
-        ${ps && ps.override_status ? ` · ${esc(ps.override_status)}` : ''}<br>
-        Template Source: ${sourceText(ps && ps.template_source)}<br>
-        Effective Source: <b>${sourceText(ps && ps.effective_source)}</b>
-        ${ps && ps.override_reason ? `<br>사유: ${esc(ps.override_reason)}` : ''}</p>`
-        : '<p>이 Document Version에 배정된 Parsing Template이 없습니다.</p>'}</div>
-    <div style="margin-top:12px" class="kicker">DOMAIN CONCEPT</div>
-    <select id="conceptSel">${opts}</select>
-    <div style="margin-top:12px" class="kicker">VALUE PREVIEW</div>
-    <div style="display:grid;grid-template-columns:52px 1fr 44px;gap:5px;margin-top:6px;font-size:12px;line-height:22px">
-      ${d.values.map((v, i) => `<span class="muted">${esc(v.key ?? String(i + 1).padStart(2, '0'))}</span>
-        <b style="text-align:right">${esc(v.value)}</b><span class="muted">${esc(d.unit || '')}</span>`).join('')}</div>
-    ${isReview ? `<div style="display:flex;gap:8px;margin-top:12px">
+    <div class="kicker">SOURCE INSPECTOR</div>
+    <div class="title">${esc(d.concept_name || '미매핑')}</div>
+    <div class="sub">키 헤더 <b>‘${esc(d.header)}’</b> (${esc(d.sheet)}!${esc(d.range)})에서 추출${d.unit ? ` · 단위 ${esc(d.unit)}` : ''}</div>
+    <div style="margin-top:7px;display:flex;gap:4px;flex-wrap:wrap">
+      ${d.role ? `<span class="badge">${esc(d.role)}</span>` : ''}
+      ${d.mapping ? `<span class="badge ${statCls}">${esc(d.mapping.status)} · ${d.mapping.confidence}</span>` : ''}
+      ${d.mapping && d.mapping.method === 'recipe' ? '<span class="badge blue">레시피</span>' : ''}</div>
+    ${isReview ? `<div style="display:flex;gap:8px;margin-top:10px">
       <button class="primary" style="flex:1" id="approveBtn">승인</button>
       <button class="secondary" style="flex:1" id="rejectBtn">반려</button></div>` : ''}
-    <button class="primary w100" style="margin-top:10px" id="includeBtn"
-      ${inCart || unmapped ? 'disabled' : ''}>${inCart ? '✓ 이미 포함됨' : (unmapped ? '매핑 확정 후 포함 가능' : '이 Source 포함')}</button>
+
+    <div style="margin-top:14px" class="kicker">추출된 키 → 값
+      (${d.values.length}${more ? ` / 총 ${d.value_count}` : ''}건)</div>
+    ${d.values.length ? `<div style="max-height:36vh;overflow-y:auto;margin-top:6px;
+        border:1px solid var(--line);border-radius:8px">
+      <table class="table"><thead><tr>
+        <th>키</th><th style="text-align:right">값</th>${d.unit ? '<th>단위</th>' : ''}<th>셀</th></tr></thead>
+      <tbody>${d.values.map((v, i) => `<tr>
+        <td>${v.key != null ? esc(v.key) : `<span class="muted">#${i + 1}</span>`}</td>
+        <td style="text-align:right;font-weight:700">${esc(v.value)}</td>
+        ${d.unit ? `<td class="muted">${esc(d.unit)}</td>` : ''}
+        <td class="muted" style="font-size:11px">${esc(v.cell || '—')}</td></tr>`).join('')}</tbody>
+      </table></div>` : '<div class="empty">추출된 값이 없습니다</div>'}
+    ${more ? `<div class="sub" style="font-size:11px">표시는 ${d.values.length}건까지 —
+      전체는 통합 DB 빌드 결과에서 확인하세요.</div>` : ''}
+
+    <div style="margin-top:12px" class="kicker">DOMAIN CONCEPT</div>
+    <select id="conceptSel">${opts}</select>
     <button class="secondary w100" style="margin-top:8px" id="remapBtn">매핑 수정</button>
-    <div class="status" id="insStatus"></div>`;
+    <button class="primary w100" style="margin-top:8px" id="includeBtn"
+      ${inCart || unmapped ? 'disabled' : ''}>${inCart ? '✓ 이미 포함됨' : (unmapped ? '매핑 확정 후 포함 가능' : '이 Source 포함')}</button>
+    <div class="status" id="insStatus"></div>
+
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer;font-size:12px;color:var(--muted)">상세 정보 (판정 근거 · 문서 · 양식)</summary>
+      <div class="kv"><strong>매핑 판정</strong>
+        <p>방법: ${esc(d.mapping ? d.mapping.method || '—' : '—')}
+        ${d.mapping && d.mapping.reason ? `<br>${esc(d.mapping.reason)}` : ''}</p></div>
+      <div class="kv"><strong>Row Context</strong>
+        <p>인접 키: ${esc((d.row_context.keys || []).join(', ') || '—')}<br>
+           경로: ${esc((d.row_context.header_path || []).join(' › ') || '—')}</p></div>
+      <div class="kv"><strong>문서</strong>
+        <p>${esc(d.document)} · ${esc(d.document_version || 'version 없음')} · Read only<br>
+        DRM: ${esc(d.viewer ? d.viewer.drm_status : '미등록')} · Render: ${esc(d.viewer ? d.viewer.render_status : '미등록')}</p></div>
+      <div class="kv"><strong>양식 (Parsing Template)</strong>
+        ${pt ? `<p>▣ ${esc(pt.template_name)} v${esc(pt.template_version)} · ${esc(pt.status)}<br>
+          Mapping: ${esc(ps ? ps.mapping_source : 'Template source 미연결')}
+          ${ps && ps.override_status ? ` · ${esc(ps.override_status)}` : ''}<br>
+          Template Source: ${sourceText(ps && ps.template_source)}<br>
+          Effective Source: <b>${sourceText(ps && ps.effective_source)}</b>
+          ${ps && ps.override_reason ? `<br>사유: ${esc(ps.override_reason)}` : ''}</p>`
+          : '<p>이 Document Version에 배정된 양식이 없습니다.</p>'}</div>
+    </details>`;
   if (isReview) {
     const act = (action) => async () => {
       try {

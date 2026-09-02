@@ -76,48 +76,63 @@ export default function InspectorPanel({ nodeId, onAfterReview, onAfterRemap }: 
     setBusy(false);
   };
 
+  const stat = d.mapping?.status;
+  const statCls = stat === "REVIEW_REQUIRED" ? "amber"
+    : (stat === "AUTO_APPROVED" || stat === "APPROVED") ? "green"
+    : stat ? "red" : "";
+
   return (
     <>
       <div className="kicker">SOURCE INSPECTOR</div>
-      <div className="title">{d.range}</div>
-      <div className="sub">{d.document} · {d.document_version || "version 없음"} · Read only</div>
-      <div className="kv">
-        <strong>{d.role} → {d.concept_name || "미매핑"}</strong>
-        <p>Header: {d.header}{d.unit ? ` · ${d.unit}` : ""}
-          {d.mapping ? ` · ${d.mapping.status} (${d.mapping.confidence})` : ""}</p>
-        {d.mapping && d.mapping.method && (
-          <p style={{ fontSize: 11, color: "var(--muted)" }}>
-            {d.mapping.method === "recipe" && <span className="badge blue">레시피 </span>}
-            방법: {d.mapping.method}
-            {d.mapping.reason ? <><br />{d.mapping.reason}</> : null}</p>
+      {/* 무엇이 어디서 뽑혔는지가 주인공 — 키 헤더 → 개념 */}
+      <div className="title">{d.concept_name || "미매핑"}</div>
+      <div className="sub">
+        키 헤더 <b>‘{d.header}’</b> ({d.sheet}!{d.range})에서 추출
+        {d.unit ? ` · 단위 ${d.unit}` : ""}</div>
+      <div style={{ marginTop: 7, display: "flex", gap: 4, flexWrap: "wrap" }}>
+        {d.role && <span className="badge">{d.role}</span>}
+        {d.mapping && (
+          <span className={`badge ${statCls}`}>{d.mapping.status} · {d.mapping.confidence}</span>
         )}
+        {d.mapping?.method === "recipe" && <span className="badge blue">레시피</span>}
       </div>
-      <div className="kv">
-        <strong>KEY · Row Context</strong>
-        <p>인접: {(d.row_context.keys || []).join(", ") || "—"}<br />
-          경로: {(d.row_context.header_path || []).join(" › ") || "—"}</p>
-      </div>
-      <div className="kv">
-        <strong>CONTEXT</strong>
-        <p>Sheet: {d.sheet} · 문서: {d.document}</p>
-      </div>
-      <div className="kv">
-        <strong>VIEWER SOURCE</strong>
-        <p>DRM: {d.viewer ? d.viewer.drm_status : "미등록"} ·
-          Render: {d.viewer ? d.viewer.render_status : "미등록"}<br />
-          Document Version: {d.document_version || "—"}</p>
-      </div>
-      <div className="kv">
-        <strong>PARSING TEMPLATE</strong>
-        {pt ? (
-          <p>▣ {pt.template_name} v{pt.template_version} · {pt.status}<br />
-            Mapping: {ps ? ps.mapping_source : "Template source 미연결"}
-            {ps && ps.override_status ? ` · ${ps.override_status}` : ""}<br />
-            Template Source: {sourceText(ps && ps.template_source)}<br />
-            Effective Source: <b>{sourceText(ps && ps.effective_source)}</b>
-            {ps && ps.override_reason ? <><br />사유: {ps.override_reason}</> : null}</p>
-        ) : <p>이 Document Version에 배정된 Parsing Template이 없습니다.</p>}
-      </div>
+      {isReview && (
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button className="primary" style={{ flex: 1 }} onClick={act("approve")}>승인</button>
+          <button className="secondary" style={{ flex: 1 }} onClick={act("reject")}>반려</button>
+        </div>
+      )}
+
+      {/* 어떤 키에 어떤 값이 뽑혔는지 — 추출 결과 표 */}
+      <div style={{ marginTop: 14 }} className="kicker">
+        추출된 키 → 값 ({d.values.length}
+        {typeof d.value_count === "number" && d.value_count > d.values.length
+          ? ` / 총 ${d.value_count}` : ""}건)</div>
+      {d.values.length ? (
+        <div style={{ maxHeight: "36vh", overflowY: "auto", marginTop: 6,
+          border: "1px solid var(--line)", borderRadius: 8 }}>
+          <table className="table">
+            <thead><tr>
+              <th>키</th><th style={{ textAlign: "right" }}>값</th>
+              {d.unit ? <th>단위</th> : null}<th>셀</th></tr></thead>
+            <tbody>
+              {d.values.map((v, i) => (
+                <tr key={i}>
+                  <td>{v.key ?? <span className="muted">#{i + 1}</span>}</td>
+                  <td style={{ textAlign: "right", fontWeight: 700 }}>{String(v.value)}</td>
+                  {d.unit ? <td className="muted">{d.unit}</td> : null}
+                  <td className="muted" style={{ fontSize: 11 }}>{v.cell || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <div className="empty">추출된 값이 없습니다</div>}
+      {typeof d.value_count === "number" && d.value_count > d.values.length && (
+        <div className="sub" style={{ fontSize: 11 }}>
+          표시는 {d.values.length}건까지 — 전체는 통합 DB 빌드 결과에서 확인하세요.</div>
+      )}
+
       <div style={{ marginTop: 12 }} className="kicker">DOMAIN CONCEPT</div>
       <select value={unmapped && !selConcept ? "" : selConcept}
         onChange={(e) => setSelConcept(e.target.value)}>
@@ -127,24 +142,9 @@ export default function InspectorPanel({ nodeId, onAfterReview, onAfterRemap }: 
             {c.canonical_name} ({c.concept_id})</option>
         ))}
       </select>
-      <div style={{ marginTop: 12 }} className="kicker">VALUE PREVIEW</div>
-      <div style={{ display: "grid", gridTemplateColumns: "52px 1fr 44px", gap: 5,
-        marginTop: 6, fontSize: 12, lineHeight: "22px" }}>
-        {d.values.map((v, i) => (
-          <React.Fragment key={i}>
-            <span className="muted">{v.key ?? String(i + 1).padStart(2, "0")}</span>
-            <b style={{ textAlign: "right" }}>{v.value}</b>
-            <span className="muted">{d.unit || ""}</span>
-          </React.Fragment>
-        ))}
-      </div>
-      {isReview && (
-        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <button className="primary" style={{ flex: 1 }} onClick={act("approve")}>승인</button>
-          <button className="secondary" style={{ flex: 1 }} onClick={act("reject")}>반려</button>
-        </div>
-      )}
-      <button className="primary w100" style={{ marginTop: 10 }}
+      <button className="secondary w100" style={{ marginTop: 8 }} disabled={busy}
+        onClick={remap}>매핑 수정</button>
+      <button className="primary w100" style={{ marginTop: 8 }}
         disabled={inCart || unmapped}
         onClick={() => {
           if (!d.mapping) return;
@@ -153,9 +153,40 @@ export default function InspectorPanel({ nodeId, onAfterReview, onAfterRemap }: 
           setStatus("✓ 통합 DB 초안에 포함되었습니다.");
         }}>
         {inCart ? "✓ 이미 포함됨" : (unmapped ? "매핑 확정 후 포함 가능" : "이 Source 포함")}</button>
-      <button className="secondary w100" style={{ marginTop: 8 }} disabled={busy}
-        onClick={remap}>매핑 수정</button>
       <div className="status">{status}</div>
+
+      {/* 판정 근거·출처 메타 — 필요할 때만 펼쳐 본다 */}
+      <details style={{ marginTop: 10 }}>
+        <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--muted)" }}>
+          상세 정보 (판정 근거 · 문서 · 양식)</summary>
+        <div className="kv">
+          <strong>매핑 판정</strong>
+          <p>방법: {d.mapping?.method || "—"}
+            {d.mapping?.reason ? <><br />{d.mapping.reason}</> : null}</p>
+        </div>
+        <div className="kv">
+          <strong>Row Context</strong>
+          <p>인접 키: {(d.row_context.keys || []).join(", ") || "—"}<br />
+            경로: {(d.row_context.header_path || []).join(" › ") || "—"}</p>
+        </div>
+        <div className="kv">
+          <strong>문서</strong>
+          <p>{d.document} · {d.document_version || "version 없음"} · Read only<br />
+            DRM: {d.viewer ? d.viewer.drm_status : "미등록"} ·
+            Render: {d.viewer ? d.viewer.render_status : "미등록"}</p>
+        </div>
+        <div className="kv">
+          <strong>양식 (Parsing Template)</strong>
+          {pt ? (
+            <p>▣ {pt.template_name} v{pt.template_version} · {pt.status}<br />
+              Mapping: {ps ? ps.mapping_source : "Template source 미연결"}
+              {ps && ps.override_status ? ` · ${ps.override_status}` : ""}<br />
+              Template Source: {sourceText(ps && ps.template_source)}<br />
+              Effective Source: <b>{sourceText(ps && ps.effective_source)}</b>
+              {ps && ps.override_reason ? <><br />사유: {ps.override_reason}</> : null}</p>
+          ) : <p>이 Document Version에 배정된 양식이 없습니다.</p>}
+        </div>
+      </details>
     </>
   );
 }

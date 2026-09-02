@@ -117,7 +117,8 @@ export interface SourceDetail {
     template_source?: { sheet?: string; range?: string } | null;
     effective_source?: { sheet?: string; range?: string } | null;
   } | null;
-  values: { key?: string | null; value: string }[];
+  value_count?: number;
+  values: { key?: string | null; value: string | number; cell?: string | null }[];
 }
 
 export interface ProposalField {
