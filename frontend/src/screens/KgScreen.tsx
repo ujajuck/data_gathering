@@ -70,6 +70,7 @@ export default function KgScreen() {
   const [filter, setFilter] = useState("");
   const [docMode, setDocMode] = useState(false);
   const [zoom, setZoom] = useState(1);          // 그래프 확대/축소 (0.5×~2.5×)
+  const [openTpl, setOpenTpl] = useState<string | null>(null);  // 문서 목록 연 템플릿
   const [detail, setDetail] = useState<Detail | null>(null);
   const [dkgDetail, setDkgDetail] = useState<DkgDetailData | null>(null);
   const [dkgFail, setDkgFail] = useState<string | null>(null);
@@ -103,7 +104,7 @@ export default function KgScreen() {
   };
 
   const selectDkg = (dkgId: string, toDocGraph = false) => {
-    if (s.selDkg !== dkgId) s.setSelDkgDoc(null);
+    if (s.selDkg !== dkgId) { s.setSelDkgDoc(null); setOpenTpl(null); }
     s.setSelDkg(dkgId);
     setDetail({ kind: "dkg" });
     if (toDocGraph) setDocMode(true);
@@ -167,6 +168,7 @@ export default function KgScreen() {
       return <DkgDetailPanel g={dkgDetail}
         recrawlRun={recrawlRuns[s.selDkg] || null}
         recrawlBusy={!!recrawlBusy[s.selDkg]}
+        openTpl={openTpl} onToggleTpl={setOpenTpl}
         onStartRecrawl={(mode) => { startRecrawl(s.selDkg!, mode).catch(() => {}); }}
         onOpenDocument={(documentId) => {
           s.setSelDkgDoc(documentId);
@@ -240,11 +242,11 @@ export default function KgScreen() {
                   : <><b>전체 개념</b> · 문서군 Coverage</>}
               </div>
               <div className="title">
-                {docMode ? "문서군에 어떤 문서가 속하는지 보기" : "전체 개념에서 문서군 위치 보기"}
+                {docMode ? "문서군의 템플릿 구성 보기" : "전체 개념에서 문서군 위치 보기"}
               </div>
               <div className="sub">
                 {docMode
-                  ? "선택한 문서군의 Domain Node와 그 노드에 데이터를 제공하는 문서를 함께 봅니다."
+                  ? "문서군[개념] → 템플릿(파싱 스크립트 기준 분류) → 문서 개수. 템플릿을 누르면 우측에 문서 목록이 열립니다."
                   : "반투명 영역은 각 문서군이 전체 개념의 어느 노드들을 커버하는지 나타냅니다."}
               </div>
             </div>
@@ -273,8 +275,11 @@ export default function KgScreen() {
             <div className="graphWrap" style={{ overflow: "auto", maxHeight: 680 }}>
               {s.domain && dkgDetail && dkgDetail.id === s.selDkg ? (
                 <DocGraph g={dkgDetail} domain={s.domain} color={s.dkgColor(dkgDetail.id)}
-                  zoom={zoom} selDkgDoc={s.selDkgDoc}
-                  onSelectDoc={(id) => { s.setSelDkgDoc(id); setDetail({ kind: "dkg" }); }} />
+                  zoom={zoom} selectedTpl={openTpl}
+                  onSelectTemplate={(label) => {
+                    setOpenTpl(label);
+                    setDetail({ kind: "dkg" });
+                  }} />
               ) : <div className="empty">불러오는 중…</div>}
             </div>
           )}

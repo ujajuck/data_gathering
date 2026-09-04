@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api, post } from "../../lib/api";
 import { useStore } from "../../lib/store";
 import type { DkgDetailData, RecrawlDocSummary, RecrawlRun } from "../../lib/types";
+import { templateGroups } from "./templateGroups";
 
 interface HistRow { recipe_id: string; status: string; created_at?: string; note?: string }
 
@@ -11,6 +12,8 @@ interface Props {
   g: DkgDetailData;
   recrawlRun: RecrawlRun | null;
   recrawlBusy: boolean;
+  openTpl: string | null;                       // 문서 목록이 열린 템플릿 (그래프와 공유)
+  onToggleTpl: (label: string | null) => void;
   onStartRecrawl: (mode: string) => void;
   onOpenDocument: (documentId: string) => void;
   onBackDomain: () => void;
@@ -33,13 +36,12 @@ function RecrawlBadges({ d }: { d: RecrawlDocSummary }) {
 }
 
 export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
-  onStartRecrawl, onOpenDocument, onBackDomain }: Props) {
+  openTpl, onToggleTpl, onStartRecrawl, onOpenDocument, onBackDomain }: Props) {
   const s = useStore();
   const [status, setStatus] = useState("");
   const [hist, setHist] = useState<HistRow[] | null>(null);
   const [snapBusy, setSnapBusy] = useState(false);
   const [mode, setMode] = useState("fill");
-  const [openTpl, setOpenTpl] = useState<string | null>(null);  // 문서 표 펼친 템플릿
 
   const color = s.dkgColor(g.id);
   const rec = g.recipe;
@@ -106,18 +108,7 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
       <div style={{ marginTop: 13 }} className="kicker">템플릿 (파싱 스크립트 기준 분류)</div>
       {(() => {
         const members = g.member_documents || [];
-        const templated = new Set<string>();
-        const groups: { label: string; badge?: string; review: number;
-          docs: typeof members }[] = [];
-        for (const t of g.parsing_templates || []) {
-          const ids = new Set(t.documents.map((d) => d.document_id).filter(Boolean));
-          for (const id of ids) templated.add(id as string);
-          groups.push({ label: `${t.template_name} v${t.version}`,
-            review: t.review_required,
-            docs: members.filter((d) => ids.has(d.document_id)) });
-        }
-        groups.push({ label: "기타 (템플릿 미배정)", review: 0,
-          docs: members.filter((d) => !templated.has(d.document_id)) });
+        const groups = templateGroups(g);
         const docTable = (docs: typeof members) => (
           <div style={{ marginTop: 6, border: "1px solid var(--line)",
             borderRadius: 8, maxHeight: "26vh", overflowY: "auto" }}>
@@ -148,7 +139,7 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
           </div>
         );
         return groups.map((grp) => {
-          const isEtc = grp.label.startsWith("기타");
+          const isEtc = grp.isEtc;
           if (isEtc && !grp.docs.length) return null;   // 미배정이 없으면 숨김
           const open = openTpl === grp.label;
           return (
@@ -159,7 +150,7 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
                 {grp.review ? <span className="badge amber">검토 {grp.review}</span> : null}
                 <button className="secondary"
                   style={{ marginLeft: "auto", padding: "4px 9px", fontSize: 12 }}
-                  onClick={() => setOpenTpl(open ? null : grp.label)}>
+                  onClick={() => onToggleTpl(open ? null : grp.label)}>
                   문서 {grp.docs.length}개 {open ? "▴" : "▾"}</button>
               </div>
               {open && (grp.docs.length ? docTable(grp.docs)
