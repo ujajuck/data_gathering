@@ -15,8 +15,8 @@ DB를 생성한다. 설계 ↔ 모듈 대응은 [kg/README.md](kg/README.md), �
 kg/          코어 + 웹 서버 — 온톨로지/트리/시맨틱 매핑, 문서군·추출 레시피·
              재크롤링, DRM 획득 게이트, 원본 충실 렌더(LibreOffice PDF 포함),
              통합 DB 빌더(DAG/lineage), FastAPI(kg/webapp.py)
-kg/web_kg/   바닐라 JS 4탭 UI — 완전 대체 전까지 이중 유지 (서버 루트 / 에 서빙)
-frontend/    React + TypeScript 4탭 UI (go-forward) — 빌드하면 /app 에 자동 서빙
+frontend/    React + TypeScript 4탭 UI — 유일한 프론트. 빌드(dist)가 커밋되어
+             서버가 루트 / 에 바로 서빙한다 (프론트 수정 시 npm run build)
 src/         파서·단위 엔진 코어(Inspector/RegionDetector/UnitRegistry — kg가
              §14.1 Parser 계약으로 재사용) + 레거시 파이프라인(아래 참고)
 domains/<d>/ 도메인 워크스페이스 — config(사전)·data/raw(원본)·data/kg/kg.db
@@ -34,8 +34,7 @@ python -m kg.cli --ws domains/financier ingest --raw domains/financier/data/raw 
 
 # 웹 실행 — 이 서버 하나가 API와 두 UI를 모두 서빙한다
 python -m kg.webapp --ws domains/financier --port 8010
-#  → http://localhost:8010/      기본 4탭 UI (kg/web_kg)
-#  → http://localhost:8010/app   React UI (frontend/dist 빌드가 있을 때)
+#  → http://localhost:8010/      4탭 UI (React — /app 경로도 동일)
 ```
 
 React 개발/빌드 (선택):
@@ -44,7 +43,7 @@ React 개발/빌드 (선택):
 cd frontend
 npm install
 npm run dev     # http://localhost:5173 — /api 는 8010 백엔드로 프록시
-npm run build   # dist/ 생성 → kg.webapp 재시작 시 /app 에 자동 서빙
+npm run build   # dist/ 갱신 → kg.webapp 재시작 시 / 에 서빙 (dist는 커밋 대상)
 ```
 
 운영 참고: 원본 충실 PDF 프리뷰에는 LibreOffice(`libreoffice-calc`)가,

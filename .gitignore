@@ -33,5 +33,4 @@ data/kg_reference.json
 
 # Frontend
 frontend/node_modules/
-frontend/dist/
 domains/mlcc_additive/csv_dkg/

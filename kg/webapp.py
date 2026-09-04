@@ -38,7 +38,6 @@ from kg.recrawl import MODES, recover_interrupted_runs, run_recrawl, start_run
 from kg.search import concept_neighbors, reverse_lookup
 from kg.store import KgStore, new_id, now_iso
 
-WEB_DIR = Path(__file__).parent / "web_kg"
 _SHEET_CAP_ROWS = 300
 _SHEET_CAP_COLS = 40
 
@@ -2497,12 +2496,18 @@ def create_app(ws_root: str | Path) -> FastAPI:
             _yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
             media_type="text/yaml; charset=utf-8")
 
-    # React 포트(frontend/) 빌드가 있으면 /app 에 함께 서빙한다.
-    # web_kg는 완전 대체 전까지 / 에서 그대로 유지 (이중 유지 의도).
+    # 프론트는 React(frontend/) 하나다 — 빌드(dist)를 루트 / 에 서빙하고,
+    # 구 경로 /app 도 같은 앱으로 유지한다 (북마크 호환).
     react_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
     if react_dist.is_dir():
-        app.mount("/app", StaticFiles(directory=react_dist, html=True), name="react")
-    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="static")
+        app.mount("/app", StaticFiles(directory=react_dist, html=True),
+                  name="react_compat")
+        app.mount("/", StaticFiles(directory=react_dist, html=True), name="static")
+    else:
+        @app.get("/", response_class=PlainTextResponse)
+        def _no_frontend():
+            return ("frontend 빌드가 없습니다 — `cd frontend && npm install && "
+                    "npm run build` 후 서버를 재시작하세요.")
     return app
 
 

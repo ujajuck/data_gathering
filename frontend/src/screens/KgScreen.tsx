@@ -5,6 +5,7 @@ import { api, post } from "../lib/api";
 import { useStore } from "../lib/store";
 import type { DkgDetailData, RecrawlRun } from "../lib/types";
 import DomainGraph from "./kg/DomainGraph";
+import { templateGroups } from "./kg/templateGroups";
 import DocGraph from "./kg/DocGraph";
 import DkgDetailPanel from "./kg/DkgDetailPanel";
 import ConceptEditor from "./kg/ConceptEditor";
@@ -81,6 +82,17 @@ export default function KgScreen() {
   const debounceT = useRef<number | undefined>(undefined);
 
   useEffect(() => () => { timers.current.forEach(clearTimeout); }, []);
+
+  // 문서군을 고르면 첫 템플릿의 문서 목록을 우측에 바로 펼친다 (문서군당 1회)
+  const autoOpened = useRef<string | null>(null);
+  useEffect(() => {
+    if (!dkgDetail || dkgDetail.id !== s.selDkg) return;
+    if (autoOpened.current === dkgDetail.id) return;
+    autoOpened.current = dkgDetail.id;
+    const first = templateGroups(dkgDetail).find((grp) => grp.docs.length);
+    if (first) setOpenTpl(first.label);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dkgDetail, s.selDkg]);
 
   // DKG 상세 조회 — 선택/데이터 변경(kgVersion) 시 재조회, 연타 경쟁 가드
   useEffect(() => {

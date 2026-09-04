@@ -41,10 +41,9 @@ python -m kg.webapp --ws domains/financier --port 8010                        # 
 
 ## 웹 UI (4탭)
 
-`kg/webapp.py` 서버 하나가 REST API와 두 프런트를 모두 서빙한다:
-
-- `/` — `kg/web_kg/` 바닐라 JS 4탭 UI (완전 대체 전까지 이중 유지)
-- `/app` — `frontend/` React UI 빌드(`npm run build` 후 자동 서빙)
+`kg/webapp.py` 서버 하나가 REST API와 React 프론트(`frontend/dist`)를
+루트 `/` 에 서빙한다 (`/app` 은 구 경로 호환). 바닐라 web_kg는 React 포트
+완료 후 제거됐다.
 
 화면: **파일 분석**(검색/작성일 필터/정렬, raw 분석→문서군 제안→레시피 이식
 등록, DRM 정식 해제 요청→해제본 감지) / **개념 탐색**(온톨로지 트리+문서군

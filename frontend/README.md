@@ -1,23 +1,27 @@
 # Semantic Excel Integration — React Frontend
 
-`kg/web_kg`(바닐라 JS 4탭 UI)의 React + TypeScript + Vite 포트. web_kg가 쓰는
-REST API(`kg/webapp.py`)를 그대로 사용하며 백엔드 변경이 없다. web_kg는 완전
-대체 전까지 `/` 에서 그대로 유지된다(이중 유지 의도).
+이 시스템의 **유일한 웹 프론트**다 (React + TypeScript + Vite). REST API는
+`kg/webapp.py` 하나를 사용하고, 빌드 산출물(`dist/`)이 커밋되어 서버가 루트
+`/` 에 바로 서빙한다 — 프론트를 고치면 `npm run build` 후 dist까지 커밋한다.
+(초기 바닐라 JS UI `kg/web_kg`는 포트 완료 후 제거됐다.)
 
 ## 화면
 
-web_kg와 동일한 4탭 구성 (클래스/문구 동일 — 화면 대조 검증 용이):
+4탭 구성:
 
-1. **파일 분석** — 등록 파일 표(DKG 배지·DRM/Render/Parse 상태), 미등록(raw)
-   파일의 분석 → DKG 제안 → 레시피 이식 등록, 잠긴 파일의 정식 DRM 해제 요청.
-2. **KG 탐색** — Domain KG 트리 + Coverage Hull, Document KG 상세 그래프,
-   노드/DKG 상세 패널(멤버 델타, PARSING TEMPLATES, 추출 레시피 스냅샷·이력·
-   롤백, 재크롤링 폴링), 개념 편집기(별칭/관계/폐기/복원).
-3. **원본 데이터** — 원본 충실 셀 렌더(병합/스타일/이미지/도형) + Semantic
-   Overlay 토글, 검수 큐, Source Inspector(승인/반려/재매핑/통합 포함,
-   VIEWER SOURCE·PARSING TEMPLATE provenance, PDF Preview 링크).
-4. **통합 DB** — 장바구니(web_kg와 같은 `kg_cart_v3` localStorage 키 공유),
-   스키마 제안/필드명 조정, 빌드 결과(스키마·경고·미리보기·lineage).
+1. **파일 분석** — 등록 파일 표(문서군 배지·DRM/Render/Parse 상태) + 파일명·
+   작성자 검색/작성일 필터/정렬, 미등록(raw) 파일의 분석 → 문서군 제안 →
+   레시피 이식 등록, 잠긴 파일의 정식 DRM 해제 요청.
+2. **개념 탐색** — 온톨로지 트리 + 문서군 커버리지 그래프(확대/축소),
+   문서군 상세는 `양식(템플릿) → 문서` 계층(미배정은 '기타', 문서 수 클릭 →
+   우측 문서 표), 추출 레시피 스냅샷·이력·롤백, 재크롤링 폴링, 개념
+   편집기(별칭/관계/폐기/복원).
+3. **원본 데이터** — 셀 렌더(병합/스타일/이미지/텍스트박스 앵커) + Semantic
+   Overlay 토글, 검수 큐, Source Inspector("추출된 키 → 값" 표, 승인/반려/
+   재매핑/통합 포함, 양식 provenance, PDF Preview 링크), 문서군으로 돌아가기.
+4. **통합 DB** — 개념 선택 → 양식 선택(소속 문서 자동 반영) → 양식별 전처리
+   혹은 문서별 추가/제거(`kg_cart_v3` localStorage), 스키마 제안/필드명 조정,
+   빌드 결과(스키마·경고·미리보기·lineage).
 
 ## 실행
 
@@ -29,16 +33,16 @@ python -m kg.webapp --ws domains/financier --port 8010
 npm install
 npm run dev
 
-# 프로덕션: 빌드하면 kg.webapp이 /app 에 자동 서빙 (base: "./")
+# 프로덕션: 빌드하면 kg.webapp이 / 에 서빙 (base: "./", dist는 커밋 대상)
 npm run build
 ```
 
 ## 구조
 
 - `src/lib/api.ts` — fetch 헬퍼 + colName/parseRange + cart 저장소
-- `src/lib/store.tsx` — 4탭 공유 상태 (web_kg `state` 객체 대응)
+- `src/lib/store.tsx` — 4탭 공유 상태
 - `src/screens/` — FilesScreen / KgScreen(+kg/) / SourceScreen(+source/) / DbScreen
-- `src/webkg.css` — web_kg CSS 포트(`.wk` 스코프, 클래스명 유지)
+- `src/webkg.css` — 앱 스타일(`.wk` 스코프)
 
 ## 레거시 PDF 근거 뷰어
 
