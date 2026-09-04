@@ -6,7 +6,9 @@
 
 문서를 표준 양식으로 강제 변환하지 않는다 — 각 문서의 구조를 Knowledge Tree로
 보존하고, 의미 노드를 고정 개념 체계에 연결한 뒤, 개념을 공통 축으로 목적별
-DB를 생성한다. 설계 ↔ 모듈 대응은 [kg/README.md](kg/README.md), 작업 이력은
+DB를 생성한다. 문서는 `docs/`에 모은다 — 아키텍처 다이어그램(ERD·모듈·
+시퀀스·EL 플로우)은 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), 설계 ↔ 모듈
+대응은 [kg/README.md](kg/README.md), 작업 이력은
 [docs/PROGRESS.md](docs/PROGRESS.md) 참고.
 
 ## 구성
@@ -104,7 +106,8 @@ CSV 기반 문서군 정의) 참고. 같은 파서·API·프런트가 사전 교
 
 `kg/` 이전의 초기 구현. 파서·단위 엔진 코어는 위처럼 재사용 중이고, 나머지는
 회귀 테스트 유지 목적으로 보존한다. 상세 설계는
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) / [WEB_PLAN.md](WEB_PLAN.md).
+[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) /
+[docs/WEB_PLAN.md](docs/WEB_PLAN.md).
 
 ```bash
 python -m src.cli ingest|status|export|hub|graph|ontology|watch|reprocess
