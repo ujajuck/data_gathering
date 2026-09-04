@@ -1,0 +1,23 @@
+# 정규화 프리셋 — 원자 연산(kg/normalize.py 카탈로그)의 선언적 조합.
+# 정규화 방식은 코드에 고정하지 않는다: 도메인마다 이 파일에서 프리셋을
+# 관리하고, 통합 DB의 '양식별 전처리'가 여기 정의를 그대로 읽어 노출한다.
+# 적용은 빌드의 value_normalize 블록에서만 (원본 payload는 불변).
+
+presets:
+  - id: split_unit
+    label: 값·단위 분리 ("195 ℃" → 195)
+    steps:
+      - op: trim_text
+      - op: split_unit_suffix
+
+  - id: clean_number
+    label: 숫자 정리 (공백·천단위 콤마 제거)
+    steps:
+      - op: trim_text
+      - op: strip_thousands
+
+  - id: percent
+    label: 퍼센트 → 비율 ("12%" → 0.12)
+    steps:
+      - op: trim_text
+      - op: percent_to_ratio

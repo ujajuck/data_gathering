@@ -69,6 +69,13 @@ def _validate_config(store: KgStore, config: dict) -> None:
             errors.append(f"transform[{i}]: 알 수 없는 op {op!r}")
         elif step.get("config") is not None and not isinstance(step["config"], dict):
             errors.append(f"transform[{i}]({op}): config는 매핑이어야 합니다")
+        elif op == "value_normalize":
+            from kg.normalize import NormalizeError, validate_steps
+            for rule in (step.get("config") or {}).get("rules") or []:
+                try:
+                    validate_steps(rule.get("steps"))
+                except NormalizeError as exc:
+                    errors.append(f"transform[{i}](value_normalize): {exc}")
     # include_nodes 키는 필드명과 정확히 일치해야 한다 — 오타가 조용히
     # '해당 개념 전체 포함'으로 넘어가는 fail-open을 막는다
     includes = (config.get("sources") or {}).get("include_nodes") or {}

@@ -63,11 +63,17 @@ class BuildField(BaseModel):
     type: str | None = None
 
 
+class NormalizeRule(BaseModel):
+    preset: str                      # normalizers.yaml 프리셋 id
+    node_ids: list[str] = []         # 이 노드들에서 온 셀에만 적용
+
+
 class BuildReq(BaseModel):
     name: str
     fields: list[BuildField]
     include_nodes: dict[str, list[str]] = {}
     raw_node_ids: list[str] = []     # 양식별 '원값 유지' — 단위 변환 생략할 노드
+    normalize_rules: list[NormalizeRule] = []   # 양식별 전처리 프리셋
 
 
 class IngestReq(BaseModel):
@@ -1185,7 +1191,10 @@ def create_app(ws_root: str | Path) -> FastAPI:
                                                      req.template_id)
             # Workbook IO and extraction may be expensive; never hold the
             # process-wide DB lock while openpyxl walks the workbook.
-            extracted = extract_workbook(path, mappings)
+            from src.units.converter import UnitRegistry
+            units_path = root / "config" / "units.yaml"
+            units = UnitRegistry.load(units_path) if units_path.exists() else None
+            extracted = extract_workbook(path, mappings, units)
             with wlock():
                 current = store.conn.execute(
                     """SELECT template_version FROM document_template_assignment
@@ -1989,19 +1998,33 @@ def create_app(ws_root: str | Path) -> FastAPI:
         from src.units.converter import UnitRegistry
 
         from kg.integration.builder import build as run_build, define_project
+        from kg.normalize import load_presets
         units_path = root / "config" / "units.yaml"
         units = UnitRegistry.load(units_path) if units_path.exists() else None
+        # 정규화는 코드에 고정하지 않는다 — 프리셋(normalizers.yaml)을 이름으로
+        # 참조해 value_normalize 블록의 선언적 rules로 푼다.
+        transform: list[dict] = []
+        if body.normalize_rules:
+            presets = {p["id"]: p for p in load_presets(root)}
+            rules = []
+            for r in body.normalize_rules:
+                if r.preset not in presets:
+                    raise HTTPException(400, f"알 수 없는 정규화 프리셋: {r.preset}")
+                rules.append({"steps": presets[r.preset]["steps"],
+                              "node_ids": r.node_ids})
+            transform.append({"op": "value_normalize", "config": {"rules": rules}})
+        transform += [
+            {"op": "unit_convert",
+             "config": {"skip_nodes": body.raw_node_ids or []}},
+            {"op": "union"},
+            {"op": "deduplicate"},
+        ]
         config = {
             "name": body.name,
             "fields": [{"name": f.name, "concept": f.concept, "unit": f.unit,
                         "type": f.type} for f in body.fields],
             "sources": {"include_nodes": body.include_nodes or {}},
-            "transform": [
-                {"op": "unit_convert",
-                 "config": {"skip_nodes": body.raw_node_ids or []}},
-                {"op": "union"},
-                {"op": "deduplicate"},
-            ],
+            "transform": transform,
         }
         with wlock():
             from kg.integration.builder import delete_project
@@ -2050,6 +2073,15 @@ def create_app(ws_root: str | Path) -> FastAPI:
             "build_report": {"frames": result["frames"], "warnings": warnings},
             "preview": preview,
         }
+
+    @app.get("/api/normalizers")
+    def normalizers():
+        """정규화 카탈로그(코드의 원자 연산) + 도메인 프리셋(normalizers.yaml)."""
+        from kg.normalize import NormalizeError, catalog, load_presets
+        try:
+            return {"catalog": catalog(), "presets": load_presets(root)}
+        except NormalizeError as exc:
+            raise HTTPException(500, f"normalizers.yaml 오류: {exc}") from exc
 
     @app.get("/api/build/{build_id}/download")
     def build_download(build_id: str, format: str = "db"):

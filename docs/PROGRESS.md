@@ -5,7 +5,20 @@
 
 ## 2026-09-04
 
-- **통합 DB: 3단계 단순화 + 산출물 다운로드(반환)** (이 커밋)
+- **정규화기 레지스트리 — 코드 고정 없이 툴처럼** (이 커밋)
+  - kg/normalize.py: 원자 정규화기 카탈로그(trim_text/strip_thousands/
+    percent_to_ratio/split_unit_suffix) — 코드는 작은 순수 연산만, 선언적
+    파라미터만 허용(임의 코드 금지). 조합·선택은 전부 데이터:
+    domains/<d>/config/normalizers.yaml 프리셋 + 빌드 config rules
+  - value_normalize DAG 블록: 노드/컬럼 단위 선언 적용, 분리된 단위는
+    lineage.unit으로 unit_convert에 전달, 적용 이력(normalized)도 lineage에
+  - GET /api/normalizers(카탈로그+프리셋), BuildReq.normalize_rules(프리셋
+    id 참조), 통합 DB '양식별 전처리' 드롭다운에 프리셋 노출
+  - parsing._convert_scalar의 하드코딩 변환 dict → UnitRegistry(units.yaml)
+    우선, 레지스트리 없을 때만 최소 폴백
+  - 검증: 단위 테스트 5종 + E2E('195 ℃' 텍스트 → 프리셋 적용 후 숫자,
+    CSV 산출물까지 반영), 전체 155 passed
+- **통합 DB: 3단계 단순화 + 산출물 다운로드(반환)** (2ce31de)
   - 화면을 `① 데이터 선택 → ② 스키마 확인 → ③ 생성·다운로드`로 재구성 —
     장식용 파이프라인 블록 제거, 빈 상태에 다음 행동 안내, 스키마 표를
     결과 컬럼 중심(이름/개념/위치 수/처리/상태)으로 축소

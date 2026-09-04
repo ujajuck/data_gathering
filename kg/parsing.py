@@ -393,8 +393,16 @@ def _read_range(sheet, address: str):
     return values[0][0] if len(values) == 1 and len(values[0]) == 1 else values
 
 
+# UnitRegistry(units.yaml)가 없을 때만 쓰는 최소 폴백 — 변환 규칙의 원본은
+# 코드가 아니라 units.yaml이다. 새 변환은 yaml에 선언한다.
+_FALLBACK_CONVERSIONS = {("K", "C"): lambda x: x - 273.15,
+                         ("C", "K"): lambda x: x + 273.15,
+                         ("s", "min"): lambda x: x / 60,
+                         ("min", "s"): lambda x: x * 60}
+
+
 def _convert_scalar(value, value_type: str | None, unit: str | None,
-                    normalization: dict):
+                    normalization: dict, units=None):
     if value is None:
         return None
     if value_type == "number":
@@ -406,24 +414,26 @@ def _convert_scalar(value, value_type: str | None, unit: str | None,
         value = str(value)
     target = normalization.get("target_unit")
     if target and unit and target != unit and isinstance(value, (int, float)):
-        conversions = {("K", "C"): lambda x: x - 273.15,
-                       ("C", "K"): lambda x: x + 273.15,
-                       ("s", "min"): lambda x: x / 60,
-                       ("min", "s"): lambda x: x * 60}
-        converter = conversions.get((unit, target))
+        if units is not None:
+            try:
+                return units.convert(float(value), unit, target)
+            except (ValueError, KeyError) as exc:
+                raise ValueError(
+                    f"unsupported unit normalization: {unit} -> {target}") from exc
+        converter = _FALLBACK_CONVERSIONS.get((unit, target))
         if converter is None:
             raise ValueError(f"unsupported unit normalization: {unit} -> {target}")
         value = converter(value)
     return value
 
 
-def _normalize_value(value, mapping: dict):
+def _normalize_value(value, mapping: dict, units=None):
     if isinstance(value, list):
         return [[_convert_scalar(cell, mapping.get("value_type"), mapping.get("unit"),
-                                 mapping.get("normalization", {})) for cell in row]
-                for row in value]
+                                 mapping.get("normalization", {}), units)
+                 for cell in row] for row in value]
     return _convert_scalar(value, mapping.get("value_type"), mapping.get("unit"),
-                           mapping.get("normalization", {}))
+                           mapping.get("normalization", {}), units)
 
 
 def prepare_parse(store: KgStore, document_id: str, document_version: str,
@@ -444,7 +454,7 @@ def prepare_parse(store: KgStore, document_id: str, document_version: str,
                                           assignment["template_id"])
 
 
-def extract_workbook(path: Path, mappings: list[dict]) -> list[dict]:
+def extract_workbook(path: Path, mappings: list[dict], units=None) -> list[dict]:
     """CPU/file work only: safe to run without the shared DB lock."""
     workbook = load_workbook(path, data_only=True)
     extracted = []
@@ -470,7 +480,8 @@ def extract_workbook(path: Path, mappings: list[dict]) -> list[dict]:
             try:
                 if not source_range:
                     raise ValueError("source was not found")
-                value = _normalize_value(_read_range(sheet, source_range), mapping)
+                value = _normalize_value(_read_range(sheet, source_range), mapping,
+                                         units)
                 status, warning = ("MANUAL" if use_manual else "TEMPLATE"), None
             except (ValueError, IndexError, TypeError) as exc:
                 value, status, warning = None, "MISSING", str(exc)
@@ -515,11 +526,11 @@ def save_parse_run(store: KgStore, document_id: str, document_version: str,
 
 
 def run_parse(store: KgStore, document_id: str, document_version: str,
-              path: Path, template_id: str | None = None) -> dict:
+              path: Path, template_id: str | None = None, units=None) -> dict:
     assignment, mappings = prepare_parse(store, document_id, document_version,
                                          template_id)
     return save_parse_run(store, document_id, document_version, assignment,
-                          extract_workbook(path, mappings))
+                          extract_workbook(path, mappings, units))
 
 
 def parse_result(store: KgStore, run_id: str) -> dict:

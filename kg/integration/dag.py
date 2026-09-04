@@ -131,6 +131,46 @@ def _unit_convert(f: Frame, cfg: dict, env: dict) -> Frame:
 
 
 @_each_frame
+def _value_normalize(f: Frame, cfg: dict, env: dict) -> Frame:
+    """선언적 값 정규화 — 원자 연산은 kg.normalize 카탈로그, 조합은 데이터.
+
+    cfg.rules: [{steps:[{op,params}], node_ids?:[...], columns?:[...]}]
+    node_ids/columns가 없으면 프레임 전체. 분리된 단위는 lineage.unit에
+    실어 뒤따르는 unit_convert가 이어받는다. 적용 이력(normalized)도
+    lineage에 남는다 — 출력 셀에서 어떤 정규화를 거쳤는지 추적된다.
+    """
+    from kg.normalize import apply_steps, validate_steps
+    changed: dict[str, int] = {}
+    for rule in cfg.get("rules") or []:
+        steps = rule.get("steps") or []
+        validate_steps(steps)
+        node_ids = set(rule.get("node_ids") or [])
+        columns = [c for c in (rule.get("columns") or f.columns) if c in f.columns]
+        for r, ln_row in zip(f.rows, f.lineage):
+            for col in columns:
+                v = r.get(col)
+                if v is None:
+                    continue
+                ln = ln_row.get(col) or {}
+                if node_ids and ln.get("node_id") not in node_ids:
+                    continue
+                nv, meta = apply_steps(v, steps, env)
+                if nv is v or nv == v:
+                    continue
+                r[col] = nv
+                if isinstance(ln, dict) and ln:
+                    if meta.get("unit") and not ln.get("unit"):
+                        ln["unit"] = meta["unit"]   # unit_convert로 전달
+                    ln["normalized"] = [s["op"] for s in steps]
+                changed[col] = changed.get(col, 0) + 1
+    if changed:
+        env.setdefault("normalized", []).extend(
+            {"op": "value_normalize", "column": c, "cells": n}
+            for c, n in changed.items())
+    return f
+
+
+@_each_frame
 def _filter(f: Frame, cfg: dict, env: dict) -> Frame:
     col, op, val = cfg.get("column"), cfg.get("op", "=="), cfg.get("value")
     if col is None or op not in _OPS:
@@ -346,6 +386,7 @@ def _validation(f: Frame, cfg: dict, env: dict) -> Frame:
 
 BLOCKS = {
     "select": _select, "rename": _rename, "type_cast": _type_cast,
+    "value_normalize": _value_normalize,
     "unit_convert": _unit_convert, "filter": _filter, "value_mapping": _value_mapping,
     "null_handling": _null_handling, "deduplicate": _deduplicate, "join": _join,
     "union": _union, "aggregate": _aggregate, "derived_column": _derived_column,

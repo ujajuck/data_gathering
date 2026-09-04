@@ -10,12 +10,21 @@ const ETC = "기타 (양식 미배정)";
 
 // ① 데이터 선택 — 개념을 고르고 양식을 체크하면 그 양식의 문서 전체가 반영된다.
 // 양식별 전처리(정규화/원값)와 문서별 가감 지원. 검토 대기 소스는 승인 전까지 제외.
+interface NormPreset { id: string; label: string }
+
 function MergePicker() {
   const s = useStore();
   const [concept, setConcept] = useState("");
   const [res, setRes] = useState<SearchResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [presets, setPresets] = useState<NormPreset[]>([]);
+
+  useEffect(() => {   // 도메인 정규화 프리셋 (normalizers.yaml) — 코드 고정 아님
+    api("/api/normalizers")
+      .then((r) => setPresets(r.presets || []))
+      .catch(() => setPresets([]));
+  }, []);
 
   useEffect(() => {
     setRes(null);
@@ -56,17 +65,28 @@ function MergePicker() {
         nodeIds: [...g.docs.values()].flat().map((x) => x.node_id) }));
   }, [res, formOf]);
 
-  const toCartItem = (src: SearchSource, raw: boolean): CartItem => ({
+  // 전처리 값: "auto" | "raw" | "p:<프리셋 id>"
+  const toCartItem = (src: SearchSource, prep: string): CartItem => ({
     node_id: src.node_id, concept_id: concept, header: src.header,
     document: src.document, sheet: src.sheet,
-    range: (src.locator || "").split("!").pop() || "", role: null, raw });
+    range: (src.locator || "").split("!").pop() || "", role: null,
+    raw: prep === "raw",
+    preset: prep.startsWith("p:") ? prep.slice(2) : null });
+
+  const prepOf = (items: CartItem[]): string => {
+    if (!items.length) return "auto";
+    if (items.every((x) => x.raw)) return "raw";
+    const p = items[0].preset;
+    if (p && items.every((x) => x.preset === p)) return `p:${p}`;
+    return "auto";
+  };
 
   const cart = s.cartItems();               // cartCount 변경 시 리렌더로 최신화
   const inCart = new Set(cart.map((x) => x.node_id));
 
-  const addSources = (sources: SearchSource[], raw: boolean) => {
+  const addSources = (sources: SearchSource[], prep: string) => {
     const add = sources.filter((x) => !inCart.has(x.node_id))
-      .map((x) => toCartItem(x, raw));
+      .map((x) => toCartItem(x, prep));
     s.saveCart([...cart, ...add]);
   };
   const removeNodes = (nodeIds: string[]) => {
@@ -98,7 +118,7 @@ function MergePicker() {
         const all = carted.length === g.nodeIds.length && g.nodeIds.length > 0;
         const some = carted.length > 0 && !all;
         const cartedItems = cart.filter((x) => carted.includes(x.node_id));
-        const prep = cartedItems.length && cartedItems.every((x) => x.raw) ? "raw" : "auto";
+        const prep = prepOf(cartedItems);
         const isEtc = g.label === ETC;
         return (
           <div key={g.label} className="dkgCard" style={{ cursor: "default",
@@ -110,7 +130,7 @@ function MergePicker() {
                 <input type="checkbox" checked={all}
                   ref={(el) => { if (el) el.indeterminate = some; }}
                   onChange={() => all ? removeNodes(g.nodeIds)
-                    : addSources([...g.docs.values()].flat(), prep === "raw")} />
+                    : addSources([...g.docs.values()].flat(), prep)} />
                 ▣ {g.label}
               </label>
               <span className="muted" style={{ fontSize: 11 }}>
@@ -122,13 +142,18 @@ function MergePicker() {
                   border: "1px solid var(--line)", borderRadius: 8,
                   padding: "4px 6px", fontSize: 11 }}
                 onChange={(e) => {
-                  const raw = e.target.value === "raw";
+                  const v = e.target.value;
+                  const raw = v === "raw";
+                  const preset = v.startsWith("p:") ? v.slice(2) : null;
                   const ids = new Set(carted);
                   s.saveCart(cart.map((x) =>
-                    ids.has(x.node_id) ? { ...x, raw } : x));
+                    ids.has(x.node_id) ? { ...x, raw, preset } : x));
                 }}>
                 <option value="auto">전처리: 자동 정규화 (단위→기준)</option>
                 <option value="raw">전처리: 원값 유지 (변환 생략)</option>
+                {presets.map((p) => (
+                  <option key={p.id} value={`p:${p.id}`}>전처리: {p.label}</option>
+                ))}
               </select>
               <button className="secondary" style={{ padding: "4px 8px", fontSize: 11 }}
                 onClick={() => setOpen((m) => ({ ...m, [g.label]: !m[g.label] }))}>
@@ -148,7 +173,7 @@ function MergePicker() {
                         }}
                         onChange={() => docAll
                           ? removeNodes(sources.map((x) => x.node_id))
-                          : addSources(sources, prep === "raw")} />{" "}
+                          : addSources(sources, prep)} />{" "}
                       <b>▤ {sources[0].document}</b>
                       <span className="muted" style={{ fontSize: 11 }}>
                         {" "}· 위치 {sources.length} · 반영 {docCarted.length}</span>
@@ -221,6 +246,12 @@ export default function DbScreen() {
           f.field_name.replace(/[^A-Za-z0-9_]/g, "_") || f.concept_id, f.node_ids])),
         // 양식별 전처리 '원값 유지' — 해당 위치는 단위 변환을 생략한다
         raw_node_ids: cart.filter((x) => x.raw).map((x) => x.node_id),
+        // 양식별 정규화 프리셋 — 프리셋 id를 서버가 normalizers.yaml에서 해석
+        normalize_rules: Object.entries(
+          cart.reduce<Record<string, string[]>>((m, x) => {
+            if (x.preset) (m[x.preset] = m[x.preset] || []).push(x.node_id);
+            return m;
+          }, {})).map(([preset, node_ids]) => ({ preset, node_ids })),
       };
       const r: BuildResult = await post("/api/build", body);
       setBuildStatus("");
