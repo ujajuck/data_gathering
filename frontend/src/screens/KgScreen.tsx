@@ -221,8 +221,7 @@ export default function KgScreen() {
                 <div key={x.id} className={`dkgCard${s.selDkg === x.id ? " sel" : ""}`}
                   onClick={() => selectDkg(x.id, true)}>
                   <b style={{ color: s.dkgColor(x.id) }}>{x.name}</b>
-                  <div>개념 {x.domain_node_ids.length} · 문서 {x.member_document_count} ·
-                    {" "}위치 {x.source_location_count}</div>
+                  <div>개념 {x.domain_node_ids.length} · 문서 {x.member_document_count}</div>
                 </div>
               ))}
             </div>
@@ -231,15 +230,6 @@ export default function KgScreen() {
             onClick={() => setDetail({ kind: "editor", cid: null })}>
             + 새 개념 <span className="muted" style={{ fontSize: 10 }}>(L1이면 새 문서군)</span>
           </button>
-          <div style={{ display: "grid", gap: 7, fontSize: 12, marginTop: 12 }}>
-            {s.dkgs.map((x) => (
-              <div key={x.id}>
-                <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%",
-                  background: s.dkgColor(x.id), marginRight: 7 }} />
-                {x.name} · {x.member_document_count} docs
-              </div>
-            ))}
-          </div>
         </aside>
         <div className="panel">
           <div className="graphHead">
