@@ -17,7 +17,8 @@ Knowledge Tree**로 보존하고, 트리의 의미 노드를 **Fixed Domain KG**
 | §7 Semantic Mapping (후보검색→Top-K→판정, 상태 4종) | `kg/mapping/retriever.py` · `judge.py` · `mapper.py` |
 | §8 Domain 중심 역탐색 | `kg/search.py` `reverse_lookup()` |
 | §9 Custom RDBMS (Integration Project, `_source_*` 컬럼) | `kg/integration/builder.py` |
-| §10 Transformation DAG (13종 블록) | `kg/integration/dag.py` |
+| §10 Transformation DAG (13종 블록 + value_normalize) | `kg/integration/dag.py` |
+| §10 확장 — 정규화기 레지스트리 (원자 연산은 코드, 조합은 데이터) | `kg/normalize.py` + `domains/<d>/config/normalizers.yaml` |
 | §11 Lineage (값→변환→셀→헤더→시트→문서→버전) | `lineage_edge` + `kg/search.py` `lineage_of()` |
 | §12 버전/Tree Diff (semantic·content 지문 분리) | `kg/tree/diff.py` |
 | §13 논리 스키마 4개 영역 | `kg/schema.sql` |
@@ -50,8 +51,9 @@ python -m kg.webapp --ws domains/financier --port 8010                        # 
 커버리지 줌, 문서군 상세 `양식→문서` 계층·레시피 스냅샷/롤백·재크롤링, 개념
 편집) / **원본 데이터**(원본 충실 렌더 — 병합/스타일/이미지/텍스트박스 앵커
 정합 + Semantic Overlay, 검수 승인/반려/재매핑, PDF Preview) / **통합 DB**
-(개념→양식→문서 선택 마법사, 양식별 전처리 — 자동 정규화/원값 유지, 스키마
-제안·빌드·lineage).
+(개념 트리 체크 — 상위 체크 시 하위 일괄, 양식별 전처리 — 자동 정규화/원값
+유지/normalizers.yaml 프리셋, 스키마 제안·빌드·lineage, `.db`/`.csv` 다운로드)
+/ **템플릿 관리**(파싱 템플릿 생성/버전/라이프사이클, 문서 배정·해제 — N:M).
 
 ## 핵심 성질
 

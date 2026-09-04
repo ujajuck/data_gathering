@@ -21,7 +21,8 @@ frontend/    React + TypeScript 5탭 UI — 유일한 프론트. 빌드(dist)가
              서버가 루트 / 에 바로 서빙한다 (프론트 수정 시 npm run build)
 src/         파서·단위 엔진 코어(Inspector/RegionDetector/UnitRegistry — kg가
              §14.1 Parser 계약으로 재사용) + 레거시 파이프라인(아래 참고)
-domains/<d>/ 도메인 워크스페이스 — config(사전)·data/raw(원본)·data/kg/kg.db
+domains/<d>/ 도메인 워크스페이스 — config(개념·단위 units.yaml·정규화
+             프리셋 normalizers.yaml)·data/raw(원본)·data/kg/kg.db
 tests/       회귀 전체 (python -m pytest)
 ```
 
@@ -66,10 +67,11 @@ DRM(암호화) 문서의 COM 렌더에는 Windows + Excel이 필요하다. 둘 �
 3. **원본 데이터** — 원본 충실 렌더(병합/열폭/스타일/이미지/텍스트박스 앵커
    정합) + Semantic Overlay, 검수 큐(승인/반려/재매핑), Source Inspector
    (매핑 근거·양식 provenance·값 미리보기), PDF Preview.
-4. **통합 DB** — `개념 선택 → 양식 선택(소속 문서 자동 반영) → 양식별 전처리
-   (자동 정규화 / 원값 유지) 혹은 문서별 개별 추가·제거` 흐름으로 머지 대상을
-   만들고, Row Context 기반 스키마 제안을 조정해 빌드. 결과는 `_source_*`
-   lineage 컬럼과 빌드 리포트(단위 미변환 경고 등)를 포함한다.
+4. **통합 DB** — `① 개념 트리 체크(상위 개념 체크 시 하위 일괄 선택) →
+   ② 스키마 확인(컬럼명 조정) → ③ 생성·다운로드` 3단계. 양식 카드에서
+   전처리(자동 정규화 / 원값 유지 / normalizers.yaml 정규화 프리셋)와 문서별
+   가감을 조정한다. 결과는 `_source_*` lineage 컬럼·빌드 리포트를 포함하고
+   `.db`/`.csv` 파일로 바로 내려받는다.
 5. **템플릿 관리** — 파싱 템플릿의 생성/버전/라이프사이클과 문서 배정.
    문서:템플릿은 **N:M** — 템플릿마다 파싱하려는 정보(관점)가 달라도 한
    문서에 함께 배정되고, 파싱·override·버전 감사는 템플릿 단위로 독립이다.

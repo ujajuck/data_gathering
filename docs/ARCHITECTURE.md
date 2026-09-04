@@ -402,15 +402,23 @@ classDiagram
     }
     class integration_dag {
         +Frame
+        +value_normalize «정규화 rules 실행»
         +unit_convert «skip_nodes = 원값 유지»
         +select/rename/filter/join/union/...
+    }
+    class normalize {
+        «정규화기 레지스트리 — 원자 연산은 코드, 조합은 데이터»
+        +CATALOG «trim/thousands/percent/split_unit»
+        +apply_steps() / validate_steps()
+        +load_presets() «normalizers.yaml»
     }
     class webapp {
         «FastAPI — 유일한 서버»
         +/api/files /api/sheet /api/source
         +/api/parsing/* «템플릿·배정·override·parse»
         +/api/groups /api/recipe /api/recrawl
-        +/api/proposal /api/build
+        +/api/proposal /api/build /api/normalizers
+        +/api/build/id/download «.db / .csv 반환»
         +/ «React dist 서빙 (+/app)»
     }
     class cli {
@@ -428,6 +436,8 @@ classDiagram
     cli --> ingest
     cli --> integration_builder
     integration_builder --> integration_dag
+    integration_dag --> normalize
+    webapp --> normalize : "프리셋 해석"
     recrawl --> parsing
     ingest ..> KgStore
     groups ..> KgStore
@@ -564,27 +574,33 @@ sequenceDiagram
     Note over P: B의 override는 비전염 — 템플릿 단위 독립
 ```
 
-### 3.5 통합 DB 빌드 (개념 → 양식 → 문서 자동 반영)
+### 3.5 통합 DB 빌드 (개념 트리 → 전처리 프리셋 → 생성·다운로드)
 
 ```mermaid
 sequenceDiagram
     actor U as 사용자
     participant DB as 통합 DB 탭
     participant W as webapp
+    participant N as normalize
     participant B as integration.builder
     participant D as integration.dag
 
-    U->>DB: 개념 선택 → 양식(템플릿) 선택
-    Note over DB: 양식 소속 문서가 자동 반영 —<br/>양식별 전처리(정규화/원값) 또는 문서별 가감
+    U->>DB: ① 개념 트리 체크 — 상위 개념 체크 시 하위 개념 소스 일괄 담김
+    Note over DB: 양식 카드에서 세부 조정 —<br/>전처리(자동/원값/정규화 프리셋) · 문서별 가감
+    DB->>W: GET /api/normalizers
+    W->>N: catalog + load_presets(normalizers.yaml)
+    N-->>DB: 전처리 드롭다운 프리셋
     DB->>W: POST /api/proposal {node_ids}
-    W-->>DB: Row Context 기반 스키마 제안
-    U->>DB: 필드명/타입 조정 → [빌드]
-    DB->>W: POST /api/build {config, raw_node_ids}
+    W-->>DB: ② Row Context 기반 스키마 제안 (컬럼명 조정)
+    U->>DB: ③ [DB 생성]
+    DB->>W: POST /api/build {fields, raw_node_ids, normalize_rules}
+    W->>N: 프리셋 id → steps 해석 (value_normalize rules)
     W->>B: define_project → assemble_sources (Frame)
-    B->>D: 변환 DAG 실행 (unit_convert는 skip_nodes 제외)
+    B->>D: value_normalize → unit_convert(skip_nodes 제외) → union → dedup
+    Note over D: 분리된 단위는 lineage.unit으로<br/>unit_convert에 전달, 적용 이력도 lineage에
     D-->>B: 결과 Frame + 경고(단위 미변환 등)
     B-->>DB: 산출 DB(_source_* lineage 컬럼) + 빌드 리포트
-    U->>DB: 셀 lineage 추적 (search.lineage_of)
+    U->>DB: ⬇ 다운로드 — GET /api/build/id/download (.db / ?format=csv)
 ```
 
 ### 3.6 재크롤링 (사람 승인 불가침)
@@ -649,12 +665,14 @@ flowchart LR
     end
 
     subgraph TR["Transform+Build — 여기서만 변환"]
-        SEL["개념→양식→문서 선택<br/>(양식별 전처리 / 원값 유지)"]
-        DAG["변환 DAG<br/>unit_convert·filter·join·..."]
+        SEL["개념 트리 선택 (상위→하위 일괄)<br/>양식별 전처리 / 문서별 가감"]
+        NRM["normalizers.yaml 프리셋<br/>→ value_normalize (선언적 rules)"]
+        DAG["변환 DAG<br/>value_normalize·unit_convert·join·..."]
         OUT[("Custom RDBMS<br/>_source_* lineage 컬럼")]
-        LIN["lineage_edge<br/>출력 셀 → 원본 cell_address"]
+        LIN["lineage_edge<br/>출력 셀 → 원본 cell_address<br/>+ 적용 정규화 이력"]
         MAP --> SEL
         PS --> SEL
+        NRM --> DAG
         SEL --> DAG --> OUT
         DAG --> LIN
         PAY --> LIN
@@ -662,9 +680,11 @@ flowchart LR
 
     subgraph SV["Serve"]
         UI["React 5탭 UI<br/>(kg.webapp이 / 에 서빙)"]
+        DL["산출물 다운로드<br/>/api/build/id/download (.db/.csv)"]
     end
     RC --> UI
     OUT --> UI
+    OUT --> DL
     LIN --> UI
 ```
 
@@ -674,3 +694,6 @@ flowchart LR
 2. **변환은 빌드에서만** — Load 단계는 구조·값을 있는 그대로 보존한다.
 3. **사람 판단 불가침** — APPROVED 매핑·수동 override는 재크롤링/재배정이 덮지 않는다.
 4. **모든 출력 셀은 원본 셀로 추적 가능** — lineage_edge → payload_value.cell_address.
+5. **정규화는 코드에 고정하지 않는다** — 원자 연산만 코드(kg/normalize.py 카탈로그,
+   선언적 파라미터만)에 두고, 조합·선택은 데이터(normalizers.yaml 프리셋 + 빌드
+   rules)로 관리한다. 단위 변환 규칙의 원본도 units.yaml이다.
