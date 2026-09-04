@@ -95,13 +95,8 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
     <>
       <div className="kicker">SELECTED DOCUMENT GROUP</div>
       <div className="title" style={{ color }}>{g.name}</div>
-      <div className="sub">문서군[개념] → 템플릿(파싱 스크립트 기준 분류) → 문서</div>
-      <div className="metricGrid">
-        <div className="metric"><span>개념</span><b>{g.domain_node_ids.length}</b></div>
-        <div className="metric"><span>문서</span><b>{g.member_document_count}</b></div>
-        <div className="metric"><span>Source 위치</span><b>{g.source_location_count}</b></div>
-        <div className="metric"><span>값</span><b>{g.value_count.toLocaleString()}</b></div>
-      </div>
+      <div className="sub">개념 {g.domain_node_ids.length} · 문서 {g.member_document_count} ·
+        위치 {g.source_location_count} · 값 {g.value_count.toLocaleString()}</div>
 
       {/* 계층은 템플릿까지만 펼쳐 보인다 — 문서 목록은 '문서 N개'를 눌러야
           표로 열린다 (문서군 → 템플릿 → 문서 개수). */}
@@ -159,9 +154,13 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
           );
         });
       })()}
-      <div className="sub" style={{ fontSize: 11 }}>
-        문서 개수를 누르면 문서 목록이 열리고, 문서를 누르면 원본 데이터로
-        이동합니다.</div>
+      {/* 관리 기능은 접어 둔다 — 탐색(계층)과 운영을 분리해 패널을 가볍게 */}
+      <details style={{ marginTop: 10 }} open={recrawlBusy ||
+        (recrawlRun ? recrawlRun.status === "RUNNING" : false) || undefined}>
+        <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--muted)" }}>
+          관리 — 문서 추가 · 추출 레시피 · 재크롤링
+          {recrawlBusy || recrawlRun?.status === "RUNNING" ? " (재크롤링 진행 중…)" : ""}
+        </summary>
       {addable.length > 0 && (
         <div style={{ display: "flex", gap: 6, marginTop: 7 }} className="editForm">
           <select style={{ flex: 1, marginTop: 0 }} value=""
@@ -249,6 +248,7 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
           </>
         )}
       </div>
+      </details>
 
       <div className="rightBtns">
         <button className="secondary" onClick={onBackDomain}>전체 개념으로 돌아가기</button>
