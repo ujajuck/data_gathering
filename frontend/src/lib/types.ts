@@ -41,12 +41,40 @@ export interface DkgDetailData extends DkgSummary {
 
 export interface Concept { concept_id: string; canonical_name: string }
 
+// 문서:템플릿은 N:M — 한 문서에 파싱 관점이 다른 템플릿 여러 개가 붙는다
+export interface FileTemplate {
+  template_id: string; name: string; version: number; status: string;
+}
+
 export interface FileRow {
-  document_id: string; filename: string; status: string;
+  document_id: string; filename: string; current_version?: string; status: string;
   headers: number; coverage_pct: number; review: number;
   drm_status?: string | null; render_status?: string | null; parsing_status?: string | null;
   author?: string | null; created?: string | null; modified?: string | null;
+  templates?: FileTemplate[];
   template_name?: string | null; template_version?: number | string | null;
+}
+
+// 템플릿 관리 페이지 (/api/parsing/templates)
+export interface ParsingTemplateRow {
+  template_id: string; name: string; target_document_kg?: string | null;
+  lifecycle: string; created_at: string;
+  versions: number[]; current_version: number | null;
+  assigned_documents: number;
+}
+
+export interface TemplateVersionDetail {
+  template_id: string; version: number; created_at: string;
+  created_by?: string | null; spec: unknown;
+  sheet_templates: { name: string; match: unknown;
+    mappings: { mapping_key: string; concept_id?: string | null;
+      source: unknown; value_type?: string | null; unit?: string | null }[] }[];
+}
+
+export interface TemplateAssignmentRow {
+  document_id: string; document_version: string; template_id: string;
+  template_version: number; status: string; assigned_at: string;
+  filename?: string;
 }
 
 export interface RawFile {

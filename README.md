@@ -15,7 +15,7 @@ DB를 생성한다. 설계 ↔ 모듈 대응은 [kg/README.md](kg/README.md), �
 kg/          코어 + 웹 서버 — 온톨로지/트리/시맨틱 매핑, 문서군·추출 레시피·
              재크롤링, DRM 획득 게이트, 원본 충실 렌더(LibreOffice PDF 포함),
              통합 DB 빌더(DAG/lineage), FastAPI(kg/webapp.py)
-frontend/    React + TypeScript 4탭 UI — 유일한 프론트. 빌드(dist)가 커밋되어
+frontend/    React + TypeScript 5탭 UI — 유일한 프론트. 빌드(dist)가 커밋되어
              서버가 루트 / 에 바로 서빙한다 (프론트 수정 시 npm run build)
 src/         파서·단위 엔진 코어(Inspector/RegionDetector/UnitRegistry — kg가
              §14.1 Parser 계약으로 재사용) + 레거시 파이프라인(아래 참고)
@@ -32,9 +32,9 @@ pip install -e ".[test]"
 python -m kg.cli --ws domains/financier seed
 python -m kg.cli --ws domains/financier ingest --raw domains/financier/data/raw --map
 
-# 웹 실행 — 이 서버 하나가 API와 두 UI를 모두 서빙한다
+# 웹 실행 — 이 서버 하나가 API와 웹 UI를 모두 서빙한다
 python -m kg.webapp --ws domains/financier --port 8010
-#  → http://localhost:8010/      4탭 UI (React — /app 경로도 동일)
+#  → http://localhost:8010/      5탭 UI (React — /app 경로도 동일)
 ```
 
 React 개발/빌드 (선택):
@@ -50,9 +50,10 @@ npm run build   # dist/ 갱신 → kg.webapp 재시작 시 / 에 서빙 (dist는
 DRM(암호화) 문서의 COM 렌더에는 Windows + Excel이 필요하다. 둘 다 없어도
 셀 그리드 렌더·매핑·빌드는 동작한다.
 
-## 4개 화면
+## 5개 화면
 
-1. **파일 분석** — 파일명·작성자 검색, 작성일 필터, 정렬. 미등록(raw) 파일은
+1. **파일 분석** — 파일명·작성자·템플릿 검색, 작성일 필터, 정렬, 템플릿
+   배정/미배정 필터. 미등록(raw) 파일은
    분석 → 같은 양식의 문서군 제안 → 저장된 추출 레시피로 매핑 이식 등록.
    잠긴 파일(암호화/DRM)은 우회 없이 정식 해제 요청서 발급 → 해제본 도착 자동
    감지 → 등록.
@@ -67,6 +68,9 @@ DRM(암호화) 문서의 COM 렌더에는 Windows + Excel이 필요하다. 둘 �
    (자동 정규화 / 원값 유지) 혹은 문서별 개별 추가·제거` 흐름으로 머지 대상을
    만들고, Row Context 기반 스키마 제안을 조정해 빌드. 결과는 `_source_*`
    lineage 컬럼과 빌드 리포트(단위 미변환 경고 등)를 포함한다.
+5. **템플릿 관리** — 파싱 템플릿의 생성/버전/라이프사이클과 문서 배정.
+   문서:템플릿은 **N:M** — 템플릿마다 파싱하려는 정보(관점)가 달라도 한
+   문서에 함께 배정되고, 파싱·override·버전 감사는 템플릿 단위로 독립이다.
 
 ## CLI
 

@@ -132,6 +132,11 @@ class ParsingVersionReq(BaseModel):
     created_by: str | None = None
 
 
+class ParsingTemplatePatchReq(BaseModel):
+    name: str | None = None
+    lifecycle: str | None = None
+
+
 class ParsingAssignReq(BaseModel):
     document_version: str
     template_id: str
@@ -154,6 +159,7 @@ class ParsingOverridePatchReq(BaseModel):
 
 class ParsingParseReq(BaseModel):
     document_version: str
+    template_id: str | None = None      # 배정이 여럿이면 필수
 
 
 class ViewerRegisterReq(BaseModel):
@@ -944,7 +950,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
                      (SELECT render_status FROM viewer_document_version v
                        WHERE v.document_id=d.document_id
                          AND v.document_version=d.current_version) render_status,
-                     (SELECT a.status FROM document_template_assignment a
+                     (SELECT group_concat(DISTINCT a.status) FROM document_template_assignment a
                        WHERE a.document_id=d.document_id
                          AND a.document_version=d.current_version) parsing_status,
                           count(DISTINCT n.node_id) nodes
@@ -974,7 +980,28 @@ def create_app(ws_root: str | Path) -> FastAPI:
         with lock:
             ids = [r[0] for r in store.conn.execute(
                 "SELECT template_id FROM parsing_template ORDER BY name")]
-            return [template_detail(store, template_id) for template_id in ids]
+            out = [template_detail(store, template_id) for template_id in ids]
+            counts = dict(store.conn.execute(
+                """SELECT a.template_id, count(DISTINCT a.document_id)
+                     FROM document_template_assignment a
+                     JOIN document d ON d.document_id=a.document_id
+                      AND d.current_version=a.document_version
+                    GROUP BY a.template_id""").fetchall())
+            for t in out:
+                t["assigned_documents"] = counts.get(t["template_id"], 0)
+            return out
+
+    @app.patch("/api/parsing/templates/{template_id}")
+    def parsing_template_patch(template_id: str, req: ParsingTemplatePatchReq):
+        from kg.parsing import ParsingError, update_template
+        try:
+            with wlock():
+                result = update_template(store, template_id, req.name, req.lifecycle)
+                store.commit()
+            return result
+        except ParsingError as exc:
+            code = 404 if str(exc) == "unknown template" else 422
+            raise HTTPException(code, str(exc)) from exc
 
     @app.post("/api/parsing/templates", status_code=201)
     def parsing_template_create(req: ParsingTemplateReq):
@@ -1046,6 +1073,24 @@ def create_app(ws_root: str | Path) -> FastAPI:
         except ParsingError as exc:
             raise HTTPException(422, str(exc)) from exc
 
+    @app.get("/api/parsing/documents/{document_id}/assignments")
+    def parsing_assignments(document_id: str, document_version: str):
+        from kg.parsing import assignments
+        with lock:
+            return [a for a in assignments(store, document_version)
+                    if a["document_id"] == document_id]
+
+    @app.delete("/api/parsing/documents/{document_id}/assignments/{template_id}")
+    def parsing_unassign(document_id: str, template_id: str, document_version: str):
+        from kg.parsing import ParsingError, unassign
+        try:
+            with wlock():
+                result = unassign(store, document_id, document_version, template_id)
+                store.commit()
+            return result
+        except ParsingError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
     @app.get("/api/parsing/documents/{document_id}/overrides")
     def parsing_overrides(document_id: str, document_version: str | None = None):
         query = "SELECT * FROM document_override WHERE document_id=?"
@@ -1114,7 +1159,8 @@ def create_app(ws_root: str | Path) -> FastAPI:
         return {"ok": True}
 
     @app.get("/api/parsing/documents/{document_id}/effective-mappings")
-    def parsing_effective(document_id: str, document_version: str):
+    def parsing_effective(document_id: str, document_version: str,
+                          template_id: str | None = None):
         from kg.parsing import ParsingError, effective_mappings
         try:
             with lock:
@@ -1123,7 +1169,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
                     (document_version,)).fetchone()
                 if row is None or row["document_id"] != document_id:
                     raise HTTPException(404, "unknown document version")
-                return effective_mappings(store, document_version)
+                return effective_mappings(store, document_version, template_id)
         except ParsingError as exc:
             raise HTTPException(422, str(exc)) from exc
 
@@ -1135,16 +1181,18 @@ def create_app(ws_root: str | Path) -> FastAPI:
         try:
             with lock:
                 assignment, mappings = prepare_parse(store, document_id,
-                                                     req.document_version)
+                                                     req.document_version,
+                                                     req.template_id)
             # Workbook IO and extraction may be expensive; never hold the
             # process-wide DB lock while openpyxl walks the workbook.
             extracted = extract_workbook(path, mappings)
             with wlock():
                 current = store.conn.execute(
-                    "SELECT template_id,template_version FROM document_template_assignment WHERE document_version=?",
-                    (req.document_version,)).fetchone()
-                if current is None or (current["template_id"], current["template_version"]) != \
-                        (assignment["template_id"], assignment["template_version"]):
+                    """SELECT template_version FROM document_template_assignment
+                        WHERE document_version=? AND template_id=?""",
+                    (req.document_version, assignment["template_id"])).fetchone()
+                if current is None or \
+                        current["template_version"] != assignment["template_version"]:
                     raise HTTPException(409, "template assignment changed during parsing")
                 result = save_parse_run(store, document_id, req.document_version,
                                         assignment, extracted)
@@ -1645,7 +1693,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
         """S01 파일 분석: 파일별 Ready/Review 상태·매핑률·검토 건수 (§3, §6.1)."""
         with lock:
             rows = store.conn.execute(
-                """SELECT d.document_id, d.filename,
+                """SELECT d.document_id, d.filename, d.current_version,
                      (SELECT count(DISTINCT substr(n.tree_path,
                           instr(n.tree_path,'/')+1,
                           CASE WHEN instr(substr(n.tree_path, instr(n.tree_path,'/')+1),'/')=0
@@ -1656,18 +1704,27 @@ def create_app(ws_root: str | Path) -> FastAPI:
                      count(h.node_id) headers,
                      sum(CASE WHEN m.status IN ('AUTO_APPROVED','APPROVED') THEN 1 ELSE 0 END) mapped,
                      sum(CASE WHEN m.status='REVIEW_REQUIRED' THEN 1 ELSE 0 END) review,
-                     v.drm_status, v.render_status, a.status parsing_status,
-                     t.name template_name, a.template_version
+                     v.drm_status, v.render_status
                    FROM document d
                    LEFT JOIN tree_node h ON h.document_id=d.document_id
                         AND h.status='ACTIVE' AND h.node_type='HEADER'
                    LEFT JOIN semantic_mapping m ON m.tree_node_id=h.node_id AND m.is_active=1
                    LEFT JOIN viewer_document_version v ON v.document_id=d.document_id
                         AND v.document_version=d.current_version
-                   LEFT JOIN document_template_assignment a ON a.document_id=d.document_id
-                        AND a.document_version=d.current_version
-                   LEFT JOIN parsing_template t ON t.template_id=a.template_id
                    GROUP BY d.document_id ORDER BY d.filename""").fetchall()
+            # 템플릿 배정은 N:M — JOIN하면 행/집계가 복제되므로 별도로 모은다
+            tpl_rows = store.conn.execute(
+                """SELECT a.document_id, a.template_id, t.name, a.template_version, a.status
+                     FROM document_template_assignment a
+                     JOIN parsing_template t ON t.template_id=a.template_id
+                     JOIN document d ON d.document_id=a.document_id
+                      AND d.current_version=a.document_version
+                    ORDER BY t.name""").fetchall()
+        doc_templates: dict[str, list[dict]] = {}
+        for r in tpl_rows:
+            doc_templates.setdefault(r["document_id"], []).append(
+                {"template_id": r["template_id"], "name": r["name"],
+                 "version": r["template_version"], "status": r["status"]})
         out = []
         for r in rows:
             headers = r["headers"] or 0
@@ -1677,14 +1734,22 @@ def create_app(ws_root: str | Path) -> FastAPI:
                 ("REVIEW_REQUIRED" if review > 0 else "READY")
             out.append({
                 "document_id": r["document_id"], "filename": r["filename"],
+                "current_version": r["current_version"],
                 "sheets": r["sheets"] or 0, "headers": headers,
                 "coverage_pct": round(100 * mapped / headers, 1) if headers else 0,
                 "review": review, "status": status})
+            tpls = doc_templates.get(r["document_id"], [])
+            # 대표 상태: 검토 필요 > 실패 > 나머지(첫 배정) 순으로 눈에 띄게
+            summary = next((t["status"] for t in tpls
+                            if t["status"] == "REVIEW_REQUIRED"), None) or \
+                next((t["status"] for t in tpls if t["status"] == "FAILED"), None) or \
+                (tpls[0]["status"] if tpls else None)
             out[-1].update({"drm_status": r["drm_status"] or "PROTECTED",
                             "render_status": r["render_status"],
-                            "parsing_status": r["parsing_status"],
-                            "template_name": r["template_name"],
-                            "template_version": r["template_version"]})
+                            "parsing_status": summary,
+                            "templates": tpls,
+                            "template_name": tpls[0]["name"] if tpls else None,
+                            "template_version": tpls[0]["version"] if tpls else None})
             # 작성자/작성일 — 검색·필터·정렬용 (원본 파일의 core 속성)
             out[-1].update(_doc_props(root / "data" / "raw" / r["filename"]))
         return out
@@ -1758,14 +1823,16 @@ def create_app(ws_root: str | Path) -> FastAPI:
                      FROM viewer_document_version
                     WHERE document_id=? AND document_version=?""",
                 (n["document_id"], doc["current_version"] if doc else None)).fetchone()
-            assignment = store.conn.execute(
+            tpl_rows = store.conn.execute(
                 """SELECT a.template_id,a.template_version,a.status,t.name template_name
                      FROM document_template_assignment a JOIN parsing_template t
                        ON t.template_id=a.template_id
                     WHERE a.document_id=? AND a.document_version=?""",
-                (n["document_id"], doc["current_version"] if doc else None)).fetchone()
+                (n["document_id"], doc["current_version"] if doc else None)).fetchall()
+            # N:M — 이 노드 위치와 매핑이 일치하는 템플릿을 대표로 고른다
+            assignment = dict(tpl_rows[0]) if tpl_rows else None
             parsing_source = None
-            if assignment:
+            if tpl_rows:
                 from kg.parsing import effective_mappings
                 node_range = (n["locator"] or "").rsplit("!", 1)[-1]
                 node_sheet = (n["locator"] or "").rsplit("!", 1)[0]
@@ -1776,6 +1843,9 @@ def create_app(ws_root: str | Path) -> FastAPI:
                               and x["effective_source"].get("range") == node_range
                               and x["effective_source"].get("sheet", node_sheet) == node_sheet), None)
                 if match:
+                    assignment = next(
+                        (dict(t) for t in tpl_rows
+                         if t["template_id"] == match["template_id"]), assignment)
                     parsing_source = {
                         "mapping_key": match["mapping_key"],
                         "mapping_source": match["mapping_source"],
@@ -1804,6 +1874,7 @@ def create_app(ws_root: str | Path) -> FastAPI:
             "concept_name": concept["canonical_name"] if concept else None,
             "viewer": dict(viewer) if viewer else None,
             "parsing_template": dict(assignment) if assignment else None,
+            "parsing_templates": [dict(t) for t in tpl_rows],
             "parsing_source": parsing_source,
             "candidates": json.loads(ev["candidates_json"])[:5] if ev else [],
             "row_context": {

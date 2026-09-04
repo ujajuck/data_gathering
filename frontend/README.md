@@ -7,7 +7,7 @@
 
 ## 화면
 
-4탭 구성:
+5탭 구성:
 
 1. **파일 분석** — 등록 파일 표(문서군 배지·DRM/Render/Parse 상태) + 파일명·
    작성자 검색/작성일 필터/정렬, 미등록(raw) 파일의 분석 → 문서군 제안 →
@@ -22,6 +22,8 @@
 4. **통합 DB** — 개념 선택 → 양식 선택(소속 문서 자동 반영) → 양식별 전처리
    혹은 문서별 추가/제거(`kg_cart_v3` localStorage), 스키마 제안/필드명 조정,
    빌드 결과(스키마·경고·미리보기·lineage).
+5. **템플릿 관리** — 파싱 템플릿 생성/버전/라이프사이클, 문서 배정·해제.
+   문서:템플릿은 N:M (템플릿마다 파싱 관점이 다르다).
 
 ## 실행
 
@@ -40,8 +42,8 @@ npm run build
 ## 구조
 
 - `src/lib/api.ts` — fetch 헬퍼 + colName/parseRange + cart 저장소
-- `src/lib/store.tsx` — 4탭 공유 상태
-- `src/screens/` — FilesScreen / KgScreen(+kg/) / SourceScreen(+source/) / DbScreen
+- `src/lib/store.tsx` — 5탭 공유 상태
+- `src/screens/` — FilesScreen / KgScreen(+kg/) / SourceScreen(+source/) / DbScreen / TemplatesScreen
 - `src/webkg.css` — 앱 스타일(`.wk` 스코프)
 
 ## 레거시 PDF 근거 뷰어

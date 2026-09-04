@@ -12,9 +12,11 @@ def test_react_frontend_is_the_only_frontend():
     assert not (REPO_ROOT / "kg" / "web_kg").exists(), \
         "web_kg는 제거됐다 — 프론트는 frontend/ 하나만 유지한다"
     app_tsx = (REPO_ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
-    for text in ("1. 파일 분석", "2. 개념 탐색", "3. 원본 데이터", "4. 통합 DB"):
+    for text in ("1. 파일 분석", "2. 개념 탐색", "3. 원본 데이터", "4. 통합 DB",
+                 "5. 템플릿 관리"):
         assert text in app_tsx
-    for screen in ("FilesScreen", "KgScreen", "SourceScreen", "DbScreen"):
+    for screen in ("FilesScreen", "KgScreen", "SourceScreen", "DbScreen",
+                   "TemplatesScreen"):
         assert (REPO_ROOT / "frontend" / "src" / "screens" / f"{screen}.tsx").exists()
 
 
@@ -29,6 +31,8 @@ def test_core_features_live_inside_the_four_tab_flow():
     assert "추출된 키 → 값" in inspector
     assert "Template Source:" in inspector
     assert "templateGroups" in dkg                   # 문서군→템플릿→문서 계층
+    templates = read("screens/TemplatesScreen.tsx")  # 템플릿 관리 (N:M 배정)
+    assert "배정" in templates and "해제" in templates and "새 템플릿" in templates
 
 
 def test_webapp_serves_react_build_at_root():

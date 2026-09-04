@@ -40,7 +40,37 @@ class KgStore:
         # CLI/웹이 같은 DB를 동시에 만질 때 SQLITE_BUSY 즉시 실패 대신 대기
         self.conn.execute("PRAGMA busy_timeout = 5000")
         self.conn.executescript(_SCHEMA.read_text(encoding="utf-8"))
+        self._migrate_template_assignment_nm()
         self.conn.commit()
+
+    def _migrate_template_assignment_nm(self) -> None:
+        """구 DB의 문서:템플릿 1:1 배정을 N:M PK로 재구축한다.
+
+        CREATE IF NOT EXISTS는 기존 테이블을 못 바꾸므로, PK에 template_id가
+        없는 옛 형태를 발견하면 같은 데이터로 테이블을 다시 만든다.
+        """
+        pk = [r[1] for r in self.conn.execute(
+            "PRAGMA table_info(document_template_assignment)") if r[5] > 0]
+        if "template_id" in pk:
+            return
+        self.conn.execute("PRAGMA foreign_keys = OFF")
+        self.conn.executescript("""
+            ALTER TABLE document_template_assignment RENAME TO _dta_v1;
+            CREATE TABLE document_template_assignment (
+                document_id      TEXT NOT NULL REFERENCES document(document_id),
+                document_version TEXT NOT NULL REFERENCES document_version(version_id),
+                template_id      TEXT NOT NULL,
+                template_version INTEGER NOT NULL,
+                status           TEXT NOT NULL DEFAULT 'ASSIGNED',
+                assigned_at      TEXT NOT NULL,
+                FOREIGN KEY (template_id, template_version)
+                  REFERENCES parsing_template_version(template_id, version),
+                PRIMARY KEY (document_id, document_version, template_id)
+            );
+            INSERT INTO document_template_assignment SELECT * FROM _dta_v1;
+            DROP TABLE _dta_v1;
+        """)
+        self.conn.execute("PRAGMA foreign_keys = ON")
 
     # ------------------------------------------------------------- domain ----
     def upsert_concept(self, c: dict) -> None:

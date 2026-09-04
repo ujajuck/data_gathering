@@ -11,6 +11,10 @@ export const post = (path: string, body: unknown) =>
 
 export const del = (path: string) => api(path, { method: "DELETE" });
 
+export const patch = (path: string, body: unknown) =>
+  api(path, { method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) });
+
 export const PALETTE = ["#3569e8", "#7b61c9", "#3a8d6d", "#b57b1b", "#c05b8c", "#3d8ea6", "#7a7f8a"];
 export const ROLE_BADGE: Record<string, string> = { KEY: "green", VALUE: "blue", CONTEXT: "amber", IGNORE: "" };
 

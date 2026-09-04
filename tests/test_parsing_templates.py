@@ -6,9 +6,9 @@ from hashlib import sha256
 import pytest
 from openpyxl import Workbook
 
-from kg.parsing import (add_version, assign, create_template, effective_mappings,
-                        grouped_documents, run_parse, save_override,
-                        template_detail)
+from kg.parsing import (ParsingError, add_version, assign, create_template,
+                        effective_mappings, grouped_documents, run_parse,
+                        save_override, template_detail, unassign)
 from kg.store import KgStore
 
 
@@ -193,3 +193,124 @@ def test_declared_type_and_unit_normalization_are_applied(tmp_path):
     assert result["status"] == "SUCCESS"
     assert result["sources"][0]["value"] == pytest.approx(75.0)
     store.close()
+
+
+def test_document_can_carry_multiple_templates(tmp_path):
+    """N:M — 템플릿마다 파싱하려는 정보가 달라도 한 문서에 같이 배정된다."""
+    path = tmp_path / "coffee.xlsx"
+    _workbook(path)
+    store = KgStore(tmp_path / "kg.db")
+    document_id, version_id = _document(store, path)
+    create_template(store, "exp_view", "Experiment View", "financier")
+    add_version(store, "exp_view", _spec())
+    create_template(store, "cost_view", "Cost View", "financier")
+    add_version(store, "cost_view", {"sheet_templates": [{
+        "name": "cost", "match": {"names": ["190도"]}, "mappings": [{
+            "key": "unit_cost", "concept_id": "unit_cost",
+            "source": {"range": "G7:G7"}, "type": "number"}]}]})
+
+    assign(store, document_id, version_id, "exp_view", 1)
+    assign(store, document_id, version_id, "cost_view", 1)   # 교체가 아니라 추가
+    assigned = {r[0] for r in store.conn.execute(
+        "SELECT template_id FROM document_template_assignment WHERE document_version=?",
+        (version_id,))}
+    assert assigned == {"exp_view", "cost_view"}
+
+    merged = effective_mappings(store, version_id)
+    assert {(m["template_id"], m["mapping_key"]) for m in merged} == {
+        ("exp_view", "temperature"), ("exp_view", "weight"),
+        ("cost_view", "unit_cost")}
+    assert [m["mapping_key"] for m in
+            effective_mappings(store, version_id, "cost_view")] == ["unit_cost"]
+
+    with pytest.raises(ParsingError):        # 파싱은 템플릿 단위
+        run_parse(store, document_id, version_id, path)
+    exp = run_parse(store, document_id, version_id, path, "exp_view")
+    cost = run_parse(store, document_id, version_id, path, "cost_view")
+    assert exp["status"] == "SUCCESS" and cost["status"] == "SUCCESS"
+    assert {s["concept_id"] for s in cost["sources"]} == {"unit_cost"}
+    assert {s["concept_id"] for s in exp["sources"]} == {"oven_temperature", "weight"}
+
+    unassign(store, document_id, version_id, "exp_view")     # 해제는 그 템플릿만
+    assigned = {r[0] for r in store.conn.execute(
+        "SELECT template_id FROM document_template_assignment WHERE document_version=?",
+        (version_id,))}
+    assert assigned == {"cost_view"}
+    with pytest.raises(ParsingError):
+        unassign(store, document_id, version_id, "exp_view")
+    store.close()
+
+
+def test_override_and_version_audit_stay_per_template(tmp_path):
+    """같은 문서의 다른 템플릿 버전 교체가 서로의 override를 건드리지 않는다."""
+    path = tmp_path / "coffee.xlsx"
+    _workbook(path)
+    store = KgStore(tmp_path / "kg.db")
+    document_id, version_id = _document(store, path)
+    create_template(store, "a_view", "A", "financier")
+    add_version(store, "a_view", _spec("F7:F7"))
+    add_version(store, "a_view", _spec("H7:H7"))
+    create_template(store, "b_view", "B", "financier")
+    add_version(store, "b_view", _spec("F7:F7"))
+    assign(store, document_id, version_id, "a_view", 1)
+    assign(store, document_id, version_id, "b_view", 1)
+
+    b_weight = next(m for m in effective_mappings(store, version_id, "b_view")
+                    if m["mapping_key"] == "weight")
+    save_override(store, document_id, version_id, b_weight["mapping_id"],
+                  {"range": "G7:G7"}, "b만 예외", "tester")
+
+    upgraded = assign(store, document_id, version_id, "a_view", 2)  # a만 버전 교체
+    assert upgraded["status"] == "ASSIGNED"      # b의 override는 a와 무관하다
+    b_status = store.conn.execute(
+        """SELECT a.status FROM document_template_assignment a
+            WHERE a.document_version=? AND a.template_id='b_view'""",
+        (version_id,)).fetchone()[0]
+    assert b_status == "OVERRIDDEN"
+    b_weight2 = next(m for m in effective_mappings(store, version_id, "b_view")
+                     if m["mapping_key"] == "weight")
+    assert b_weight2["mapping_source"] == "MANUAL"
+    a_weight = next(m for m in effective_mappings(store, version_id, "a_view")
+                    if m["mapping_key"] == "weight")
+    assert a_weight["mapping_source"] == "TEMPLATE"   # 옆 템플릿 override 미전염
+    store.close()
+
+
+def test_legacy_one_to_one_assignment_db_migrates(tmp_path):
+    """옛 PK(document_id,document_version) DB를 열면 N:M PK로 재구축된다."""
+    db = tmp_path / "kg.db"
+    store = KgStore(db)
+    path = tmp_path / "coffee.xlsx"
+    _workbook(path)
+    document_id, version_id = _document(store, path)
+    create_template(store, "legacy", "Legacy", None)
+    add_version(store, "legacy", _spec())
+    assign(store, document_id, version_id, "legacy", 1)
+    # 옛(1:1) 형태로 강제 다운그레이드
+    store.conn.executescript("""
+        PRAGMA foreign_keys = OFF;
+        ALTER TABLE document_template_assignment RENAME TO _new;
+        CREATE TABLE document_template_assignment (
+            document_id TEXT NOT NULL, document_version TEXT NOT NULL,
+            template_id TEXT NOT NULL, template_version INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ASSIGNED', assigned_at TEXT NOT NULL,
+            PRIMARY KEY (document_id, document_version));
+        INSERT INTO document_template_assignment SELECT * FROM _new;
+        DROP TABLE _new;
+    """)
+    store.conn.commit()
+    store.close()
+
+    reopened = KgStore(db)                       # 여기서 마이그레이션
+    pk = [r[1] for r in reopened.conn.execute(
+        "PRAGMA table_info(document_template_assignment)") if r[5] > 0]
+    assert "template_id" in pk
+    row = reopened.conn.execute(
+        "SELECT template_id,template_version FROM document_template_assignment").fetchone()
+    assert (row[0], row[1]) == ("legacy", 1)     # 기존 배정 보존
+    create_template(reopened, "second", "Second", None)
+    add_version(reopened, "second", _spec())
+    assign(reopened, document_id, version_id, "second", 1)   # 이제 추가 배정 가능
+    assert reopened.conn.execute(
+        "SELECT count(*) FROM document_template_assignment").fetchone()[0] == 2
+    reopened.close()

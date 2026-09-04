@@ -1,5 +1,4 @@
-// Semantic Excel Integration — web_kg 4탭 UI의 React 포트.
-// web_kg(kg/web_kg)는 완전 대체 전까지 그대로 유지된다(이중 유지 의도).
+// Semantic Excel Integration — 유일한 웹 프론트 (React).
 // 기존 PDF 근거 뷰어는 ?legacy=1 로 접근할 수 있다.
 import { Suspense, lazy } from "react";
 import { StoreProvider, useStore } from "./lib/store";
@@ -8,6 +7,7 @@ import FilesScreen from "./screens/FilesScreen";
 import KgScreen from "./screens/KgScreen";
 import SourceScreen from "./screens/SourceScreen";
 import DbScreen from "./screens/DbScreen";
+import TemplatesScreen from "./screens/TemplatesScreen";
 import "./webkg.css";
 
 const LegacyViewer = lazy(() => import("./LegacyViewer"));
@@ -17,6 +17,7 @@ const STEPS: [Screen, string][] = [
   ["kg", "2. 개념 탐색"],
   ["source", "3. 원본 데이터"],
   ["db", "4. 통합 DB"],
+  ["templates", "5. 템플릿 관리"],
 ];
 
 function Shell() {
@@ -46,6 +47,7 @@ function Shell() {
           <KgScreen />
           <SourceScreen />
           <DbScreen />
+          <TemplatesScreen />
         </>
       )}
     </div>

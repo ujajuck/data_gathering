@@ -5,7 +5,7 @@ import { api, PALETTE, readCart, writeCart } from "./api";
 import type { CartItem } from "./api";
 import type { Concept, DkgSummary, DomainKg, FileRow, SearchResult } from "./types";
 
-export type Screen = "files" | "kg" | "source" | "db";
+export type Screen = "files" | "kg" | "source" | "db" | "templates";
 export interface SelNode { id: string; name: string; root: string | null }
 export interface SrcRequest { doc: string; sheet: string | null; node: string | null; seq: number }
 

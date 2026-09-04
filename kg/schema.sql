@@ -316,6 +316,8 @@ CREATE TABLE IF NOT EXISTS template_mapping (
     UNIQUE (sheet_template_id, mapping_key)
 );
 
+-- 한 문서(버전)에 템플릿 여러 개를 배정할 수 있다(N:M) — 템플릿마다
+-- 파싱하려는 정보가 다를 수 있다. 같은 템플릿은 버전 하나만 배정된다.
 CREATE TABLE IF NOT EXISTS document_template_assignment (
     document_id      TEXT NOT NULL REFERENCES document(document_id),
     document_version TEXT NOT NULL REFERENCES document_version(version_id),
@@ -325,7 +327,7 @@ CREATE TABLE IF NOT EXISTS document_template_assignment (
     assigned_at      TEXT NOT NULL,
     FOREIGN KEY (template_id, template_version)
       REFERENCES parsing_template_version(template_id, version),
-    PRIMARY KEY (document_id, document_version)
+    PRIMARY KEY (document_id, document_version, template_id)
 );
 
 CREATE TABLE IF NOT EXISTS document_override (

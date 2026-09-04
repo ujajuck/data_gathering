@@ -39,7 +39,7 @@ python -m kg.cli --ws domains/financier metrics                               # 
 python -m kg.webapp --ws domains/financier --port 8010                        # 웹 UI
 ```
 
-## 웹 UI (4탭)
+## 웹 UI (5탭)
 
 `kg/webapp.py` 서버 하나가 REST API와 React 프론트(`frontend/dist`)를
 루트 `/` 에 서빙한다 (`/app` 은 구 경로 호환). 바닐라 web_kg는 React 포트

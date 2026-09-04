@@ -315,14 +315,16 @@ def source_locator(store: KgStore, document_id: str, document_version: str,
                   "start_row", "start_col", "end_row", "end_col")},
               "a1_range": coordinates["a1_range"], "concept_id": concept_id,
               "sha256": metadata["sha256"]}
-    assignment = store.conn.execute(
+    rows = store.conn.execute(
         "SELECT template_id,template_version,status FROM document_template_assignment WHERE document_id=? AND document_version=?",
-        (document_id, document_version)).fetchone()
-    result["parsing_template"] = dict(assignment) if assignment else None
+        (document_id, document_version)).fetchall()
+    # N:M — 배정 전체를 내려주되, 이 위치와 일치하는 매핑의 템플릿을 대표로 둔다
+    result["parsing_templates"] = [dict(r) for r in rows]
+    result["parsing_template"] = dict(rows[0]) if rows else None
     result["template_source"] = None
     result["effective_source"] = None
     result["mapping_source"] = None
-    if assignment:
+    if rows:
         from kg.parsing import effective_mappings
         candidates = effective_mappings(store, document_version)
         mapping = next((item for item in candidates
@@ -330,6 +332,9 @@ def source_locator(store: KgStore, document_id: str, document_version: str,
                         and (item["effective_source"].get("sheet", sheet) == sheet)
                         and item["effective_source"].get("range") == coordinates["a1_range"]), None)
         if mapping:
+            result["parsing_template"] = next(
+                (dict(r) for r in rows if r["template_id"] == mapping["template_id"]),
+                result["parsing_template"])
             result["template_source"] = mapping["template_source"]
             result["effective_source"] = mapping["effective_source"]
             result["mapping_source"] = mapping["mapping_source"]

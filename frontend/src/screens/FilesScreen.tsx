@@ -138,11 +138,11 @@ export default function FilesScreen() {
     let rows = s.files.filter((f) =>
       !q || f.filename.toLowerCase().includes(q) ||
       (f.author || "").toLowerCase().includes(q) ||
-      (f.template_name || "").toLowerCase().includes(q));
+      (f.templates || []).some((t) => t.name.toLowerCase().includes(q)));
     if (dateFrom) rows = rows.filter((f) => (f.created || "").slice(0, 10) >= dateFrom);
     if (dateTo) rows = rows.filter((f) => (f.created || "").slice(0, 10) <= dateTo);
     if (tplFilter !== "all")
-      rows = rows.filter((f) => (tplFilter === "assigned") === !!f.template_name);
+      rows = rows.filter((f) => (tplFilter === "assigned") === !!(f.templates || []).length);
     return [...rows].sort((a, b) => {
       const va = a[sort.key] ?? "", vb = b[sort.key] ?? "";
       const cmp = typeof va === "number" && typeof vb === "number"
@@ -315,10 +315,12 @@ export default function FilesScreen() {
                       style={{ borderColor: s.dkgColor(g.id), color: s.dkgColor(g.id) }}>
                       {g.name}</span>
                   )) : "—"}</td>
-                  <td>{f.template_name ? (
-                    <span className="badge blue" title="파싱 스크립트 기준 분류">
-                      {f.template_name}{f.template_version ? ` v${f.template_version}` : ""}</span>
-                  ) : (
+                  <td>{(f.templates || []).length ? (f.templates || []).map((t) => (
+                    <span key={t.template_id} className="badge blue"
+                      title={`파싱 템플릿 — ${t.status}`}
+                      style={{ marginRight: 4 }}>
+                      {t.name} v{t.version}</span>
+                  )) : (
                     <span className="badge" style={{ color: "var(--muted)" }}>미배정</span>
                   )}</td>
                   <td>{f.headers}</td>

@@ -116,6 +116,22 @@ def template_detail(store: KgStore, template_id: str) -> dict:
     return out
 
 
+def update_template(store: KgStore, template_id: str, name: str | None = None,
+                    lifecycle: str | None = None) -> dict:
+    template_detail(store, template_id)          # unknown template → error
+    if lifecycle is not None:
+        if lifecycle not in LIFECYCLES:
+            raise ParsingError("invalid template lifecycle")
+        store.conn.execute("UPDATE parsing_template SET lifecycle=? WHERE template_id=?",
+                           (lifecycle, template_id))
+    if name is not None:
+        if not name.strip():
+            raise ParsingError("template name must not be empty")
+        store.conn.execute("UPDATE parsing_template SET name=? WHERE template_id=?",
+                           (name.strip(), template_id))
+    return template_detail(store, template_id)
+
+
 def version_detail(store: KgStore, template_id: str, version: int) -> dict:
     row = store.conn.execute(
         "SELECT * FROM parsing_template_version WHERE template_id=? AND version=?",
@@ -145,26 +161,55 @@ def version_detail(store: KgStore, template_id: str, version: int) -> dict:
 
 def assign(store: KgStore, document_id: str, document_version: str,
            template_id: str, template_version: int) -> dict:
+    """템플릿 배정 — 문서:템플릿은 N:M이다 (템플릿마다 파싱 관점이 다르다).
+
+    다른 템플릿의 기존 배정은 건드리지 않고 추가한다. 같은 템플릿을 다시
+    배정하면 버전 교체이며, 이때만 기존 수동 override를 감사한다.
+    """
     docver = store.conn.execute(
         "SELECT document_id FROM document_version WHERE version_id=?", (document_version,)).fetchone()
     if docver is None or docver["document_id"] != document_id:
         raise ParsingError("document version does not belong to document")
     version_detail(store, template_id, template_version)
     previous = store.conn.execute(
-        "SELECT template_id,template_version FROM document_template_assignment WHERE document_version=?",
-        (document_version,)).fetchone()
+        """SELECT template_version FROM document_template_assignment
+            WHERE document_version=? AND template_id=?""",
+        (document_version, template_id)).fetchone()
     store.conn.execute(
         """INSERT INTO document_template_assignment VALUES (?,?,?,?,?,?)
-           ON CONFLICT(document_id,document_version) DO UPDATE SET
-             template_id=excluded.template_id, template_version=excluded.template_version,
+           ON CONFLICT(document_id,document_version,template_id) DO UPDATE SET
+             template_version=excluded.template_version,
              status='ASSIGNED', assigned_at=excluded.assigned_at""",
         (document_id, document_version, template_id, template_version, "ASSIGNED", now_iso()))
-    if previous and (previous["template_id"], previous["template_version"]) != \
-            (template_id, template_version):
+    if previous and previous["template_version"] != template_version:
         _audit_overrides(store, document_version, template_id, template_version)
     return dict(store.conn.execute(
-        "SELECT * FROM document_template_assignment WHERE document_version=?",
-        (document_version,)).fetchone())
+        """SELECT * FROM document_template_assignment
+            WHERE document_version=? AND template_id=?""",
+        (document_version, template_id)).fetchone())
+
+
+def unassign(store: KgStore, document_id: str, document_version: str,
+             template_id: str) -> dict:
+    """배정 해제. 해당 템플릿 매핑에 대한 수동 override는 지우지 않는다 —
+    다시 배정하면 그대로 되살아난다 (사람 판단은 불가침)."""
+    cur = store.conn.execute(
+        """DELETE FROM document_template_assignment
+            WHERE document_id=? AND document_version=? AND template_id=?""",
+        (document_id, document_version, template_id))
+    if cur.rowcount == 0:
+        raise ParsingError("template is not assigned to this document version")
+    return {"ok": True, "document_id": document_id,
+            "document_version": document_version, "template_id": template_id}
+
+
+def assignments(store: KgStore, document_version: str) -> list[dict]:
+    rows = store.conn.execute(
+        """SELECT a.*,t.name template_name FROM document_template_assignment a
+             JOIN parsing_template t ON t.template_id=a.template_id
+            WHERE a.document_version=? ORDER BY t.name""",
+        (document_version,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def _audit_overrides(store: KgStore, document_version: str,
@@ -184,8 +229,9 @@ def _audit_overrides(store: KgStore, document_version: str,
                AND new_st.template_version=? AND new_st.name=old_st.name
              LEFT JOIN template_mapping new_tm ON new_tm.sheet_template_id=new_st.sheet_template_id
                AND new_tm.mapping_key=old_tm.mapping_key
-            WHERE o.document_version=? AND o.status IN ('APPROVED','CONFLICT','REDUNDANT')""",
-        (template_id, template_version, document_version)).fetchall()
+            WHERE o.document_version=? AND old_st.template_id=?
+              AND o.status IN ('APPROVED','CONFLICT','REDUNDANT')""",
+        (template_id, template_version, document_version, template_id)).fetchall()
     audits = []
     conflicts = False
     for row in rows:
@@ -201,25 +247,27 @@ def _audit_overrides(store: KgStore, document_version: str,
                        "template_source": new_source, "manual_source": override_source})
     if conflicts:
         store.conn.execute(
-            "UPDATE document_template_assignment SET status='REVIEW_REQUIRED' WHERE document_version=?",
-            (document_version,))
+            """UPDATE document_template_assignment SET status='REVIEW_REQUIRED'
+                WHERE document_version=? AND template_id=?""",
+            (document_version, template_id))
     return audits
 
 
 def save_override(store: KgStore, document_id: str, document_version: str,
                   template_mapping_id: str, source: dict, reason: str | None,
                   created_by: str | None, status: str = "APPROVED") -> dict:
-    assignment = store.conn.execute(
-        "SELECT * FROM document_template_assignment WHERE document_id=? AND document_version=?",
-        (document_id, document_version)).fetchone()
+    # 매핑이 속한 템플릿을 찾아, 그 템플릿(같은 버전)이 이 문서에 배정되어
+    # 있는지 검증한다 — N:M이므로 "배정된 템플릿 중 하나"면 된다.
     mapping = store.conn.execute(
-        """SELECT tm.* FROM template_mapping tm JOIN sheet_template st
-             ON st.sheet_template_id=tm.sheet_template_id
-           WHERE tm.mapping_id=? AND st.template_id=? AND st.template_version=?""",
-        (template_mapping_id, assignment["template_id"] if assignment else "",
-         assignment["template_version"] if assignment else -1)).fetchone()
-    if assignment is None or mapping is None:
-        raise ParsingError("override mapping is not part of the assigned template version")
+        """SELECT tm.*,st.template_id,st.template_version FROM template_mapping tm
+             JOIN sheet_template st ON st.sheet_template_id=tm.sheet_template_id
+             JOIN document_template_assignment a
+               ON a.template_id=st.template_id AND a.template_version=st.template_version
+              AND a.document_id=? AND a.document_version=?
+           WHERE tm.mapping_id=?""",
+        (document_id, document_version, template_mapping_id)).fetchone()
+    if mapping is None:
+        raise ParsingError("override mapping is not part of an assigned template version")
     if not isinstance(source, dict) or not source.get("range"):
         raise ParsingError("override_source.range is required")
     existing = store.conn.execute(
@@ -235,8 +283,9 @@ def save_override(store: KgStore, document_id: str, document_version: str,
         (oid, document_id, document_version, template_mapping_id, _dump(source), status,
          reason, created_by, created, now_iso()))
     store.conn.execute(
-        "UPDATE document_template_assignment SET status='OVERRIDDEN' WHERE document_version=?",
-        (document_version,))
+        """UPDATE document_template_assignment SET status='OVERRIDDEN'
+            WHERE document_version=? AND template_id=?""",
+        (document_version, mapping["template_id"]))
     return override_detail(store, oid)
 
 
@@ -250,11 +299,24 @@ def override_detail(store: KgStore, override_id: str) -> dict:
     return out
 
 
-def effective_mappings(store: KgStore, document_version: str) -> list[dict]:
-    assignment = store.conn.execute(
-        "SELECT * FROM document_template_assignment WHERE document_version=?", (document_version,)).fetchone()
-    if assignment is None:
+def effective_mappings(store: KgStore, document_version: str,
+                       template_id: str | None = None) -> list[dict]:
+    """배정된 템플릿(들)의 유효 매핑. N:M이므로 기본은 전 템플릿을 합쳐
+    template_id/template_version 태그를 달아 돌려주고, template_id로 좁힐 수 있다."""
+    rows_a = store.conn.execute(
+        "SELECT * FROM document_template_assignment WHERE document_version=?"
+        + (" AND template_id=?" if template_id else ""),
+        (document_version, template_id) if template_id else (document_version,)).fetchall()
+    if not rows_a:
         raise ParsingError("document version has no template assignment")
+    result: list[dict] = []
+    for assignment in rows_a:
+        result.extend(_template_effective_mappings(store, document_version, assignment))
+    return result
+
+
+def _template_effective_mappings(store: KgStore, document_version: str,
+                                 assignment) -> list[dict]:
     rows = store.conn.execute(
         """SELECT tm.*,st.name sheet_template,st.matcher_json,o.override_id,
                   o.override_source_json,o.status override_status,o.reason override_reason
@@ -263,8 +325,9 @@ def effective_mappings(store: KgStore, document_version: str) -> list[dict]:
              LEFT JOIN (
                SELECT * FROM (
                  SELECT o.*,old_tm.mapping_key,old_st.name sheet_name,
+                        old_st.template_id o_template_id,
                         row_number() OVER (
-                          PARTITION BY old_st.name,old_tm.mapping_key
+                          PARTITION BY old_st.template_id,old_st.name,old_tm.mapping_key
                           ORDER BY o.updated_at DESC,o.override_id DESC) override_rank
                    FROM document_override o
                    JOIN template_mapping old_tm ON old_tm.mapping_id=o.template_mapping_id
@@ -272,12 +335,16 @@ def effective_mappings(store: KgStore, document_version: str) -> list[dict]:
                   WHERE o.document_version=? AND o.status IN ('APPROVED','CONFLICT')
                ) WHERE override_rank=1
              ) o ON o.mapping_key=tm.mapping_key AND o.sheet_name=st.name
+                AND o.o_template_id=st.template_id
             WHERE st.template_id=? AND st.template_version=?
             ORDER BY st.ordinal,tm.mapping_key""",
         (document_version, assignment["template_id"], assignment["template_version"])).fetchall()
     result = []
     for row in rows:
         item = dict(row)
+        item.pop("o_template_id", None)
+        item["template_id"] = assignment["template_id"]
+        item["template_version"] = assignment["template_version"]
         item["matcher"] = _load(item.pop("matcher_json"))
         item["template_source"] = _load(item.pop("source_json"))
         override = _load(item.pop("override_source_json"), None)
@@ -359,13 +426,22 @@ def _normalize_value(value, mapping: dict):
                            mapping.get("normalization", {}))
 
 
-def prepare_parse(store: KgStore, document_id: str, document_version: str) -> tuple[dict, list[dict]]:
-    assignment = store.conn.execute(
-        "SELECT * FROM document_template_assignment WHERE document_id=? AND document_version=?",
-        (document_id, document_version)).fetchone()
-    if assignment is None:
+def prepare_parse(store: KgStore, document_id: str, document_version: str,
+                  template_id: str | None = None) -> tuple[dict, list[dict]]:
+    """파싱은 템플릿 단위로 돈다 — 배정이 여럿이면 template_id를 지정해야 한다."""
+    query = "SELECT * FROM document_template_assignment WHERE document_id=? AND document_version=?"
+    params: list = [document_id, document_version]
+    if template_id:
+        query += " AND template_id=?"
+        params.append(template_id)
+    rows = store.conn.execute(query, params).fetchall()
+    if not rows:
         raise ParsingError("document version has no template assignment")
-    return dict(assignment), effective_mappings(store, document_version)
+    if len(rows) > 1:
+        raise ParsingError("multiple templates assigned — specify template_id")
+    assignment = dict(rows[0])
+    return assignment, effective_mappings(store, document_version,
+                                          assignment["template_id"])
 
 
 def extract_workbook(path: Path, mappings: list[dict]) -> list[dict]:
@@ -432,14 +508,16 @@ def save_parse_run(store: KgStore, document_id: str, document_version: str,
            WHERE parse_run_id=?""",
         (now_iso(), final, len(extracted), overrides, warnings, run_id))
     store.conn.execute(
-        "UPDATE document_template_assignment SET status=? WHERE document_version=?",
-        (assignment_status, document_version))
+        """UPDATE document_template_assignment SET status=?
+            WHERE document_version=? AND template_id=?""",
+        (assignment_status, document_version, assignment["template_id"]))
     return parse_result(store, run_id)
 
 
 def run_parse(store: KgStore, document_id: str, document_version: str,
-              path: Path) -> dict:
-    assignment, mappings = prepare_parse(store, document_id, document_version)
+              path: Path, template_id: str | None = None) -> dict:
+    assignment, mappings = prepare_parse(store, document_id, document_version,
+                                         template_id)
     return save_parse_run(store, document_id, document_version, assignment,
                           extract_workbook(path, mappings))
 
