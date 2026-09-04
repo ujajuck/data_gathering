@@ -113,7 +113,13 @@ export default function SourceScreen() {
 
   return (
     <section className={`screen${s.screen === "source" ? " active" : ""}`}>
-      <div className="crumb"><b>전체 개념</b> › {crumbParts.join(" › ")}</div>
+      <div className="crumb" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        {s.selDkg && (
+          <button className="tinyTab" title="문서군 상세로 돌아가기"
+            onClick={() => s.show("kg")}>← 문서군으로</button>
+        )}
+        <span><b>전체 개념</b> › {crumbParts.join(" › ")}</span>
+      </div>
       <div className="excelLayout">
         <aside className="panel pad">
           <div className="kicker">SOURCE LOCATIONS</div>

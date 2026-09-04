@@ -38,8 +38,10 @@ function NodeDetailPanel({ onOpenDocKg, onOpenSource, onEdit }: {
           <div style={{ marginTop: 14 }} className="kicker">CONNECTED DOCUMENT GROUP</div>
           <div className="dkgCard" onClick={onOpenDocKg}>
             <b style={{ color: s.dkgColor(g.id) }}>{g.name}</b>
-            <div>{g.member_document_count}문서 · {g.domain_node_ids.slice(0, 4).map((i) =>
-              (s.domain?.nodes.find((x) => x.id === i) || { name: i }).name).join(" / ")}</div>
+            <div>개념 {g.domain_node_ids.length} · 문서 {g.member_document_count} —{" "}
+              {g.domain_node_ids.slice(0, 4).map((i) =>
+                (s.domain?.nodes.find((x) => x.id === i) || { name: i }).name).join(" / ")}
+              {g.domain_node_ids.length > 4 ? ` 외 ${g.domain_node_ids.length - 4}개` : ""}</div>
           </div>
         </>
       )}
@@ -166,10 +168,11 @@ export default function KgScreen() {
         recrawlRun={recrawlRuns[s.selDkg] || null}
         recrawlBusy={!!recrawlBusy[s.selDkg]}
         onStartRecrawl={(mode) => { startRecrawl(s.selDkg!, mode).catch(() => {}); }}
-        onOpenSource={() => {
+        onOpenDocument={(documentId) => {
+          s.setSelDkgDoc(documentId);
           s.setReviewDoc(null);
           s.show("source");
-          if (s.selDkgDoc) s.requestSheet(s.selDkgDoc, null, null);
+          s.requestSheet(documentId, null, null);
         }}
         onBackDomain={() => { s.setSelDkg(null); setDocMode(false); setDetail(null); }} />;
     }
@@ -218,8 +221,8 @@ export default function KgScreen() {
                 <div key={x.id} className={`dkgCard${s.selDkg === x.id ? " sel" : ""}`}
                   onClick={() => selectDkg(x.id, true)}>
                   <b style={{ color: s.dkgColor(x.id) }}>{x.name}</b>
-                  <div>{x.member_document_count}개 문서 · {x.domain_node_ids.length}개 노드 ·
-                    {" "}{x.source_location_count} 위치</div>
+                  <div>개념 {x.domain_node_ids.length} · 문서 {x.member_document_count} ·
+                    {" "}위치 {x.source_location_count}</div>
                 </div>
               ))}
             </div>

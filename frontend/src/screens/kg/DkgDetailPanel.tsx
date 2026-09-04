@@ -12,7 +12,7 @@ interface Props {
   recrawlRun: RecrawlRun | null;
   recrawlBusy: boolean;
   onStartRecrawl: (mode: string) => void;
-  onOpenSource: () => void;
+  onOpenDocument: (documentId: string) => void;
   onBackDomain: () => void;
 }
 
@@ -33,15 +33,15 @@ function RecrawlBadges({ d }: { d: RecrawlDocSummary }) {
 }
 
 export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
-  onStartRecrawl, onOpenSource, onBackDomain }: Props) {
+  onStartRecrawl, onOpenDocument, onBackDomain }: Props) {
   const s = useStore();
   const [status, setStatus] = useState("");
   const [hist, setHist] = useState<HistRow[] | null>(null);
   const [snapBusy, setSnapBusy] = useState(false);
   const [mode, setMode] = useState("fill");
+  const [openTpl, setOpenTpl] = useState<string | null>(null);  // 문서 표 펼친 템플릿
 
   const color = s.dkgColor(g.id);
-  const selDoc = (g.member_documents || []).find((d) => d.document_id === s.selDkgDoc);
   const rec = g.recipe;
   const memberIds = new Set((g.member_documents || []).map((d) => d.document_id));
   const addable = s.files.filter((f) => !memberIds.has(f.document_id));
@@ -93,75 +93,84 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
     <>
       <div className="kicker">SELECTED DOCUMENT GROUP</div>
       <div className="title" style={{ color }}>{g.name}</div>
-      <div className="sub">문서군은 공유 양식(템플릿)으로 정의됩니다 — 양식과,
-        그 인스턴스인 소속 문서를 보여줍니다.</div>
+      <div className="sub">문서군[개념] → 템플릿(파싱 스크립트 기준 분류) → 문서</div>
       <div className="metricGrid">
-        <div className="metric"><span>소속 문서</span><b>{g.member_document_count}</b></div>
-        <div className="metric"><span>Domain Node</span><b>{g.domain_node_ids.length}</b></div>
+        <div className="metric"><span>개념</span><b>{g.domain_node_ids.length}</b></div>
+        <div className="metric"><span>문서</span><b>{g.member_document_count}</b></div>
         <div className="metric"><span>Source 위치</span><b>{g.source_location_count}</b></div>
         <div className="metric"><span>값</span><b>{g.value_count.toLocaleString()}</b></div>
       </div>
 
-      {/* 양식 계층: 문서군 → 양식 → 문서(인스턴스). 양식 미배정 멤버는
-          '기타' 그룹으로 — 계층이 중간에 항상 존재한다. */}
-      <div style={{ marginTop: 13 }} className="kicker">양식 → 문서 (TEMPLATE HIERARCHY)</div>
-      <div style={{ maxHeight: "30vh", overflowY: "auto" }}>
-        {(() => {
-          const templated = new Set<string>();
-          for (const t of g.parsing_templates || [])
-            for (const d of t.documents) if (d.document_id) templated.add(d.document_id);
-          const members = g.member_documents || [];
-          const memberRow = (d: typeof members[number],
-                             extra?: { override_count?: number; status?: string }) => (
-            <div key={d.document_id}
-              className={`fileRow${s.selDkgDoc === d.document_id ? " sel" : ""}`}
-              style={{ paddingLeft: 10 }}
-              onClick={() => s.setSelDkgDoc(d.document_id)}>
-              <b>▤ {d.filename}</b>
-              {d.override === "INCLUDED" && <span className="badge blue"> 고정</span>}
-              {extra?.override_count ? <b style={{ color: "var(--amber)", fontSize: 11 }}> override {extra.override_count}</b> : null}
-              {extra?.status === "REVIEW_REQUIRED" ? <b style={{ color: "var(--amber)", fontSize: 11 }}> 검토 필요</b> : null}
-              <div>{d.nodes.slice(0, 4).join(" · ") || "(매핑 없음)"} · {d.sources} src{" "}
-                <button title="이 그룹에서 제외 (매핑/빌드 소스는 유지)"
-                  style={{ border: 0, background: "none", color: "var(--red)", cursor: "pointer" }}
-                  onClick={(ev) => { ev.stopPropagation(); member(d.document_id, "EXCLUDED"); }}>
-                  제외</button>
+      {/* 계층은 템플릿까지만 펼쳐 보인다 — 문서 목록은 '문서 N개'를 눌러야
+          표로 열린다 (문서군 → 템플릿 → 문서 개수). */}
+      <div style={{ marginTop: 13 }} className="kicker">템플릿 (파싱 스크립트 기준 분류)</div>
+      {(() => {
+        const members = g.member_documents || [];
+        const templated = new Set<string>();
+        const groups: { label: string; badge?: string; review: number;
+          docs: typeof members }[] = [];
+        for (const t of g.parsing_templates || []) {
+          const ids = new Set(t.documents.map((d) => d.document_id).filter(Boolean));
+          for (const id of ids) templated.add(id as string);
+          groups.push({ label: `${t.template_name} v${t.version}`,
+            review: t.review_required,
+            docs: members.filter((d) => ids.has(d.document_id)) });
+        }
+        groups.push({ label: "기타 (템플릿 미배정)", review: 0,
+          docs: members.filter((d) => !templated.has(d.document_id)) });
+        const docTable = (docs: typeof members) => (
+          <div style={{ marginTop: 6, border: "1px solid var(--line)",
+            borderRadius: 8, maxHeight: "26vh", overflowY: "auto" }}>
+            <table className="table">
+              <thead><tr><th>문서</th>
+                <th style={{ whiteSpace: "nowrap" }}>개념</th>
+                <th style={{ whiteSpace: "nowrap" }}>위치</th><th></th></tr></thead>
+              <tbody>
+                {docs.map((d) => (
+                  <tr key={d.document_id}
+                    style={{ cursor: "pointer",
+                      background: s.selDkgDoc === d.document_id ? "var(--blue2)" : undefined }}
+                    title="클릭하면 원본 데이터로 이동합니다"
+                    onClick={() => onOpenDocument(d.document_id)}>
+                    <td><b>{d.filename}</b>
+                      {d.override === "INCLUDED" && <span className="badge blue"> 고정</span>}</td>
+                    <td title={d.nodes.join(", ")}>{d.nodes.length}개</td>
+                    <td>{d.sources}</td>
+                    <td><button title="이 그룹에서 제외 (매핑/빌드 소스는 유지)"
+                      style={{ border: 0, background: "none", color: "var(--red)",
+                        cursor: "pointer" }}
+                      onClick={(ev) => { ev.stopPropagation(); member(d.document_id, "EXCLUDED"); }}>
+                      제외</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+        return groups.map((grp) => {
+          const isEtc = grp.label.startsWith("기타");
+          if (isEtc && !grp.docs.length) return null;   // 미배정이 없으면 숨김
+          const open = openTpl === grp.label;
+          return (
+            <div key={grp.label} className="dkgCard" style={{ cursor: "default",
+              borderLeft: `4px solid ${isEtc ? "var(--line)" : "var(--purple)"}` }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <b style={{ color: isEtc ? "var(--muted)" : "var(--purple)" }}>▣ {grp.label}</b>
+                {grp.review ? <span className="badge amber">검토 {grp.review}</span> : null}
+                <button className="secondary"
+                  style={{ marginLeft: "auto", padding: "4px 9px", fontSize: 12 }}
+                  onClick={() => setOpenTpl(open ? null : grp.label)}>
+                  문서 {grp.docs.length}개 {open ? "▴" : "▾"}</button>
               </div>
+              {open && (grp.docs.length ? docTable(grp.docs)
+                : <div className="empty">소속 문서가 없습니다</div>)}
             </div>
           );
-          const etc = members.filter((d) => !templated.has(d.document_id));
-          return (
-            <>
-              {(g.parsing_templates || []).map((t) => {
-                const byId = new Map(t.documents
-                  .filter((d) => d.document_id)
-                  .map((d) => [d.document_id as string, d]));
-                const mine = members.filter((d) => byId.has(d.document_id));
-                return (
-                  <div key={`${t.template_name}-${t.version}`} className="dkgCard"
-                    style={{ cursor: "default", borderLeft: "4px solid var(--purple)" }}>
-                    <b style={{ color: "var(--purple)" }}>▣ {t.template_name}{" "}
-                      <span className="badge blue">v{t.version}</span></b>
-                    <div>{mine.length}개 문서 · Override 문서 {t.override_documents} ·
-                      검토 {t.review_required} · 실패 {t.failed}</div>
-                    {mine.map((d) => memberRow(d, byId.get(d.document_id)))}
-                  </div>
-                );
-              })}
-              <div className="dkgCard"
-                style={{ cursor: "default", borderLeft: "4px solid var(--line)" }}>
-                <b style={{ color: "var(--muted)" }}>▣ 기타 (양식 미배정)</b>
-                <div>{etc.length}개 문서 — 기존 개념 매핑/레시피 흐름으로 유지됩니다</div>
-                {etc.length ? etc.map((d) => memberRow(d))
-                  : <div className="empty" style={{ padding: "4px 0" }}>없음 — 모든 문서에 양식이 배정되어 있습니다</div>}
-              </div>
-            </>
-          );
-        })()}
-      </div>
+        });
+      })()}
       <div className="sub" style={{ fontSize: 11 }}>
-        ▣ 문서군의 1차 연결은 양식입니다 — 문서는 양식의 인스턴스이며, 양식
-        미배정 문서는 '기타' 아래에서 멤버십(포함/제외)으로 직접 연결됩니다.</div>
+        문서 개수를 누르면 문서 목록이 열리고, 문서를 누르면 원본 데이터로
+        이동합니다.</div>
       {addable.length > 0 && (
         <div style={{ display: "flex", gap: 6, marginTop: 7 }} className="editForm">
           <select style={{ flex: 1, marginTop: 0 }} value=""
@@ -251,8 +260,6 @@ export default function DkgDetailPanel({ g, recrawlRun, recrawlBusy,
       </div>
 
       <div className="rightBtns">
-        <button className="primary" disabled={!selDoc} onClick={onOpenSource}>
-          선택 문서의 원본 위치 보기</button>
         <button className="secondary" onClick={onBackDomain}>전체 개념으로 돌아가기</button>
       </div>
       <div className="status">{status}</div>
