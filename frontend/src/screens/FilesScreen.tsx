@@ -11,7 +11,9 @@ const FBADGE: Record<string, [string, string]> = {
 
 interface RawInfo { document_id: string; suggestions: RawSuggestion[]; picked: string }
 
-type SortKey = "filename" | "author" | "created" | "headers" | "coverage_pct" | "review";
+type SortKey = "filename" | "author" | "created" | "template_name"
+  | "headers" | "coverage_pct" | "review";
+type TplFilter = "all" | "assigned" | "none";
 
 export default function FilesScreen() {
   const s = useStore();
@@ -26,6 +28,7 @@ export default function FilesScreen() {
   const [query, setQuery] = useState("");            // 파일명/작성자 검색
   const [dateFrom, setDateFrom] = useState("");      // 작성일 범위 필터
   const [dateTo, setDateTo] = useState("");
+  const [tplFilter, setTplFilter] = useState<TplFilter>("all");  // 템플릿 배정 여부
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>(
     { key: "filename", dir: 1 });
 
@@ -129,21 +132,24 @@ export default function FilesScreen() {
     }
   };
 
-  // 검색(파일명/작성자) → 작성일 범위 필터 → 정렬
+  // 검색(파일명/작성자/템플릿) → 작성일 범위 → 템플릿 배정 여부 필터 → 정렬
   const visibleFiles = useMemo(() => {
     const q = query.trim().toLowerCase();
     let rows = s.files.filter((f) =>
       !q || f.filename.toLowerCase().includes(q) ||
-      (f.author || "").toLowerCase().includes(q));
+      (f.author || "").toLowerCase().includes(q) ||
+      (f.template_name || "").toLowerCase().includes(q));
     if (dateFrom) rows = rows.filter((f) => (f.created || "").slice(0, 10) >= dateFrom);
     if (dateTo) rows = rows.filter((f) => (f.created || "").slice(0, 10) <= dateTo);
+    if (tplFilter !== "all")
+      rows = rows.filter((f) => (tplFilter === "assigned") === !!f.template_name);
     return [...rows].sort((a, b) => {
       const va = a[sort.key] ?? "", vb = b[sort.key] ?? "";
       const cmp = typeof va === "number" && typeof vb === "number"
         ? va - vb : String(va).localeCompare(String(vb), "ko");
       return cmp * sort.dir;
     });
-  }, [s.files, query, dateFrom, dateTo, sort]);
+  }, [s.files, query, dateFrom, dateTo, tplFilter, sort]);
 
   const Th = ({ k, children }: { k: SortKey; children: React.ReactNode }) => (
     <th style={{ cursor: "pointer", whiteSpace: "nowrap", userSelect: "none" }}
@@ -263,7 +269,7 @@ export default function FilesScreen() {
           파일은 data/raw에 두면 위 미등록 목록에 나타납니다.</div>
         <div className="editForm"
           style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
-          <input placeholder="파일명 / 작성자 검색" value={query}
+          <input placeholder="파일명 / 작성자 / 템플릿 검색" value={query}
             style={{ flex: "1 1 220px", marginTop: 0 }}
             onChange={(e) => setQuery(e.target.value)} />
           <label style={{ fontSize: 11, color: "var(--muted)", marginTop: 0 }}>작성일</label>
@@ -272,9 +278,17 @@ export default function FilesScreen() {
           <span className="muted">~</span>
           <input type="date" value={dateTo} style={{ width: 150, marginTop: 0 }}
             onChange={(e) => setDateTo(e.target.value)} />
-          {(query || dateFrom || dateTo) && (
+          <span style={{ display: "inline-flex", gap: 4 }}>
+            {([["all", "전체"], ["assigned", "템플릿 배정"], ["none", "미배정"]] as
+              [TplFilter, string][]).map(([k, label]) => (
+              <span key={k} className={`chip pick${tplFilter === k ? " sel" : ""}`}
+                onClick={() => setTplFilter(k)}>{label}</span>
+            ))}
+          </span>
+          {(query || dateFrom || dateTo || tplFilter !== "all") && (
             <button className="secondary"
-              onClick={() => { setQuery(""); setDateFrom(""); setDateTo(""); }}>초기화</button>
+              onClick={() => { setQuery(""); setDateFrom(""); setDateTo(""); setTplFilter("all"); }}>
+              초기화</button>
           )}
           <span className="muted" style={{ fontSize: 12 }}>
             {visibleFiles.length} / {s.files.length}건</span>
@@ -282,7 +296,8 @@ export default function FilesScreen() {
         <table className="table" style={{ marginTop: 10 }}>
           <thead><tr>
             <Th k="filename">파일</Th><Th k="author">작성자</Th><Th k="created">작성일</Th>
-            <th>문서군</th><Th k="headers">매핑 노드</Th><Th k="coverage_pct">개념 매핑</Th>
+            <th>문서군</th><Th k="template_name">템플릿</Th>
+            <Th k="headers">매핑 노드</Th><Th k="coverage_pct">개념 매핑</Th>
             <Th k="review">검토</Th><th>DRM / Viewer</th><th>상태</th><th></th></tr></thead>
           <tbody>
             {visibleFiles.length ? visibleFiles.map((f) => {
@@ -300,6 +315,12 @@ export default function FilesScreen() {
                       style={{ borderColor: s.dkgColor(g.id), color: s.dkgColor(g.id) }}>
                       {g.name}</span>
                   )) : "—"}</td>
+                  <td>{f.template_name ? (
+                    <span className="badge blue" title="파싱 스크립트 기준 분류">
+                      {f.template_name}{f.template_version ? ` v${f.template_version}` : ""}</span>
+                  ) : (
+                    <span className="badge" style={{ color: "var(--muted)" }}>미배정</span>
+                  )}</td>
                   <td>{f.headers}</td>
                   <td>{f.coverage_pct}%</td>
                   <td>{f.review ? (
@@ -320,7 +341,7 @@ export default function FilesScreen() {
                 </tr>
               );
             }) : (
-              <tr><td colSpan={10} className="empty">
+              <tr><td colSpan={11} className="empty">
                 {s.files.length
                   ? "검색/필터 조건에 맞는 파일이 없습니다"
                   : "등록된 파일이 없습니다 — kg ingest를 먼저 실행하세요"}</td></tr>
