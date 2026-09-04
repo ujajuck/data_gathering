@@ -2051,6 +2051,38 @@ def create_app(ws_root: str | Path) -> FastAPI:
             "preview": preview,
         }
 
+    @app.get("/api/build/{build_id}/download")
+    def build_download(build_id: str, format: str = "db"):
+        """산출 DB 반환 — 빌드 결과를 실제 파일로 내려준다 (.db 또는 .csv)."""
+        with lock:
+            row = store.conn.execute(
+                "SELECT output_db, output_table FROM build_run WHERE build_id=?",
+                (build_id,)).fetchone()
+        if row is None or not row["output_db"]:
+            raise HTTPException(404, "unknown build")
+        db_path = Path(row["output_db"])
+        if not db_path.exists():
+            raise HTTPException(410, "build artifact was removed — 다시 생성하세요")
+        if format == "csv":
+            import csv
+            import io
+            import sqlite3 as _sq
+            con = _sq.connect(db_path)
+            try:
+                cur = con.execute(f'SELECT * FROM "{row["output_table"]}"')
+                buf = io.StringIO()
+                w = csv.writer(buf)
+                w.writerow([c[0] for c in cur.description])
+                w.writerows(cur)
+            finally:
+                con.close()
+            return PlainTextResponse(buf.getvalue(), headers={
+                "Content-Disposition":
+                    f'attachment; filename="{db_path.stem}.csv"'},
+                media_type="text/csv; charset=utf-8")
+        return FileResponse(db_path, filename=db_path.name,
+                            media_type="application/octet-stream")
+
     # ==================================================== KG2: DKG/레시피 ----
     def _require_l1(root_id: str) -> None:
         """lock 안에서 호출 — DKG 식별자는 L1 개념이어야 한다."""

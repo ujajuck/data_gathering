@@ -158,7 +158,7 @@ export interface ProposalField {
 export interface Proposal { fields: ProposalField[]; stale_node_ids?: string[] }
 
 export interface BuildResult {
-  status: string; table: string; row_count: number;
+  status: string; build_id: string; table: string; row_count: number;
   lineage: { edges: number; documents: number };
   artifact: string;
   build_report: { warnings: { field?: string; reason?: string; column?: string; from?: string; to?: string; cells?: number }[] };

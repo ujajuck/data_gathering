@@ -1,16 +1,15 @@
-// 4. 통합 DB — 개념 → 양식(양식의 문서 자동 반영) → 양식별 전처리/개별 문서
-//    가감으로 머지 대상을 만들고, 스키마 제안을 받아 DB를 생성한다.
+// 4. 통합 DB — 3단계: ①데이터 선택(개념→양식→문서) ②스키마 확인
+//    ③생성·다운로드. 생성된 DB는 .db/.csv 파일로 바로 내려받는다.
 import { useEffect, useMemo, useState } from "react";
-import { api, post, ROLE_BADGE } from "../lib/api";
+import { api, post } from "../lib/api";
 import type { CartItem } from "../lib/api";
 import { useStore } from "../lib/store";
 import type { BuildResult, Proposal, SearchResult, SearchSource } from "../lib/types";
 
 const ETC = "기타 (양식 미배정)";
 
-// 개념 → 양식 → 문서 선택 마법사. 양식 체크 = 그 양식 소속 문서의 사용 가능
-// 소스 전부를 묶음에 반영. 양식별 전처리(정규화/원값 유지)와 개별 문서
-// 추가/제거를 지원한다. 검토 대기(REVIEW_REQUIRED) 소스는 승인 전까지 제외.
+// ① 데이터 선택 — 개념을 고르고 양식을 체크하면 그 양식의 문서 전체가 반영된다.
+// 양식별 전처리(정규화/원값)와 문서별 가감 지원. 검토 대기 소스는 승인 전까지 제외.
 function MergePicker() {
   const s = useStore();
   const [concept, setConcept] = useState("");
@@ -77,10 +76,10 @@ function MergePicker() {
 
   return (
     <div className="schemaCard">
-      <h4 style={{ margin: "0 0 4px" }}>머지 대상 선택 — 개념 → 양식 → 문서</h4>
+      <h4 style={{ margin: "0 0 4px" }}>① 데이터 선택</h4>
       <div className="sub" style={{ marginBottom: 8 }}>
-        개념을 고르고 양식을 체크하면 그 양식에 포함된 모든 문서가 자동
-        반영됩니다. 양식별 전처리를 정하거나, 펼쳐서 문서를 개별 추가/제거하세요.</div>
+        개념을 고르고 양식을 체크하세요 — 양식에 포함된 모든 문서가 자동으로
+        담깁니다. 다른 개념을 골라 계속 추가할 수 있습니다.</div>
       <div className="editForm" style={{ maxWidth: 420 }}>
         <select value={concept} onChange={(e) => setConcept(e.target.value)}>
           <option value="">— 개념 선택 —</option>
@@ -202,12 +201,6 @@ export default function DbScreen() {
   });
 
   const name = dbName.trim() || "result";
-  const schemaTree = proposal
-    ? [name,
-      ...proposal.fields.map((f, i) =>
-        `${i === proposal.fields.length - 1 ? "└─" : "├─"} ${f.field_name} ${(f.type || "text").toUpperCase()}${f.target_unit ? " · " + f.target_unit : ""}`),
-      "├─ _source_document_id", "├─ _source_sheet", "└─ _source_locator"].join("\n")
-    : "결과 스키마가 여기 표시됩니다";
 
   const build = async () => {
     if (!proposal || !proposal.fields.filter((f) => f.sources > 0).length) {
@@ -216,7 +209,7 @@ export default function DbScreen() {
     }
     const safeName = name.replace(/[^A-Za-z0-9_]/g, "_");
     setBuilding(true);
-    setBuildStatus("BUILDING…");
+    setBuildStatus("생성 중…");
     try {
       const fields = proposal.fields.filter((f) => f.sources > 0);
       const body = {
@@ -230,11 +223,11 @@ export default function DbScreen() {
         raw_node_ids: cart.filter((x) => x.raw).map((x) => x.node_id),
       };
       const r: BuildResult = await post("/api/build", body);
-      setBuildStatus(`✓ ${r.status} — 재실행하면 새 버전이 생성됩니다`);
+      setBuildStatus("");
       setBuilt(true);
       setResult(r);
     } catch (e: any) {
-      setBuildStatus(`실패: ${e.message}`);
+      setBuildStatus(`생성 실패: ${e.message}`);
     }
     setBuilding(false);
   };
@@ -247,89 +240,93 @@ export default function DbScreen() {
       <div className="builder">
         <div>
           <div className="panel pad">
-            <div className="title">통합 DB Builder</div>
-            <div className="sub">개념 → 양식 → 문서 순서로 머지 대상을 만들고, Row Context
-              기준으로 묶은 스키마 제안에서 예외만 조정하세요.</div>
+            <div className="title">통합 DB 만들기</div>
+            <div className="sub">
+              ① 데이터 선택 → ② 스키마 확인 → ③ 생성·다운로드 세 단계입니다.</div>
             <MergePicker />
             <div className="schemaCard">
-              <h4 style={{ margin: "0 0 8px" }}>선택된 묶음</h4>
+              <h4 style={{ margin: "0 0 4px" }}>② 스키마 확인</h4>
+              <div className="sub" style={{ marginBottom: 8 }}>
+                선택한 데이터가 결과 DB의 컬럼(개념 단위)으로 묶였습니다.
+                컬럼 이름만 다듬으면 됩니다.</div>
               <div style={{ marginBottom: 8 }}>
-                {Object.keys(byConcept).length ? Object.entries(byConcept).map(([cid, n]) => (
+                {Object.entries(byConcept).map(([cid, n]) => (
                   <span key={cid} className="badge blue" style={{ margin: "2px 3px" }}>
                     {cid} · {n}{" "}
                     <button style={{ border: 0, background: "none", color: "var(--red)",
-                      cursor: "pointer" }}
+                      cursor: "pointer" }} title="이 개념 전체 빼기"
                       onClick={() => s.saveCart(cart.filter((x) =>
                         (x.concept_id || "(미매핑)") !== cid))}>✕</button>
                   </span>
-                )) : <span className="empty">비어 있음</span>}
+                ))}
               </div>
               <table className="table">
                 <thead><tr>
-                  <th>필드</th><th>Domain Node</th><th>역할</th>
-                  <th>Source</th><th>처리</th><th>상태</th></tr></thead>
+                  <th>결과 컬럼 이름</th><th>개념</th><th>위치 수</th>
+                  <th>처리</th><th>상태</th></tr></thead>
                 <tbody>
                   {proposal && cart.length ? proposal.fields.map((f, i) => (
                     <tr key={`${f.concept_id}-${i}`}>
                       <td><input value={f.field_name}
                         style={{ border: "1px solid var(--line)", borderRadius: 6,
-                          padding: "4px 6px", width: 140 }}
+                          padding: "4px 6px", width: 150 }}
                         onChange={(e) => setProposal((p) => p && ({ ...p,
                           fields: p.fields.map((x, j) =>
                             j === i ? { ...x, field_name: e.target.value } : x) }))} /></td>
-                      <td>{f.concept_name}</td>
-                      <td><span className={`badge ${ROLE_BADGE[f.role || ""] || ""}`}>
-                        {f.role || ""}</span></td>
+                      <td>{f.concept_name}
+                        {f.target_unit ? <span className="muted"> · {f.target_unit}</span> : null}</td>
                       <td>{f.sources}</td>
-                      <td>{f.note}</td>
+                      <td className="muted" style={{ fontSize: 11 }}>{f.note}</td>
                       <td style={{ color: f.status === "검토" ? "var(--amber)" : "var(--green)" }}>
                         {f.status}</td>
                     </tr>
                   )) : (
-                    <tr><td colSpan={6} className="empty">
-                      원본 데이터 화면에서 '이 Source 포함' 또는 개념 탐색의 '통합 DB 대상에
-                      추가'로 담으세요</td></tr>
+                    <tr><td colSpan={5} className="empty">
+                      아직 비어 있습니다 — 위 ①에서 개념을 고르고 양식을 체크하세요.
+                      (원본 데이터 화면의 '이 Source 포함'으로도 담을 수 있습니다)</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
-            <div className="flow">
-              <div className="block">Source Select</div><span className="arrow">→</span>
-              <div className="block">Schema Align</div><span className="arrow">→</span>
-              <div className="block">Unit Normalize</div><span className="arrow">→</span>
-              <div className="block">Type Cast</div><span className="arrow">→</span>
-              <div className="block">Union / Join</div><span className="arrow">→</span>
-              <div className="block">Validation</div>
-            </div>
           </div>
         </div>
         <aside className="panel pad">
-          <div className="kicker">OUTPUT</div>
-          <div className="title">생성 결과</div>
+          <div className="kicker">STEP ③</div>
+          <div className="title">생성 · 다운로드</div>
           <div className="metricGrid">
             <div className="metric"><span>선택 위치</span><b>{cart.length}</b></div>
             <div className="metric"><span>대상 문서</span>
               <b>{new Set(cart.map((x) => x.document)).size}</b></div>
           </div>
           <div style={{ marginTop: 11 }}>
-            <label className="muted" style={{ fontSize: 12 }}>결과 이름</label>
+            <label className="muted" style={{ fontSize: 12 }}>DB 이름 (영문/숫자/_)</label>
             <input className="search" style={{ margin: "5px 0" }} value={dbName}
               onChange={(e) => setDbName(e.target.value)} />
           </div>
-          <div className="code">{schemaTree}</div>
-          <button className="primary w100" style={{ marginTop: 11 }} disabled={building}
-            onClick={build}>{built ? "DB 다시 생성 (새 버전)" : "DB 생성 및 반환"}</button>
+          <button className="primary w100" style={{ marginTop: 8 }}
+            disabled={building || !cart.length}
+            onClick={build}>{built ? "다시 생성 (새 버전)" : "DB 생성"}</button>
           <button className="secondary w100" style={{ marginTop: 8 }}
-            onClick={() => { s.saveCart([]); setResult(null); setBuildStatus(""); }}>
-            묶음 비우기</button>
+            onClick={() => { s.saveCart([]); setResult(null); setBuildStatus(""); setBuilt(false); }}>
+            선택 비우기</button>
           <div className="status">{buildStatus}</div>
           {result && (
             <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
-              <div className="kicker">RESULT</div>
+              <div className="kicker">생성 완료</div>
               <div className="sub">
-                <b style={{ color: "var(--blue)" }}>{result.table}</b> · {result.row_count} rows ·
-                Lineage {result.lineage.edges}셀/{result.lineage.documents}문서<br />
-                artifact: <code style={{ fontSize: 11 }}>{result.artifact}</code>
+                <b style={{ color: "var(--blue)" }}>{result.table}</b> · {result.row_count}행 ·
+                출처 추적 {result.lineage.edges}셀 / {result.lineage.documents}문서</div>
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <a className="primary w100" style={{ textAlign: "center",
+                  textDecoration: "none", padding: "8px 0", borderRadius: 8,
+                  display: "block" }}
+                  href={`/api/build/${result.build_id}/download`}>
+                  ⬇ DB 파일 (.db)</a>
+                <a className="secondary w100" style={{ textAlign: "center",
+                  textDecoration: "none", padding: "8px 0", borderRadius: 8,
+                  display: "block", border: "1px solid var(--line)" }}
+                  href={`/api/build/${result.build_id}/download?format=csv`}>
+                  ⬇ CSV</a>
               </div>
               {result.build_report.warnings.length > 0 && (
                 <div className="warn">
@@ -339,19 +336,21 @@ export default function DbScreen() {
                   ))}
                 </div>
               )}
-              <table className="table" style={{ marginTop: 8 }}>
-                <thead><tr><th>필드</th><th>Concept</th><th>단위</th><th>포함</th></tr></thead>
-                <tbody>
-                  {result.schema.map((x) => (
-                    <tr key={x.field}>
-                      <td>{x.field}</td><td>{x.concept}</td><td>{x.unit || "—"}</td>
-                      <td>{x.included === false
-                        ? <span style={{ color: "var(--red)" }}>제외됨</span> : "✓"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="kicker" style={{ marginTop: 10 }}>PREVIEW</div>
+              {result.schema.some((x) => x.included === false) && (
+                <table className="table" style={{ marginTop: 8 }}>
+                  <thead><tr><th>컬럼</th><th>포함</th></tr></thead>
+                  <tbody>
+                    {result.schema.map((x) => (
+                      <tr key={x.field}>
+                        <td>{x.field}</td>
+                        <td>{x.included === false
+                          ? <span style={{ color: "var(--red)" }}>제외됨</span> : "✓"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <div className="kicker" style={{ marginTop: 10 }}>미리보기 (5행)</div>
               <div style={{ overflowX: "auto" }}>
                 <table className="table">
                   <thead><tr>{previewCols.map((c) => <th key={c}>{c}</th>)}</tr></thead>
