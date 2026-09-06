@@ -1,0 +1,50 @@
+# 휘낭시에 실험 도메인 지식 그래프 — 레시피를 허브로 실험·품질·원가·판매가 연결
+version: "1"
+
+entity_classes:
+  recipe:
+    name_ko: 레시피
+    name_en: Recipe
+    concepts: [recipe_name, batch_standard]
+  experiment:
+    name_ko: 굽기실험
+    name_en: Bake Experiment
+    concepts: [oven_temperature, dough_aging, ambient_temperature, pan_type,
+               repetition, time_point, addin]
+  quality:
+    name_ko: 품질/관능
+    name_en: Quality
+    concepts: []          # domain_fallback: quality
+  cost:
+    name_ko: 원가
+    name_en: Cost
+    concepts: []          # domain_fallback: cost
+  sales:
+    name_ko: 판매
+    name_en: Sales
+    concepts: []          # domain_fallback: sales
+  time:
+    name_ko: 시간
+    name_en: Time
+    concepts: [experiment_date]
+  document:
+    name_ko: 문서/출처
+    name_en: Document
+    concepts: [memo, doc_version]
+
+domain_fallback:
+  experiment: experiment
+  quality: quality
+  cost: cost
+  sales: sales
+  time: time
+  misc: document
+
+relations:
+  - {subject: experiment, predicate: bakes, object: recipe, name_ko: 굽는다}
+  - {subject: experiment, predicate: measures, object: quality, name_ko: 측정함}
+  - {subject: recipe, predicate: costs, object: cost, name_ko: 원가구성}
+  - {subject: recipe, predicate: sells_as, object: sales, name_ko: 판매분석}
+  - {subject: experiment, predicate: at_time, object: time, name_ko: 실험일}
+  - {subject: quality, predicate: recorded_in, object: document, name_ko: 기록됨}
+  - {subject: sales, predicate: derived_from, object: cost, name_ko: 원가반영}

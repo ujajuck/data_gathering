@@ -1,0 +1,25 @@
+# DVC — 현행(kg) 파이프라인 기준.
+#
+# 원본 버전닝은 시스템 중립이다: `dvc add data/raw` (미설치 환경은
+# src/dvc_adapter의 sha256 fallback이 동일 인터페이스로 동작).
+#
+# 레거시 canonical 파이프라인(src.inspect → canonicalize)은 dvc.legacy.yaml로
+# 이동 — 유지보수 모드이며 새 기능은 받지 않는다 (docs/MIGRATION.md).
+stages:
+  kg_ingest:
+    # 원본/파서 코어/사전이 바뀌면 재실행. kg ingest는 파일 해시 기반
+    # 멱등(무변경이면 스킵 + 매핑 승계)이라 반복 실행이 안전하다.
+    # kg.db는 웹/CLI가 함께 쓰는 상태 저장소라 DVC outs로 잡지 않는다 —
+    # 재현성은 문서 버전 해시·빌드 서명·lineage가 DB 안에서 담당한다.
+    cmd: >-
+      python -m kg.cli --ws domains/financier ingest
+      --raw domains/financier/data/raw --map
+    deps:
+      - domains/financier/data/raw
+      - domains/financier/config
+      - kg
+      - src/inspect
+      - src/segment
+      - src/mapping
+      - src/units
+      - src/common

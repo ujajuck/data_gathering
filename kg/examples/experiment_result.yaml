@@ -1,0 +1,41 @@
+# Integration Project 예시 — 설계서 §9.2 experiment_result
+# 사용자가 고른 Domain Concept 집합으로 문서 횡단 Custom RDBMS를 생성한다.
+name: experiment_result
+description: 레시피/온도별 굽기 실험 시계열 통합 (12개 문서, 두 양식 횡단)
+fields:
+  - name: recipe_type
+    concept: recipe_name
+    type: text
+  - name: oven_temperature
+    concept: oven_temperature
+    type: numeric
+    unit: ℃
+  - name: baking_time
+    concept: time_point
+    type: numeric
+    unit: min
+  - name: core_temp
+    concept: core_temperature
+    type: numeric
+    unit: ℃            # °F/°C 혼재 소스가 전부 ℃로 정규화된다
+  - name: rise
+    concept: rise_height
+    type: numeric
+    unit: mm           # cm 소스가 mm로 정규화된다
+  - name: moisture_loss
+    concept: weight_loss
+    type: numeric
+    unit: '%'
+transform:
+  - op: unit_convert
+  - op: type_cast
+    config: {types: {core_temp: numeric, rise: numeric, moisture_loss: numeric}}
+  - op: union
+  - op: null_handling
+    config: {columns: [core_temp], mode: drop}
+  - op: deduplicate
+  - op: validation
+    config:
+      rules:
+        - {column: core_temp, op: '>=', value: 0}
+        - {column: core_temp, op: '<=', value: 130}

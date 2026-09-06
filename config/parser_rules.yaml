@@ -1,0 +1,10 @@
+# 문서별 승인된 구조 규칙 (설계문서 §10.2)
+# 사용자가 Mapping Review에서 승인한 로컬 규칙이 여기로 승격된다.
+# 색 의미는 전역 규칙을 만들지 않는다 — 문서(논리 이름) 단위로만 저장한다.
+version: "1"
+documents: {}
+# 예:
+# documents:
+#   "01_설비점검일지_반복블록.xlsx":
+#     style_roles:
+#       "FFFFF2CC": input
