@@ -116,6 +116,39 @@ def template_detail(store: KgStore, template_id: str) -> dict:
     return out
 
 
+def export_template(store: KgStore, template_id: str,
+                    version: int | None = None) -> dict:
+    """템플릿 양식을 이식 가능한 JSON으로 내보낸다 (기본: 최신 버전).
+
+    spec은 add_version에 넣은 원본 그대로라, 이 파일의 spec을 다른
+    워크스페이스의 POST /versions에 그대로 올리면 같은 양식이 재생성된다.
+    """
+    tpl = template_detail(store, template_id)
+    if version is None:
+        version = tpl["current_version"]
+        if version is None:
+            raise ParsingError("template has no versions")
+    row = store.conn.execute(
+        "SELECT * FROM parsing_template_version WHERE template_id=? AND version=?",
+        (template_id, version)).fetchone()
+    if row is None:
+        raise ParsingError("unknown template version")
+    return {
+        "format": "kg-parsing-template/1",
+        "exported_at": now_iso(),
+        "template": {
+            "template_id": tpl["template_id"],
+            "name": tpl["name"],
+            "target_document_kg": tpl["target_document_kg"],
+            "lifecycle": tpl["lifecycle"],
+        },
+        "version": version,
+        "created_at": row["created_at"],
+        "created_by": row["created_by"],
+        "spec": _load(row["spec_json"]),
+    }
+
+
 def update_template(store: KgStore, template_id: str, name: str | None = None,
                     lifecycle: str | None = None) -> dict:
     template_detail(store, template_id)          # unknown template → error

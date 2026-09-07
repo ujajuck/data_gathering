@@ -243,8 +243,16 @@ export default function TemplatesScreen() {
 
               {verDetail && (
                 <>
-                  <div className="kicker" style={{ marginTop: 14 }}>
-                    v{verDetail.version} — 추출 매핑</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8,
+                    marginTop: 14 }}>
+                    <div className="kicker" style={{ margin: 0 }}>
+                      v{verDetail.version} — 추출 매핑</div>
+                    <a className="secondary" style={{ marginLeft: "auto",
+                      textDecoration: "none", fontSize: 12, padding: "4px 10px",
+                      borderRadius: 8, border: "1px solid var(--line)" }}
+                      href={`/api/parsing/templates/${sel}/export?version=${verDetail.version}`}>
+                      ⬇ 양식 내보내기 (JSON)</a>
+                  </div>
                   <table className="table" style={{ marginTop: 6 }}>
                     <thead><tr><th>시트 템플릿</th><th>키</th><th>개념</th>
                       <th>소스</th><th>단위</th></tr></thead>

@@ -1037,6 +1037,19 @@ def create_app(ws_root: str | Path) -> FastAPI:
         except ParsingError as exc:
             raise HTTPException(404, str(exc)) from exc
 
+    @app.get("/api/parsing/templates/{template_id}/export")
+    def parsing_template_export(template_id: str, version: int | None = None):
+        """템플릿 양식 JSON 다운로드 — spec 원본 포함, 재등록 가능한 형식."""
+        from kg.parsing import ParsingError, export_template
+        try:
+            with lock:
+                payload = export_template(store, template_id, version)
+        except ParsingError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        fname = f"{template_id}_v{payload['version']}.template.json"
+        return JSONResponse(payload, headers={
+            "Content-Disposition": f'attachment; filename="{fname}"'})
+
     @app.post("/api/parsing/templates/{template_id}/versions", status_code=201)
     def parsing_version_create(template_id: str, req: ParsingVersionReq):
         from kg.parsing import ParsingError, add_version

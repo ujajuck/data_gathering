@@ -314,3 +314,41 @@ def test_legacy_one_to_one_assignment_db_migrates(tmp_path):
     assert reopened.conn.execute(
         "SELECT count(*) FROM document_template_assignment").fetchone()[0] == 2
     reopened.close()
+
+
+def test_export_round_trips_spec(tmp_path):
+    """내보낸 양식 JSON의 spec을 새 워크스페이스에 올리면 같은 양식이 재생성된다."""
+    from kg.parsing import export_template, version_detail
+
+    store = KgStore(tmp_path / "kg.db")
+    create_template(store, "financier_recipe", "Financier Recipe", "financier")
+    add_version(store, "financier_recipe", _spec(), "tester")
+    add_version(store, "financier_recipe", _spec("H7:H7"), "tester")
+
+    # 기본은 최신 버전, version 지정 시 해당 버전
+    latest = export_template(store, "financier_recipe")
+    assert (latest["format"], latest["version"]) == ("kg-parsing-template/1", 2)
+    assert latest["template"]["name"] == "Financier Recipe"
+    v1 = export_template(store, "financier_recipe", version=1)
+    assert v1["spec"] == _spec()
+
+    # round-trip: 내보낸 spec으로 다른 저장소에 재등록 → 매핑 구조 동일
+    other = KgStore(tmp_path / "other.db")
+    create_template(other, v1["template"]["template_id"], v1["template"]["name"],
+                    v1["template"]["target_document_kg"])
+    add_version(other, "financier_recipe", v1["spec"], "importer")
+    a = version_detail(store, "financier_recipe", 1)
+    b = version_detail(other, "financier_recipe", 1)
+    strip = lambda d: [{"name": s["name"], "match": s["match"],  # noqa: E731
+                        "mappings": [{k: m[k] for k in
+                                      ("mapping_key", "concept_id", "source", "unit")}
+                                     for m in s["mappings"]]}
+                       for s in d["sheet_templates"]]
+    assert strip(a) == strip(b)
+
+    # 버전 없는 템플릿/없는 버전은 명시적 에러
+    create_template(store, "empty_tpl", "Empty", None)
+    with pytest.raises(ParsingError):
+        export_template(store, "empty_tpl")
+    with pytest.raises(ParsingError):
+        export_template(store, "financier_recipe", version=99)
