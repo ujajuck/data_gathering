@@ -181,7 +181,7 @@ class MappingDecision:
     mapping_version: str = ""
 
 
-# ----------------------------------------------------------- canonicalize ----
+# --------------------------------------------------------- record builder ----
 
 @dataclass
 class ObservationData:

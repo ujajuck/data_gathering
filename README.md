@@ -20,8 +20,8 @@ kg/          코어 + 웹 서버 — 온톨로지/트리/시맨틱 매핑, 문�
 frontend/    React + TypeScript 5탭 UI — 유일한 프론트. 빌드(dist)가 커밋되어
              서버가 루트 / 에 바로 서빙한다 (프론트 수정 시 npm run build)
 src/         Parser library — 파서·단위 엔진 코어(Inspector/RegionDetector/
-             UnitRegistry, kg가 §14.1 계약으로 사용). 그 외 레거시 앱 경로는
-             유지보수 모드 — 처분 계획은 docs/MIGRATION.md
+             UnitRegistry/RecordBuilder, kg가 §14.1 계약으로 사용) + survey.
+             레거시 앱 경로는 삭제됨 — 경위는 docs/MIGRATION.md
 domains/<d>/ 도메인 워크스페이스 — config(개념·단위 units.yaml·정규화
              프리셋 normalizers.yaml)·data/raw(원본)·data/kg/kg.db
 tests/       회귀 전체 (python -m pytest)
@@ -83,7 +83,7 @@ DRM(암호화) 문서의 COM 렌더에는 Windows + Excel이 필요하다. 둘 �
 
 ```bash
 python -m kg.cli --ws domains/financier <command>
-#  seed / ingest / watch / map / search / review / project / build / trace / status / metrics
+#  seed / ingest / watch / survey / map / search / review / project / build / trace / status / metrics
 #  watch: raw 폴링 → 자동 등록(+매핑), DRM 해제본 도착 감지 포함
 ```
 
@@ -110,21 +110,13 @@ node e2e/run_all.mjs    # 브라우저 E2E (서버 기동 후 — e2e/README.md 
   후행 라벨/단위 전치, 캡션 그룹, 전치 KPI, 행별 단위 열)
 - 아핀 단위 변환(K/°F→℃ 등 22종), 문서 내장 사전 자동 흡수, record key는
   위치가 아니라 업무 키
-- 적재 전 어휘 조사(dry-run): `python -m src.cli --repo-root domains/financier
+- 적재 전 어휘 조사(dry-run): `python -m kg.cli --ws domains/financier
   survey --raw incoming/` — 미지 라벨/모호 라벨/미등록 단위/예상 매핑률 리포트
 
-## 레거시 (유지보수 모드 — 신규 기능 금지)
+## 레거시 정리 완료
 
-`kg/` 이전의 초기 Canonical DB 파이프라인. Parser library 코어만 현행이
-사용하고, 나머지 앱 경로(7뷰 서버·canonicalize·loader·export 등)는 회귀
-테스트 보존 목적의 유지보수 모드다 — **모듈별 처분표와 단계는
-[docs/MIGRATION.md](docs/MIGRATION.md)**. watcher는 `kg.cli watch`로
-이관됐고, 레거시 DVC 스테이지는 `dvc.legacy.yaml`로 분리됐다. 상세 설계는
-[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) /
-[docs/WEB_PLAN.md](docs/WEB_PLAN.md).
-
-```bash
-python -m src.cli ingest|status|export|hub|graph|ontology|watch|reprocess
-uvicorn src.api.server:app --port 8000    # 레거시 7뷰 UI (web/) — 현행 웹 아님
-python scripts/build_report.py            # 정적 리포트 스냅샷
-```
+`kg/` 이전의 초기 Canonical DB 앱 경로(7뷰 서버·canonicalize·loader·export·
+pipeline·src.cli·web/·build_report)는 삭제됐다. `src/`는 현행이 사용하는
+**Parser library**(inspect/segment/units/common/mapping + survey)로만 남는다 —
+경위와 모듈 처분표는 [docs/MIGRATION.md](docs/MIGRATION.md), 초기 설계 이력은
+[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).

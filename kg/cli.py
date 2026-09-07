@@ -162,6 +162,27 @@ def cmd_watch(ws: Workspace, args) -> int:
         time.sleep(args.interval)
 
 
+def cmd_survey(ws: Workspace, args) -> int:
+    """적재 전 어휘 조사 (dry-run 매핑 — DB/캐시 미변경). src.cli survey의 이관."""
+    from src.survey import survey_dir, survey_paths
+    try:
+        if args.file:
+            report = survey_paths(ws.root, args.file)
+        else:
+            raw = Path(args.raw) if args.raw else ws.root / "data" / "raw"
+            report = survey_dir(ws.root, raw)
+    except FileNotFoundError as e:
+        print(f"survey: {e}", file=sys.stderr)
+        return 1
+    if args.out:
+        Path(args.out).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"survey report: {args.out}")
+    else:
+        _emit(report)
+    return 0
+
+
 def cmd_map(ws: Workspace, args) -> int:
     from kg.mapping.judge import get_judge
     from kg.mapping.mapper import map_document
@@ -327,6 +348,13 @@ def main(argv: list[str] | None = None) -> int:
     pw.add_argument("--map", action="store_true", default=True)
     pw.add_argument("--no-map", dest="map", action="store_false")
 
+    pv = sub.add_parser("survey", help="적재 전 어휘 조사 (dry-run 매핑 — DB/캐시 미변경)")
+    pv.add_argument("--raw", default=None,
+                    help="조사 대상 디렉터리 (*.xlsx 전수, 기본: {ws}/data/raw)")
+    pv.add_argument("--file", nargs="*", type=Path, default=None,
+                    help="특정 파일만 조사 (지정 시 --raw 무시)")
+    pv.add_argument("--out", default=None, help="JSON 리포트 저장 경로 (기본: stdout)")
+
     pm = sub.add_parser("map", help="미매핑 노드 Semantic Mapping")
     pm.add_argument("--retry-unmapped", action="store_true",
                     help="사전 보강 후 UNMAPPED 노드 재평가")
@@ -360,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     ws = Workspace(args.ws)
     return {"seed": cmd_seed, "ingest": cmd_ingest, "map": cmd_map,
-            "watch": cmd_watch,
+            "watch": cmd_watch, "survey": cmd_survey,
             "search": cmd_search, "review": cmd_review, "project": cmd_project,
             "build": cmd_build, "trace": cmd_trace, "status": cmd_status,
             "metrics": cmd_metrics}[args.cmd](ws, args)

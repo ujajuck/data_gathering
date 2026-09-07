@@ -7,7 +7,7 @@
 
 - 작업 이력: [PROGRESS.md](PROGRESS.md)
 - 레거시(src) → 현행(kg) 정리 계획·모듈 처분표: [MIGRATION.md](MIGRATION.md)
-- 레거시 초기 설계: [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) / [WEB_PLAN.md](WEB_PLAN.md)
+- 레거시 초기 설계: [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
 
 ---
 

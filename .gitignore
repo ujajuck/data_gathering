@@ -1,8 +1,4 @@
-# 파이프라인 산출물 (재현 가능 — dvc repro / src.cli ingest로 재생성)
-data/staging/
-data/canonical/
-data/quarantine/
-metadata/
+# 파이프라인 산출물 (재현 가능 — kg.cli ingest/build로 재생성)
 *.db
 
 # DVC 사용 시 raw는 DVC가 추적한다 (지금은 예시 3종을 git에 포함)
@@ -11,8 +7,6 @@ metadata/
 # Virtual environment
 .venv/
 
-# Build artifacts
-src/excel_canonical.egg-info/
 
 # IDE / OS
 __pycache__/

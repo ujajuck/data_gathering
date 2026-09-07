@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-from src.canonicalize.builder import RecordBuilder
+from src.mapping.record_builder import RecordBuilder
 from src.inspect.inspector import WorkbookInspector
 from src.mapping.concepts import ConceptMapper, ConceptRegistry, normalize_label
 from src.mapping.doc_dictionary import extract_document_dictionary

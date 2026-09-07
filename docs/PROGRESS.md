@@ -3,6 +3,17 @@
 작업 단위(=커밋)마다 한 항목씩 기록한다. 상세 근거·검증 방법은 각 커밋
 메시지에 있고, 여기는 흐름을 한눈에 보는 색인이다. 최신이 위.
 
+## 2026-09-07
+
+- **레거시 일괄 삭제 — Phase 1** (이 커밋)
+  - 유지보수 모드 모듈 삭제: src/{api,canonicalize,loader,export,pipeline.py,
+    cli.py,dvc_adapter}, web/, scripts/build_report.py, dvc.legacy.yaml,
+    docs/WEB_PLAN.md, 레거시 테스트 7종
+  - RecordBuilder는 survey의 dry-run 매핑 엔진이라 파서 라이브러리로 이동
+    (src/mapping/record_builder.py). survey 진입점은 `kg.cli survey`로 이관
+  - README/.gitignore 레거시 표기 제거, MIGRATION 처분표 갱신.
+    전체 103 passed + survey 스모크 확인
+
 ## 2026-09-06
 
 - **레거시(src)/현행(kg) 경계 정리 — Phase 0** (이 커밋)
