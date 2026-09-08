@@ -11,6 +11,11 @@ DB를 생성한다. 문서는 `docs/`에 모은다 — 아키텍처 다이어그
 대응은 [kg/README.md](kg/README.md), 작업 이력은
 [docs/PROGRESS.md](docs/PROGRESS.md) 참고.
 
+DB v2 재설계 제안은 [docs/design/db-schema-v2.md](docs/design/db-schema-v2.md)에 있다.
+DRM 읽기 전용 접근, 여러 시트·복수 영역, 항목별 출처, 목적별 중복 처리와
+화면/API 연결을 다룬다. `db/v2/schema_sqlite.sql`은 별도 빈 DB용 검증 스키마이며
+현행 `kg/schema.sql`을 대체하거나 기존 DB를 자동 변경하지 않는다.
+
 ## 구성
 
 ```

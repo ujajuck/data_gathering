@@ -1,0 +1,80 @@
+{
+  "schema_version": "2.0-proposal",
+  "template_id": "process-conditions",
+  "revision": 1,
+  "kg_revision_id": "kg-1",
+  "format": "json",
+  "sheet_roles": {
+    "measurements": {"matcher": {"names": ["가열시험"]}, "cardinality": "one"},
+    "metadata": {"matcher": {"names": ["기준정보"]}, "cardinality": "one"}
+  },
+  "rules": [
+    {
+      "rule_key": "temperature",
+      "concept_id": "temperature",
+      "selector": {
+        "key": {
+          "combine": "concat",
+          "separator": "",
+          "areas": [
+            {"sheet_role": "measurements", "range": "B3:C3"},
+            {"sheet_role": "measurements", "range": "F3"}
+          ]
+        },
+        "value": {
+          "combine": "ordered_union",
+          "areas": [
+            {"sheet_role": "measurements", "range": "B5:B7"},
+            {"sheet_role": "measurements", "range": "B10:C11"}
+          ],
+          "cardinality": "list",
+          "axis": "down",
+          "element_layout": "one_per_row",
+          "merge_policy": "anchor_once",
+          "multiple_values_per_step": "error",
+          "blank_policy": "preserve_position",
+          "stop": {"kind": "explicit_areas", "max_items": 10000}
+        },
+        "unit": {"areas": [{"sheet_role": "metadata", "range": "B2"}]}
+      },
+      "record_spec": {
+        "scope": ["document_version", "measurements", "temperature_block"],
+        "key": "physical_row",
+        "cross_sheet_join": "disabled"
+      },
+      "value_spec": {
+        "type": "decimal",
+        "unit": "degC",
+        "formula_policy": "cached_only",
+        "missing_formula_cache": "review_required",
+        "normalization": {"operation": "identity", "version": "1"}
+      }
+    },
+    {
+      "rule_key": "duration",
+      "concept_id": "duration",
+      "selector": {
+        "key": {"areas": [{"sheet_role": "measurements", "range": "A15"}]},
+        "value": {
+          "areas": [{"sheet_role": "measurements", "range": "B15:D15"}],
+          "cardinality": "list",
+          "axis": "right",
+          "merge_policy": "anchor_once",
+          "blank_policy": "preserve_position",
+          "stop": {"kind": "explicit_areas", "max_items": 10000}
+        }
+      },
+      "record_spec": {
+        "scope": ["document_version", "measurements", "duration_block"],
+        "key": "physical_column",
+        "cross_sheet_join": "disabled"
+      },
+      "value_spec": {
+        "type": "decimal",
+        "unit": "min",
+        "formula_policy": "cached_only",
+        "normalization": {"operation": "identity", "version": "1"}
+      }
+    }
+  ]
+}
