@@ -85,7 +85,7 @@ export function workbenchFixture() {
     application_id: ids.application,
     concept_id: ids.concept,
     rule_key: "process_temperature",
-    observed_key: "공정 온도",
+    observed_key: "공정온도",
     cardinality: "list",
     axis: "down",
     concept_name: "공정온도",
@@ -356,7 +356,7 @@ export function workbenchFixture() {
     }
     if (path === `/builds/${ids.build}/lineage`)
       return page([
-        { ordinal: 0, item_id: item(31).item_id, contribution_role: "direct" },
+        { ordinal: 0, item_id: item(31).item_id, contribution_role: "value" },
       ]);
     throw new Error(`No fixture for ${method} ${path}`);
   }

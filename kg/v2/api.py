@@ -949,7 +949,8 @@ def install(app: FastAPI, root, start_worker=True):
         result = listing(
             sql,
             params,
-            ["tree", kg, parent_id, roots, excluded],
+            # 선택은 체크 표시만 바꾼다. 목록 필터(부모/KG)가 같으면 커서를 유지한다.
+            ["tree", kg, parent_id],
             ["c.concept_id"],
             cursor,
             limit,

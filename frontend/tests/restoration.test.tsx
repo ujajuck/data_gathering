@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -11,6 +12,53 @@ import Workbench from "../src/v2/Workbench";
 import { page, workbenchFixture } from "./workbench-fixture";
 
 describe("기존 기능과 디자인 복원", () => {
+  it("하위 개념을 체크하는 동안 펼친 트리와 선택 표시를 유지한다", async () => {
+    const f = workbenchFixture();
+    f.open("database", { concept: "" });
+    const responses: (() => void)[] = [];
+    f.overrides.set(`GET /kg/${f.ids.kg}/tree`, ({ url }) => {
+      const selected = url.searchParams.getAll("roots");
+      const child = url.searchParams.get("parent_id") === "classification";
+      const body = page([
+        {
+          concept_id: child ? f.ids.concept : "classification",
+          name: child ? "공정온도" : "공정 분류",
+          child_count: child ? 0 : 1,
+          checked: child && selected.includes(f.ids.concept),
+          indeterminate: !child && selected.length > 0,
+          descendant_selections: selected,
+        },
+      ]);
+      return selected.length
+        ? new Promise((resolve) => responses.push(() => resolve(body)))
+        : body;
+    });
+    const user = userEvent.setup();
+    render(<Workbench />);
+    await user.click(
+      await screen.findByText("개념 트리 · 하위 개념 일괄 선택"),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "공정 분류 하위 개념 펼치기" }),
+    );
+    await user.click(await screen.findByRole("checkbox", { name: "공정온도" }));
+    await waitFor(() => expect(responses).toHaveLength(2));
+    expect(
+      screen.getByRole("button", { name: "공정 분류 하위 개념 접기" }),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("checkbox", { name: "공정온도" }) as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    await act(async () => responses.forEach((resolve) => resolve()));
+    expect(
+      screen.getByRole("button", { name: "공정 분류 하위 개념 접기" }),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("checkbox", { name: "공정온도" }) as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+  });
   it("제품명과 기존 탭 순서를 유지하고 문서 필터를 조회에 반영한다", async () => {
     const f = workbenchFixture();
     f.open("documents");

@@ -220,7 +220,7 @@ describe("원본 검수와 사용자 DB 화면", () => {
     await user.click(
       await preview.findByRole("button", { name: "100031", exact: true }),
     );
-    await user.click(await screen.findByRole("button", { name: /direct/ }));
+    await user.click(await screen.findByRole("button", { name: /^value/ }));
     const unit = await screen.findByRole("button", { name: /공통 정보!B1/ });
     await waitFor(() => expect(unit.hasAttribute("disabled")).toBe(false));
     await user.click(unit);

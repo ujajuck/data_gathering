@@ -178,7 +178,7 @@ test("문서 → 검수 → 오버레이 → 추출 → DB·다운로드 → 원
     .filter({ hasText: "LOT-031" })
     .getByRole("button")
     .click();
-  await preview.getByRole("button", { name: /direct/ }).click();
+  await preview.getByRole("button", { name: /^value/ }).click();
   await preview.getByRole("button", { name: /공통 정보!B1/ }).click();
   await expect(
     page.getByRole("button", { name: "B1 °C", exact: true }),

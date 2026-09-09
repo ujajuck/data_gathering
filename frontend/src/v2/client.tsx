@@ -121,12 +121,15 @@ export function useData(path: string | null) {
   };
 }
 const positions = new Map<string, (string | null)[]>();
-export function usePage(path: string | null) {
-  const [scope, setScope] = useState(path);
+export function usePage(path: string | null, positionKey = path) {
+  const [scope, setScope] = useState(positionKey);
   const [history, setHistory] = useState<(string | null)[]>(
-    positions.get(path || "") || [null],
+    positions.get(positionKey || "") || [null],
   );
-  const active = scope === path ? history : positions.get(path || "") || [null];
+  const active =
+    scope === positionKey
+      ? history
+      : positions.get(positionKey || "") || [null];
   const cursor = active[active.length - 1];
   const resource = useData(
     path
@@ -137,10 +140,10 @@ export function usePage(path: string | null) {
       : null,
   );
   function move(next: (string | null)[]) {
-    setScope(path);
+    setScope(positionKey);
     setHistory(next);
     if (positions.size > 60) positions.clear();
-    positions.set(path || "", next);
+    positions.set(positionKey || "", next);
   }
   return {
     ...resource,

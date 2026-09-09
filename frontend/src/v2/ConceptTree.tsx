@@ -28,15 +28,29 @@ export default function ConceptTree({
     kg
       ? `/kg/${kg}/tree?parent_id=${encodeURIComponent(parent)}&${selectionQuery(selection)}`
       : null,
+    `tree:${kg}:${parent}`,
   );
+  // 선택 상태 재조회는 트리의 목록·페이지·펼친 노드를 바꾸지 않는다.
+  const previous = useRef<{ key: string; items: Row[] }>({
+    key: "",
+    items: [],
+  });
+  const key = `${kg}:${parent}:${page.number}`;
+  if (page.data) previous.current = { key, items: page.data.items };
+  const nodes =
+    page.data?.items ||
+    (page.loading && previous.current.key === key
+      ? previous.current.items
+      : []);
   return (
     <div
       className="v2-concept-tree"
       role={depth ? "group" : "tree"}
       aria-label={depth ? undefined : "통합할 개념 트리"}
+      aria-busy={page.loading}
     >
       <State resource={page} />
-      {page.data?.items.map((node) => (
+      {nodes.map((node) => (
         <TreeNode
           key={node.concept_id}
           {...{ kg, selection, onChange, onFocus, depth, node }}
@@ -62,6 +76,8 @@ function TreeNode({
   depth: number;
 }) {
   const [open, setOpen] = useState(false);
+  const [checked, setChecked] = useState(!!node.checked);
+  useEffect(() => setChecked(!!node.checked), [node]);
   const check = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (check.current) check.current.indeterminate = !!node.indeterminate;
@@ -84,8 +100,9 @@ function TreeNode({
           <input
             ref={check}
             type="checkbox"
-            checked={!!node.checked}
+            checked={checked}
             onChange={(e) => {
+              setChecked(e.target.checked);
               const below = new Set([
                 node.concept_id,
                 ...(node.descendant_selections || []),

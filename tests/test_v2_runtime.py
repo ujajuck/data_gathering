@@ -340,9 +340,15 @@ def test_tree_hidden_descendants_and_single_concept_revision(setup):
     assert children[0]["checked"]
     first = s["api"]("GET", base + "?parent_id=root&limit=1")
     assert first["has_more"]
+    following = s["api"](
+        "GET", base + "?parent_id=root&roots=root&cursor=" + first["next_cursor"]
+    )
+    assert (
+        following["items"][0]["concept_id"] == "b" and following["items"][0]["checked"]
+    )
     s["api"](
         "GET",
-        base + "?parent_id=root&roots=root&cursor=" + first["next_cursor"],
+        base + "?parent_id=a&roots=root&cursor=" + first["next_cursor"],
         code=422,
     )
     body = {
