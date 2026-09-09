@@ -358,6 +358,14 @@ export function workbenchFixture() {
       return page([
         { ordinal: 0, item_id: item(31).item_id, contribution_role: "value" },
       ]);
+    if (path.endsWith("/suggestions"))
+      return {
+        ...page([]),
+        threshold: 0.5,
+        signature_status: "ready",
+        candidates: 0,
+        unsigned_candidates: 0,
+      };
     throw new Error(`No fixture for ${method} ${path}`);
   }
   const fetchMock = vi.fn(async (input: string, init: RequestInit = {}) => {

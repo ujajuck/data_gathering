@@ -33,6 +33,7 @@ DB 구조를 개선하면서 기존 제품의 이름·색·탭 순서를 변경�
 | 오류 | 출력 타입·단위 불일치에 기대/실제 값 표시. 원본 단위와 목표 단위의 불일치도 설명 |
 | API 계약 | POST 요청을 Pydantic 모델로 정의. `/docs`에서 필수 request_key·위치 범위·작업 state enum 확인 |
 | 회귀 검증 | Vitest 30초 timeout, 백엔드/컴포넌트 테스트 추가, `e2e/v2`와 GitHub Actions 추가 |
+| 문서군 제안·레시피 이식 | 등록 시 구조 서명(시트명·헤더 라벨·병합 범위) 캐시. 파일 분석에서 같은 양식으로 보이는 적용 문서를 점수순으로 제안하고, 선택하면 시트 역할을 이름으로 맞춰 head 매핑을 `candidate/proposed` 리비전으로 이식(자동 승인 없음) |
 
 복원은 이미 생성된 추출·DB 산출물을 덮어쓰지 않는다. 이전 DB 파일에는 `_record_key`가 없을 수 있으며
 새로 생성한 빌드부터 추가된다. 새 KG 버전도 기존 템플릿에 자동 반영되지 않는다.
@@ -88,5 +89,5 @@ python -m kg.v2.reader_probe --ws <workspace> --provider protected-reader \
 DRM 샘플로 별도 검증해야 한다. 현재 미설정 환경의 실행 결과는 `DRM_READER_REQUIRED`다.
 
 v1 데이터 자동 마이그레이션, PostgreSQL+AGE, DVC 자동 연동, KG 그래프 캔버스,
-겹친 템플릿 동시 overlay, 문서군 자동 제안/레시피 이식, 재크롤링 정책, watch 자동 등록은 후속 범위다.
+겹친 템플릿 동시 overlay, 재크롤링 정책, watch 자동 등록은 후속 범위다.
 기존 기능 목록과 동등하다고 주장하지 않으며, 각각 v2 버전·권한·재검수 정책에 맞춰 설계한다.

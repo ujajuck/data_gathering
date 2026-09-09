@@ -153,6 +153,14 @@ class Database:
                 CREATE INDEX IF NOT EXISTS version_provider ON document(provider,source_ref);
                 CREATE INDEX IF NOT EXISTS series_by_mapping ON extracted_series(mapping_revision_id,run_id,series_id);
                 CREATE INDEX IF NOT EXISTS items_by_series ON extracted_item(series_id,item_index,item_id);
+                CREATE TABLE IF NOT EXISTS version_signature (
+                  document_version_id TEXT PRIMARY KEY NOT NULL REFERENCES document_version,
+                  algorithm TEXT NOT NULL,
+                  signature_json TEXT NOT NULL CHECK(json_valid(signature_json)),
+                  signature_sha256 TEXT NOT NULL,
+                  reader_revision TEXT NOT NULL,
+                  computed_at TEXT NOT NULL
+                );
             """)
             conn.execute("PRAGMA journal_mode=WAL")
 

@@ -31,12 +31,14 @@ from .contracts import (
     IntegrationRequest,
     RollbackRequest,
     ConceptEditRequest,
+    FromSuggestionRequest,
 )
 from .build import authorize_build, create_integration, output_path, prepare_build
 from .db import Problem, decode_cursor, dump, norm, one, page
 from .features import document_query, selection_cte, rollback, edit_concept
 from .service import Service
 from .spec import address, bounds
+from .suggest import list_suggestions, store_signature, transplant
 
 
 def install(app: FastAPI, root, start_worker=True):
@@ -999,6 +1001,35 @@ def install(app: FastAPI, root, start_worker=True):
                 "Content-Disposition": f'attachment; filename="template-{tid}.json"'
             },
         )
+
+    @router.get("/versions/{vid}/suggestions")
+    def suggestions(
+        vid: str,
+        threshold: float = Query(0.5, ge=0.0, le=1.0),
+        limit: int = Query(10, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        # 메타데이터와 캐시된 서명만 비교한다. 후보 원본은 열지 않는다.
+        return list_suggestions(service, vid, threshold, limit)
+
+    @router.post("/versions/{vid}/signature")
+    def signature(vid: str, user=Depends(principal)):
+        return store_signature(service, vid, user)
+
+    @router.post("/versions/{vid}/applications/from-suggestion")
+    def application_from_suggestion(
+        vid: str, body: FromSuggestionRequest, user=Depends(principal)
+    ):
+        body = body.payload()
+        service.authorize(vid, user)
+        with service.db.connect() as conn:
+            source = one(
+                conn,
+                "SELECT document_version_id FROM template_application WHERE application_id=?",
+                (body["source_application_id"],),
+            )
+        service.authorize(source["document_version_id"], user)
+        return safe_write(transplant, service, vid, body, user)
 
     app.include_router(router)
     if start_worker:

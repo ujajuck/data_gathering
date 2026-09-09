@@ -62,6 +62,7 @@ python -m kg.v2 --ws /tmp/data-gathering-v2-demo --port 8010
 | `kg/v2/extract.py` | series/item 배치 저장, 원자 출처, 입력 head가 일치하는 성공 실행만 발행 |
 | `kg/v2/build.py` | 실행 고정, 디스크 staging, 중복/충돌 검사, 사용자 DB와 N:M lineage |
 | `kg/v2/api.py` | `/api/v2`, 요청/페이지 크기 제한, 조회·다운로드 시 원본 접근 재확인 |
+| `kg/v2/suggest.py` | 문서 버전 구조 서명 캐시, 같은 양식 문서군 점수, 시트 역할 매칭, 검수 대기 레시피 이식, `sign` CLI 백필 |
 | `frontend/src/v2/` | 다섯 화면, 원본 범위 선택, 검수, 작업 표시, 결과와 원본 간 이동 |
 
 `db/v2/schema_sqlite.sql`의 32개 테이블에 런타임 작업 상태용 `runtime_job`이 추가된다.
@@ -209,6 +210,27 @@ FastAPI `/docs`가 요청 파라미터의 기준이다. POST 작업은 `request_
 | 값/출처 | `GET /series/{id}/items`, `/series/{id}/regions`, `/items/{id}`, `/items/{id}/regions` |
 | 통합 DB | `POST /integrations`, `/integrations/{id}/build`, `GET /builds?integration_version_id=…` |
 | 결과 | `GET /builds/{id}/rows`, `/builds/{id}/lineage?row_key=…&field_key=…`, `/builds/{id}/download` |
+| 문서군 제안 | `GET /versions/{id}/suggestions?threshold&limit`, `POST /versions/{id}/signature`, `POST /versions/{id}/applications/from-suggestion` |
+
+## 문서군 제안·레시피 이식
+
+`kg/v2/suggest.py`는 등록한 문서 버전마다 **구조 서명**을 계산해 런타임 캐시 테이블 `version_signature`에 둔다.
+서명은 시트명(정규형), 앞 30행×30열 창의 문자열 라벨 정규형(숫자·날짜·숫자 문자열 제외, 시트당 200개),
+같은 창에 걸친 병합 범위(시트당 200개), 시트 크기 추정치이며 원본 바이트·데이터 값은 저장하지 않는다.
+`version_signature`는 설계 DDL(`db/v2/schema_sqlite.sql`)에 속하지 않는 재계산 가능한 파생 캐시이며
+`runtime_job`처럼 `kg/v2/db.py`가 `CREATE TABLE IF NOT EXISTS`로 만든다(schema_meta 버전 변경 없음).
+
+- 계산 시점: `Service.register()` 끝(등록 트랜잭션 커밋 뒤). 제공자 `authorize(required="extract")`가 허용할 때만 저장하고,
+  실패해도 등록은 성공하며 결과에 `signature: "failed:<code>"`를 남긴다. 서명 연산이 없는 보안 Reader는 기존 `viewport` 계약으로 대체한다.
+- 백필: `POST /versions/{id}/signature` 또는 `python -m kg.v2 sign --ws <workspace> [--version <id>]`.
+- 유사도: `0.4·시트명 Jaccard + 0.4·헤더 토큰 Jaccard + 0.2·병합범위 Jaccard`. 양쪽 모두 비어 있는 성분은 제외하고 가중치를 재정규화한다.
+  `GET /versions/{id}/suggestions`는 템플릿을 연결한 다른 문서 버전(같은 문서의 이전 버전 포함, 최근 2,000건)을 캐시된 서명만으로 비교한다.
+  원본을 열지 않으며 기본 임계값 0.5, 최대 100건의 bounded 응답이다.
+- 이식: `POST /versions/{id}/applications/from-suggestion`는 원본 적용 건과 같은 템플릿 버전으로 새 `template_application`을 만들고,
+  시트 역할을 시트명 정규형 일치로 연결한다(불일치는 `SHEET_UNMATCHED`, `sheet_bindings`로 직접 지정 가능).
+  규칙별 원본 head(없으면 최신) 리비전을 `origin=candidate`, `status=proposed`의 새 `mapping_revision`으로 복사하며
+  `mapping_head`는 만들지 않는다(규칙 §4.10). 출처 적용 건·리비전은 `reason`과 `evidence_json.transplanted_from`에 남긴다.
+  승인은 기존 `POST /applications/{id}/mappings/{id}/revisions`의 `expected_seq: 0` 경로로만 이루어진다.
 
 ## 검증과 다음 연동
 

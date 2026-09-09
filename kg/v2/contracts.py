@@ -276,3 +276,15 @@ class JobResponse(Contract):
     result: dict[str, Any] | None = Field(
         None, description="작업 종류별 결과. viewport는 권한 유효기간 동안만 반환한다."
     )
+
+
+class FromSuggestionRequest(Contract):
+    source_application_id: Identifier
+    sheet_bindings: dict[Identifier, Identifier | list[Identifier]] | None = Field(
+        None,
+        description="시트 역할 → 대상 문서 버전의 시트 ID. 지정한 역할은 시트명 매칭 대신 이 값을 사용한다.",
+    )
+    name: Annotated[str, Field(min_length=1, max_length=200)] | None = Field(
+        None,
+        description="적용 건 구분 이름(scope_key). 같은 템플릿 버전을 한 버전에 여러 번 연결할 때 구분한다.",
+    )
