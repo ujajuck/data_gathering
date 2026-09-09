@@ -26,6 +26,8 @@ python -m kg.v2 --ws /tmp/data-gathering-v2-demo --port 8010
 # 완료된 빌드를 DVC 추적 폴더로 내보내기 / KG 리비전의 Apache AGE projection SQL 생성
 python -m kg.v2 export --ws /tmp/data-gathering-v2-demo --build <build_id> --out exports/v2/<build_id>
 python -m kg.v2 age-projection --ws /tmp/data-gathering-v2-demo --kg current --out age/kg.sql
+# raw 폴더 감시 → 새 파일/변경을 문서 버전으로 자동 등록 (--once는 1회 스캔)
+python -m kg.v2 watch --ws /tmp/data-gathering-v2-demo --once
 ```
 
 문서 → 원본 · 검수 → 승인/추출 → 도메인 개념별 소스 선택 → 사용자 DB 순서로 사용한다.
@@ -38,7 +40,8 @@ python -m kg.v2 age-projection --ws /tmp/data-gathering-v2-demo --kg current --o
 - [실행·Reader 계약·지원 범위·검증](docs/design/db-schema-v2-runtime.md)
 - 기존 v1 `kg.db`는 `python -m kg.v2 migrate --ws <v2 ws> --from-ws <v1 ws> [--dry-run] [--report r.json]`으로
   새 ID·`proposed` 매핑으로 옮긴다(값은 재추출 대상). 자세한 규칙은 위 문서의 "v1 이관" 절 참고.
-- [DB 설계와 ERD](docs/design/db-schema-v2.md), [목표 UI/API 설계](docs/design/db-schema-v2-ui.md)
+- [DB 설계와 ERD](docs/design/db-schema-v2.md), [목표 UI/API 설계](docs/design/db-schema-v2-ui.md),
+  [기능·디자인 복원 기록](docs/design/v2-restoration.md), [후속 구현 기록](docs/design/v2-followup.md)
 - 기존 서버 `python -m kg.webapp ...`에도 `/api/v2`가 연결되며 기본 화면은 v2다.
   기존 작업 화면은 `?v1=1`, 기존 PDF 뷰어는 `?legacy=1`로 접근한다.
 
