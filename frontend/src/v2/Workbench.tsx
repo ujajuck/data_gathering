@@ -708,7 +708,7 @@ export function Knowledge() {
   // 그래프에서 고른 개념이 현재 목록 페이지에 없으면 편집기를 위해 한 번만 보조 조회한다.
   const lookup = useData(
     kg && route.concept && concepts.data && !selectedOnPage
-      ? "/kg/" + kg + "/concepts?q=" + encodeURIComponent(route.concept)
+      ? "/kg/" + kg + "/concepts?id=" + encodeURIComponent(route.concept)
       : null,
   );
   const selected =

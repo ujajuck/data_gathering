@@ -288,3 +288,12 @@ def test_graph_does_not_open_sources(workspace):
         assert by_id(graph(s))["temperature"]["sources"] == 1
     finally:
         s["service"].read = original
+
+
+def test_concepts_exact_id_lookup(workspace):
+    # 그래프에서 고른 개념이 검색 첫 페이지에 없을 때 편집기가 쓰는 정확 일치 조회.
+    s = workspace
+    page = s["api"]("GET", "/kg/" + s["kg"] + "/concepts?id=temperature")
+    assert [c["concept_id"] for c in page["items"]] == ["temperature"]
+    assert s["api"]("GET", "/kg/" + s["kg"] + "/concepts?id=nope")["items"] == []
+    assert s["api"]("GET", "/kg/" + s["kg"] + "/concepts?q=온도&id=peak")["items"][0]["concept_id"] == "peak"

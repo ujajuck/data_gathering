@@ -30,11 +30,22 @@ class Watcher:
         self.watcher = FileEventWatcher(raw_dir=self.raw)
 
     def source_ref(self, path) -> str:
-        # 로컬 Reader 계약: data/raw 기준 상대경로 (예: "sub/a.xlsx")
-        return Path(path).resolve().relative_to(self.base).as_posix()
+        # 로컬 Reader 계약: data/raw 기준 상대경로 (예: "sub/a.xlsx"). raw 밖을 가리키는 심볼릭 링크는 거부한다.
+        try:
+            return Path(path).resolve().relative_to(self.base).as_posix()
+        except ValueError:
+            raise Problem("OUTSIDE_RAW_DIR", "data/raw 밖을 가리키는 항목은 등록하지 않습니다.")
 
     def handle(self, event: IngestEvent) -> dict:
-        line = {"event": event.kind, "source_ref": self.source_ref(event.path)}
+        try:
+            line = {"event": event.kind, "source_ref": self.source_ref(event.path)}
+        except Problem as exc:
+            return {
+                "event": event.kind,
+                "path": Path(event.path).name,
+                "skipped": exc.code,
+                "message": exc.message,
+            }
         if event.kind == "deleted":
             return {
                 **line,
@@ -57,13 +68,26 @@ class Watcher:
         return {**line, **result, "revision_no": revision}
 
     def scan(self) -> list[dict]:
+        # 끊어진 링크·스캔 중 사라진 파일은 FileEventWatcher가 항목별로 건너뛴다. 여기서는 그 사실만 알린다.
+        lines = []
+        for pattern in self.watcher.patterns:
+            for p in Path(self.raw).glob(pattern):
+                if p.name.startswith("~$"):
+                    continue
+                try:
+                    p.stat()
+                except OSError:
+                    lines.append(
+                        {"event": "scan", "path": p.name, "skipped": "STAT_FAILED",
+                         "message": "끊어진 링크이거나 스캔 중 사라진 파일"}
+                    )
         try:
             events = self.watcher.scan_once()
-        except OSError as exc:  # 스캔 도중 삭제/권한 변화
-            return [
+        except OSError as exc:  # 권한 변화 등 폴더 수준 실패
+            return lines + [
                 {"event": "scan", "skipped": "SCAN_FAILED", "message": type(exc).__name__}
             ]
-        return [self.handle(e) for e in events]
+        return lines + [self.handle(e) for e in events]
 
     def run_once(self, settle=0.1) -> list[dict]:
         # StabilityGuard는 (size, mtime)이 두 번 연속 같아야 이벤트를 낸다.

@@ -308,13 +308,14 @@ def test_recrawl_request_key_is_idempotent_per_application(setup):
             "SELECT request_key,kind FROM runtime_job WHERE job_id=?",
             (first["queued"][0]["job_id"],),
         ).fetchone()
-    assert tuple(stored) == (f"{body['request_key']}:{a}", "extract")
-    # 같은 파생 키로 mode만 바꿔도 새 작업을 만들지 않는다(payload 해시에 mode 없음).
+    assert tuple(stored) == (f"{body['request_key']}:fill:{a}", "extract")
+    # 같은 request_key라도 mode가 다르면 별개의 배치다 — 같은 적용 건은 진행 중이면 건너뛰고 새 작업을 재사용하지 않는다.
     third = s["api"](
         "POST", f"/template-versions/{tid}/recrawl", {**body, "mode": "reset_auto"}
     )
-    assert third["queued"] == first["queued"]
-    assert count(s, "runtime_job") == jobs
+    assert third["mode"] == "reset_auto" and third["truncated"] is False
+    assert not any(q["job_id"] == first["queued"][0]["job_id"] for q in third["queued"])
+    assert count(s, "runtime_job") == jobs + len(third["queued"])
 
 
 def test_recrawl_status_summarizes_jobs(setup):
@@ -389,3 +390,26 @@ def test_recrawl_validation_and_not_found(setup):
     )
     assert error["error"]["code"] == "REQUEST_KEY_REQUIRED"
     assert count(s, "runtime_job") == 1  # setup의 register 작업만 존재
+
+
+def test_watch_skips_symlink_outside_raw_and_continues(ws, capsys, tmp_path):
+    outside = tmp_path / "outside" / "secret.xlsx"
+    outside.parent.mkdir(parents=True)
+    make_xlsx(outside)
+    make_xlsx(ws / "data/raw/good.xlsx")
+    (ws / "data/raw/link.xlsx").symlink_to(outside)
+    assert main(["watch", "--ws", str(ws), "--once"]) == 0
+    lines = [json.loads(l) for l in capsys.readouterr().out.splitlines()]
+    skipped = [l for l in lines if l.get("skipped") == "OUTSIDE_RAW_DIR"]
+    assert skipped and all("secret" not in json.dumps(l) for l in skipped)
+    assert any(l.get("source_ref") == "good.xlsx" and l.get("version_id") for l in lines)
+
+
+def test_watch_dangling_symlink_does_not_block_other_files(ws, capsys):
+    make_xlsx(ws / "data/raw/good.xlsx")
+    (ws / "data/raw/dangling.xlsx").symlink_to(ws / "data/raw/missing.xlsx")
+    assert main(["watch", "--ws", str(ws), "--once"]) == 0
+    lines = [json.loads(l) for l in capsys.readouterr().out.splitlines()]
+    assert any(l.get("skipped") == "STAT_FAILED" and l.get("path") == "dangling.xlsx" for l in lines)
+    assert any(l.get("source_ref") == "good.xlsx" and l.get("version_id") for l in lines)
+    assert not any(l.get("skipped") == "SCAN_FAILED" for l in lines)

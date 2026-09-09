@@ -13,7 +13,9 @@ FROM template_application a
 JOIN document_version v ON v.document_version_id=a.document_version_id
 JOIN document d ON d.document_id=v.document_id
 WHERE a.template_version_id=?
-ORDER BY a.created_at, a.application_id LIMIT 1000"""
+ORDER BY a.created_at, a.application_id LIMIT 1001"""
+
+POPULATION_LIMIT = 1000
 
 STATUS_WHERE = """FROM runtime_job j WHERE j.principal=? AND j.kind='extract'
   AND substr(j.request_key,1,length(?))=?
@@ -21,8 +23,9 @@ STATUS_WHERE = """FROM runtime_job j WHERE j.principal=? AND j.kind='extract'
              WHERE a.application_id=json_extract(j.payload_json,'$.application_id') AND a.template_version_id=?)"""
 
 
-def derived_key(request_key, application_id):
-    return f"{request_key}:{application_id}"
+def derived_key(request_key, application_id, mode="fill"):
+    # 같은 request_key라도 mode가 다르면 다른 배치다 (fill 뒤 reset_auto는 발행된 건을 추가로 큐잉한다).
+    return f"{request_key}:{mode}:{application_id}"
 
 
 def require_template_version(conn, tid):
@@ -37,12 +40,14 @@ def recrawl(service, tid, mode, request_key, principal):
     with service.db.connect() as conn:
         require_template_version(conn, tid)
         rows = [dict(r) for r in conn.execute(POPULATION, (tid,))]
+    truncated = len(rows) > POPULATION_LIMIT
+    rows = rows[:POPULATION_LIMIT]
     queued, skipped = [], []
     for row in rows:
         aid = row["application_id"]
-        key = derived_key(request_key, aid)
+        key = derived_key(request_key, aid, mode)
         with service.db.connect() as conn:
-            # 같은 파생 키의 재전송은 mode와 무관하게 기존 작업을 그대로 돌려준다.
+            # 같은 파생 키(request_key+mode+적용 건)의 재전송은 기존 작업을 그대로 돌려준다.
             existing = conn.execute(
                 "SELECT job_id FROM runtime_job WHERE principal=? AND kind='extract' AND request_key=?",
                 (principal, key),
@@ -86,6 +91,9 @@ def recrawl(service, tid, mode, request_key, principal):
         "request_key": request_key,
         "queued": queued,
         "skipped": skipped,
+        # 적용 건이 상한(1000)을 넘으면 나머지는 처리하지 않았음을 알린다. 같은 request_key로 다시 호출하면 이어서 큐잉된다.
+        "truncated": truncated,
+        "population_limit": POPULATION_LIMIT,
     }
 
 

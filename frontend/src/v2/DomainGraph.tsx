@@ -120,7 +120,12 @@ export function layoutDomain(graph: Graph): { groups: Laid[]; height: number } {
     y = 96,
     rowH = 0;
   for (const g of groups) {
-    const cols = Math.min(4, Math.max(2, Math.ceil(g.nodes.length / 3)));
+    // 36개까지는 v1과 같은 최대 4열, 그보다 크면 정사각형에 가깝게(최대 8열) 배치해 세로로만 길어지지 않게 한다.
+    const n = g.nodes.length;
+    const cols = Math.max(
+      2,
+      n <= 36 ? Math.min(4, Math.ceil(n / 3)) : Math.min(8, Math.ceil(Math.sqrt(n))),
+    );
     const rows = Math.ceil(g.nodes.length / cols);
     g.w = cols * (NW + GX) - GX + PAD * 2;
     g.h = PAD + L1H + (rows ? 18 + rows * (NH + GY) - GY : 0) + LABEL + PAD;
@@ -182,11 +187,13 @@ export default function DomainGraph({
   const selectRoot = (id: string) => {
     if (id !== ORPHAN) onSelectRoot(id);
   };
+  // 원본 크기(확대 배율 반영)로 그리고 스크롤은 .v2-graph-wrap이 맡는다 — 큰 KG가 축소되어 글자가 뭉개지지 않게.
   return (
     <svg
       className="v2-graph"
+      role="group"
       viewBox={`0 0 1180 ${height}`}
-      style={{ width: `${zoom * 100}%`, height: Math.min(660, height) * zoom }}
+      style={{ width: 1180 * zoom, height: height * zoom }}
       aria-label="전체 개념 트리와 문서군 커버리지"
     >
       {groups.map((g) => {
@@ -196,9 +203,9 @@ export default function DomainGraph({
         return (
           <g
             key={`hull-${id}`}
-            {...pressable(() => selectRoot(id))}
+            {...(id === ORPHAN ? {} : pressable(() => selectRoot(id)))}
             aria-label={`문서군 ${g.group.name}`}
-            aria-pressed={selectedRoot === id}
+            aria-pressed={id === ORPHAN ? undefined : selectedRoot === id}
           >
             <rect
               className={`hull${dim}`}

@@ -73,8 +73,13 @@ class FileEventWatcher:
                 if p.name.startswith("~$"):
                     continue  # Excel lock/temp file
                 key = str(p)
+                try:
+                    st = p.stat()
+                except OSError:
+                    # 끊어진 링크나 스캔 중 사라진 파일: 이 항목만 건너뛰고 다음 스캔에서 다시 본다.
+                    self.guard.forget(key)
+                    continue
                 present.add(key)
-                st = p.stat()
                 sig = f"{st.st_size}:{st.st_mtime_ns}"
                 if not self.guard.observe(p):
                     continue  # 저장 중 — 다음 스캔에서 재시도

@@ -146,6 +146,10 @@ def convert_template(sheets, kg_revision_id, active, names):
                         "axis": "none",
                     },
                 }
+                # v1은 시트 전체를 훑었지만 v2의 기본 검색 창은 A1:AZ100이다.
+                detail["notes"].append(
+                    f"{rule_key}: key search limited to A1:AZ100 in v2 (v1 scanned the whole sheet); verify anchor"
+                )
             else:
                 fail(f"mapping {key}: source has neither range nor key_search")
             value_spec = {
@@ -349,11 +353,21 @@ class Migration:
             raise Problem(
                 "V1_DATABASE_MISSING", f"v1 kg.db가 없습니다: {self.v1_path}", 404
             )
+        self.v1 = self._readonly(self.v1_path)
+        tables = {
+            r[0] for r in self.v1.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        required = {"domain_concept", "domain_relation", "domain_alias", "document", "document_version"}
+        if not required <= tables:
+            self.v1.close()
+            raise Problem(
+                "V1_DATABASE_INVALID",
+                f"v1 kg.db 스키마가 아닙니다 (없는 테이블: {', '.join(sorted(required - tables))}): {self.v1_path}",
+            )
         if not self.dry_run:
             from .service import Service
 
             self.service = Service(self.ws)
-        self.v1 = self._readonly(self.v1_path)
         try:
             self._load_links()
             self._kg()
@@ -519,6 +533,21 @@ class Migration:
                 return candidate
         return None
 
+    def _link_duplicates(self, duplicates, v2_version_id, actual, registrable):
+        for dup in duplicates:
+            self._link(
+                "document_version",
+                dup["version_id"],
+                v2_version_id,
+                "migrated",
+                {
+                    "file_hash": actual,
+                    "parser_version": dup["parser_version"],
+                    "v1_parsed_at": dup["parsed_at"],
+                    "same_bytes_as": registrable["version_id"],
+                },
+            )
+
     def _documents(self):
         from .readers import file_hash
 
@@ -556,16 +585,17 @@ class Migration:
                 continue
             source_ref = str(resolved.relative_to(self.v2_raw))
             actual = file_hash(resolved)
-            registrable = None
+            matching = [v for v in pending if v["file_hash"] == actual]
             for v in pending:
-                if v["file_hash"] == actual:
-                    registrable = v
-                else:
+                if v["file_hash"] != actual:
                     self._skip(
                         "document_version",
                         v["version_id"],
                         f"source changed (v1 hash {v['file_hash'][:8]}… ≠ current {actual[:8]}…)",
                     )
+            # 같은 바이트를 가리키는 v1 버전이 여럿이면(A→B→A 이력) 한 번만 등록하고 전부 그 v2 버전에 연결한다.
+            registrable = matching[-1] if matching else None
+            duplicates = matching[:-1]
             if registrable is None:
                 if not doc_link:
                     self._skip("document", doc["document_id"], "no version matches current bytes")
@@ -607,6 +637,7 @@ class Migration:
                         "sheets": sheets,
                     },
                 )
+                self._link_duplicates(duplicates, None, actual, registrable)
                 continue
             with self.service.db.connect() as conn:
                 found = conn.execute(
@@ -646,6 +677,7 @@ class Migration:
                     "v2_document_id": result["document_id"],
                 },
             )
+            self._link_duplicates(duplicates, result["version_id"], actual, registrable)
 
     def _skip_document(self, doc, pending, doc_link, reason):
         for v in pending:
@@ -686,6 +718,22 @@ class Migration:
                 }
             )
         return sheets
+
+    def _recover_template_version(self, name, definition, template_id):
+        # 링크를 기록하기 전에 중단된 이전 실행이 만든 같은 정의의 버전이 있으면 새로 만들지 않고 재사용한다.
+        spec = validate_template(definition)
+        with self.service.db.connect() as conn:
+            row = conn.execute(
+                "SELECT tv.template_id,tv.template_version_id,tv.revision_no FROM template_version tv JOIN template t USING(template_id) WHERE tv.definition_sha256=? AND tv.created_by=? AND t.name=? AND t.created_by=? ORDER BY tv.created_at DESC LIMIT 1",
+                (digest(spec), self.principal, name, self.principal),
+            ).fetchone()
+        if row is None or (template_id and row["template_id"] != template_id):
+            return None
+        return {
+            "template_id": row["template_id"],
+            "template_version_id": row["template_version_id"],
+            "revision_no": row["revision_no"],
+        }
 
     def _templates(self):
         for t in self.v1.execute(
@@ -758,16 +806,20 @@ class Migration:
                         )
                     self._link("template_version", v1_id, None, "migrated", detail)
                     continue
-                try:
-                    result = self.service.create_template(
-                        t["name"], definition, self.principal, template_id=v2_template_id
-                    )
-                except sqlite3.IntegrityError as exc:
-                    self._skip("template_version", v1_id, f"INTEGRITY_CONFLICT: {exc}")
-                    continue
-                except Problem as exc:
-                    self._skip("template_version", v1_id, f"{exc.code}: {exc.message}")
-                    continue
+                result = self._recover_template_version(t["name"], definition, v2_template_id)
+                if result:
+                    detail["recovered"] = True
+                else:
+                    try:
+                        result = self.service.create_template(
+                            t["name"], definition, self.principal, template_id=v2_template_id
+                        )
+                    except sqlite3.IntegrityError as exc:
+                        self._skip("template_version", v1_id, f"INTEGRITY_CONFLICT: {exc}")
+                        continue
+                    except Problem as exc:
+                        self._skip("template_version", v1_id, f"{exc.code}: {exc.message}")
+                        continue
                 v2_template_id = result["template_id"]
                 if not template_link:
                     template_link = self._link(
@@ -973,7 +1025,11 @@ class Migration:
                 self._skip("override", oid, "rule has no mapping revision")
                 continue
             reason = f"v1 override {oid}: {o['reason'] or ''}".strip()
-            if latest["created_by"] == self.principal and latest["reason"] == reason:
+            if latest["created_by"] != self.principal:
+                # 사람이 v2에서 이미 손댄 규칙(proposed/rejected 포함)은 덮어쓰지 않는다 (§6).
+                self._skip("override", oid, "EDIT_CONFLICT: human revision exists")
+                continue
+            if latest["reason"] == reason:
                 # 링크 기록 전에 중단된 이전 실행의 리비전을 재사용한다.
                 self._link("override", oid, latest["mapping_revision_id"], "migrated", detail)
                 continue
@@ -1032,6 +1088,9 @@ def run_cli(args):
         report = migrate(args.ws, args.from_ws, args.raw, args.dry_run, args.principal)
     except Problem as exc:
         print(f"{exc.code}: {exc.message}", file=sys.stderr)
+        return 2
+    except sqlite3.Error as exc:
+        print(f"V1_DATABASE_ERROR: {exc}", file=sys.stderr)
         return 2
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)

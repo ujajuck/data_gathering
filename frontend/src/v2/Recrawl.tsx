@@ -26,12 +26,16 @@ export default function Recrawl({
       : null,
   );
   useEffect(() => {
-    // 대기/실행 중 작업이 남아 있으면 1초 뒤 다시 조회한다.
+    // 대기/실행 중 작업이 남아 있으면 1초 뒤 다시 조회한다. 조회가 실패하면 3초 뒤 다시 시도한다.
     const s = status.data?.summary || {};
+    if (status.error) {
+      const t = setTimeout(status.reload, 3000);
+      return () => clearTimeout(t);
+    }
     if (!status.data || !((s.queued || 0) + (s.running || 0))) return;
     const t = setTimeout(status.reload, 1000);
     return () => clearTimeout(t);
-  }, [status.data]);
+  }, [status.data, status.error]);
   async function run() {
     setBusy(true);
     setError("");
@@ -72,13 +76,19 @@ export default function Recrawl({
         실행
       </button>
       <p className="v2-error" role="alert">
-        {error}
+        {error || (status.error ? "진행 상태 조회 실패: " + status.error + " (다시 시도 중)" : "")}
       </p>
       {result && (
         <div role="status">
           <strong>
             대기열 {result.queued.length}건 · 건너뜀 {result.skipped.length}건
           </strong>
+          {result.truncated && (
+            <span className="v2-muted">
+              {" "}
+              · 상한 {result.population_limit}건까지만 처리했습니다. 실행을 다시 눌러 이어서 처리하세요.
+            </span>
+          )}
           {status.data && (
             <span className="v2-muted">
               {" "}

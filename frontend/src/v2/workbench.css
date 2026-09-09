@@ -1011,6 +1011,7 @@
 .v2 .v2-graph {
   display: block;
   min-width: 100%;
+  max-width: none;
 }
 .v2 .v2-graph .gnode {
   fill: #fff;
@@ -1084,6 +1085,7 @@
   .v2-grid.three.v2-kg-layout > section:last-child {
     grid-column: auto;
   }
+}
 .v2-recrawl {
   margin-top: 16px;
   padding: 0;
@@ -1095,6 +1097,7 @@
 .v2-recrawl ul {
   margin: 6px 0 0;
   padding-left: 18px;
+}
 .v2-suggestions {
   margin-top: 16px;
 }

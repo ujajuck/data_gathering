@@ -391,14 +391,18 @@ def install(app: FastAPI, root, start_worker=True):
     def concepts(
         kg: str,
         q: str = Query("", max_length=200),
+        id: str | None = Query(None, max_length=200),
         cursor: str | None = None,
         limit: int = Query(30, ge=1, le=100),
         user=Depends(principal),
     ):
+        # id는 정확히 일치하는 개념 하나를 위한 조회다 (그래프에서 고른 개념이 검색 첫 페이지에 없을 때).
+        exact = " AND c.concept_id=?" if id is not None else ""
         return listing(
-            "SELECT c.* FROM domain_concept c WHERE c.kg_revision_id=? AND (c.name LIKE ? OR c.concept_id LIKE ? OR EXISTS (SELECT 1 FROM domain_alias a WHERE a.kg_revision_id=c.kg_revision_id AND a.concept_id=c.concept_id AND a.alias_norm LIKE ?))",
-            (kg, "%" + q + "%", "%" + q + "%", "%" + norm(q) + "%"),
-            ["concepts", kg, q],
+            "SELECT c.* FROM domain_concept c WHERE c.kg_revision_id=? AND (c.name LIKE ? OR c.concept_id LIKE ? OR EXISTS (SELECT 1 FROM domain_alias a WHERE a.kg_revision_id=c.kg_revision_id AND a.concept_id=c.concept_id AND a.alias_norm LIKE ?))"
+            + exact,
+            (kg, "%" + q + "%", "%" + q + "%", "%" + norm(q) + "%", *([id] if id is not None else [])),
+            ["concepts", kg, q, id or ""],
             ["c.concept_id"],
             cursor,
             limit,

@@ -570,3 +570,71 @@ def test_source_copied_into_separate_v2_raw_is_found(v1_workspace, tmp_path):
         ).fetchone()
         assert version is not None and json.loads(version[0])["source_ref"] == "coffee.xlsx"
     assert {"entity": "document", "v1_id": "doc-missing", "reason": "source missing"} in report["skipped"]
+
+
+def test_template_links_recover_without_duplicate_versions(v1_workspace):
+    # 템플릿을 만든 뒤 링크를 쓰기 전에 중단된 실행: 다시 실행해도 template/template_version이 늘지 않는다.
+    run(v1_workspace)
+    before = snapshot(v1_workspace)
+    with v2(v1_workspace) as conn:
+        conn.execute(
+            "DELETE FROM artifact WHERE policy_ref='v1-migration' AND json_extract(storage_ref,'$.entity') IN ('template','template_version','assignment','override')"
+        )
+        conn.commit()
+    report = run(v1_workspace)
+    after = snapshot(v1_workspace)
+    assert after["template"] == before["template"] and after["template_version"] == before["template_version"]
+    recovered = links(report, "template_version", "migrated")
+    assert recovered and all(l["detail"].get("recovered") is True for l in recovered)
+
+
+def test_override_never_supersedes_a_human_revision(v1_workspace):
+    run(v1_workspace)
+    service = Service(v1_workspace)
+    with v2(v1_workspace) as conn:
+        latest = dict(conn.execute(
+            "SELECT application_id,mapping_revision_id,concept_id,effective_spec_json FROM mapping_revision WHERE rule_key='weight' ORDER BY revision_no DESC LIMIT 1"
+        ).fetchone())
+    spec = json.loads(latest["effective_spec_json"])
+    spec["selector"]["value"]["areas"][0]["range"] = "H7:H7"
+    human = service.revise(
+        latest["application_id"], latest["mapping_revision_id"], 0, spec, latest["concept_id"], "proposed", "human proposed edit", "alice"
+    )
+    with v2(v1_workspace) as conn:
+        conn.execute(
+            "DELETE FROM artifact WHERE policy_ref='v1-migration' AND json_extract(storage_ref,'$.entity')='override'"
+        )
+        conn.commit()
+    report = run(v1_workspace)
+    skip = next(s for s in report["skipped"] if s["entity"] == "override")
+    assert "EDIT_CONFLICT" in skip["reason"]
+    with v2(v1_workspace) as conn:
+        newest = conn.execute(
+            "SELECT mapping_revision_id,created_by FROM mapping_revision WHERE rule_key='weight' ORDER BY revision_no DESC LIMIT 1"
+        ).fetchone()
+    assert tuple(newest) == (human["mapping_revision_id"], "alice")
+
+
+def test_versions_with_same_bytes_are_all_linked(v1_workspace):
+    store = KgStore(v1_workspace / "data/kg/kg.db")
+    digest_ = sha256((v1_workspace / "data/raw/coffee.xlsx").read_bytes()).hexdigest()
+    again = store.add_version("doc-coffee", digest_, "test-again")
+    store.commit()
+    store.close()
+    report = run(v1_workspace)
+    versions = links(report, "document_version", "migrated")
+    ids = {l["v1_id"]: l for l in versions}
+    assert v1_workspace.ids["vid"] in ids and again in ids
+    assert len({l["v2_id"] for l in versions}) == 1
+    assert any(l["detail"].get("same_bytes_as") for l in versions)
+    assert report["counts"]["document_versions"]["migrated"] == 2
+    second = run(v1_workspace)
+    assert (second["counts"]["document_versions"]["migrated"], second["counts"]["document_versions"]["existing"]) == (0, 2)
+
+
+def test_invalid_v1_database_fails_before_creating_v2(tmp_path):
+    ws = tmp_path / "bad"
+    (ws / "data/kg").mkdir(parents=True)
+    sqlite3.connect(ws / "data/kg/kg.db").execute("CREATE TABLE unrelated(x)").connection.commit()
+    assert main(["migrate", "--ws", str(ws), "--from-ws", str(ws)]) == 2
+    assert not (ws / "data/kg/v2.db").exists()

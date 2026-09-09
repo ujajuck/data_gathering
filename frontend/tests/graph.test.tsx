@@ -175,7 +175,7 @@ describe("개념 탐색 커버리지 그래프", () => {
           "전체 개념 트리와 문서군 커버리지",
         ) as unknown as SVGElement
       ).style.width,
-    ).toBe("125%");
+    ).toBe("1475px");
     await user.click(screen.getByRole("button", { name: "목록" }));
     expect(
       screen.queryByLabelText("전체 개념 트리와 문서군 커버리지"),
