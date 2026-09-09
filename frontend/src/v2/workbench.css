@@ -993,3 +993,95 @@
   overflow: auto;
   white-space: pre-wrap;
 }
+
+/* 개념 탐색 3열(목록/그래프/상세)과 v1 DomainGraph에서 이식한 SVG 클래스 */
+.v2-grid.three.v2-kg-layout {
+  grid-template-columns: minmax(230px, 1fr) minmax(0, 2.4fr) minmax(280px, 1.1fr);
+}
+.v2-graph-card {
+  min-width: 0;
+}
+.v2-graph-wrap {
+  overflow: auto;
+  max-height: 680px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+}
+.v2 .v2-graph {
+  display: block;
+  min-width: 100%;
+}
+.v2 .v2-graph .gnode {
+  fill: #fff;
+  stroke: #aeb9ca;
+  stroke-width: 1.4;
+  cursor: pointer;
+}
+.v2 .v2-graph .gnode.sel {
+  fill: var(--product-blue-soft);
+  stroke: var(--product-blue);
+  stroke-width: 3;
+}
+.v2 .v2-graph .gnode.dim,
+.v2 .v2-graph .hull.dim,
+.v2 .v2-graph .hlabel.dim {
+  opacity: 0.3;
+}
+.v2 .v2-graph .ntext {
+  font-size: 12px;
+  fill: var(--product-text);
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: none;
+}
+.v2 .v2-graph .ncnt {
+  font-size: 10px;
+  fill: var(--product-muted);
+  text-anchor: middle;
+  pointer-events: none;
+}
+.v2 .v2-graph .gedge {
+  stroke: #c3cbd8;
+  stroke-width: 1.4;
+  fill: none;
+}
+.v2 .v2-graph .hull {
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+  cursor: pointer;
+}
+.v2 .v2-graph .hlabel {
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.v2 .v2-graph [role="button"]:focus-visible {
+  outline: none;
+}
+.v2 .v2-graph [role="button"]:focus-visible rect {
+  stroke: var(--product-blue);
+  stroke-width: 3;
+}
+.v2-segment button[aria-pressed="true"] {
+  background: var(--product-blue-soft);
+  border-color: var(--product-blue);
+  color: #244ea8;
+}
+@media (max-width: 1150px) {
+  .v2-grid.three.v2-kg-layout {
+    grid-template-columns: 1fr 1fr;
+  }
+  .v2-grid.three.v2-kg-layout > section:last-child {
+    grid-column: 1/-1;
+  }
+}
+@media (max-width: 720px) {
+  .v2-grid.three.v2-kg-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .v2-grid.three.v2-kg-layout > section:last-child {
+    grid-column: auto;
+  }
+}

@@ -35,6 +35,7 @@ from .contracts import (
 from .build import authorize_build, create_integration, output_path, prepare_build
 from .db import Problem, decode_cursor, dump, norm, one, page
 from .features import document_query, selection_cte, rollback, edit_concept
+from .graph import coverage_graph
 from .service import Service
 from .spec import address, bounds
 
@@ -999,6 +1000,12 @@ def install(app: FastAPI, root, start_worker=True):
                 "Content-Disposition": f'attachment; filename="template-{tid}.json"'
             },
         )
+
+    @router.get("/kg/{kg}/graph")
+    def kg_graph(kg: str, user=Depends(principal)):
+        # 문서 ID를 노출하지 않는 집계라 원본 접근을 재확인하지 않고 메타데이터만 읽는다.
+        with service.db.connect() as conn:
+            return coverage_graph(conn, kg, service.root.name)
 
     app.include_router(router)
     if start_worker:
