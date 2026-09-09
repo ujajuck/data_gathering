@@ -297,3 +297,30 @@ def test_concepts_exact_id_lookup(workspace):
     assert [c["concept_id"] for c in page["items"]] == ["temperature"]
     assert s["api"]("GET", "/kg/" + s["kg"] + "/concepts?id=nope")["items"] == []
     assert s["api"]("GET", "/kg/" + s["kg"] + "/concepts?q=온도&id=peak")["items"][0]["concept_id"] == "peak"
+
+
+def test_multi_parent_picks_smallest_parent_and_orphan_has_no_root(workspace):
+    # §4.9는 다부모 parent_of를 허용한다: 표시 부모는 concept_id 오름차순 첫 부모이고 root는 그 부모를 따른다.
+    # parent_of 들어오는 엣지가 없는 L2는 parent/root 없이 남는다(문서군에 포함되지 않는다).
+    s = workspace
+    kg = s["api"](
+        "POST",
+        "/kg/import",
+        {
+            "concepts": [
+                {"concept_id": "b", "name": "B", "level": 1},
+                {"concept_id": "a", "name": "A", "level": 1},
+                {"concept_id": "x", "name": "X", "level": 2},
+                {"concept_id": "orphan", "name": "O", "level": 2},
+                {"concept_id": "y", "name": "Y", "level": 3},
+            ],
+            "relations": [["b", "x", "parent_of"], ["a", "x", "parent_of"], ["x", "y", "parent_of"]],
+        },
+    )
+    g = graph(s, kg["kg_revision_id"])
+    n = by_id(g)
+    assert n["x"]["parent"] == "a" and n["x"]["root"] == "a"
+    assert n["y"]["parent"] == "x" and n["y"]["root"] == "a"
+    assert n["orphan"]["parent"] is None and n["orphan"]["root"] is None
+    assert len(g["edges"]) == 3
+    assert [x["root_concept_id"] for x in g["groups"]] == ["a", "b"]
