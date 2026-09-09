@@ -276,3 +276,9 @@ class JobResponse(Contract):
     result: dict[str, Any] | None = Field(
         None, description="작업 종류별 결과. viewport는 권한 유효기간 동안만 반환한다."
     )
+
+
+class RecrawlRequest(JobRequest):
+    # 적용 건별 파생 키 f"{request_key}:{application_id}"(uuid 36자)가 runtime_job의 128자 한도 안에 있어야 한다.
+    request_key: Annotated[str, Field(min_length=1, max_length=64)]
+    mode: Literal["fill", "reset_auto"] = "fill"

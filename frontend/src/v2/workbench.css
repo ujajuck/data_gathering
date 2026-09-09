@@ -993,3 +993,15 @@
   overflow: auto;
   white-space: pre-wrap;
 }
+.v2-recrawl {
+  margin-top: 16px;
+  padding: 0;
+  border: 0;
+}
+.v2-recrawl legend {
+  font-weight: 600;
+}
+.v2-recrawl ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}

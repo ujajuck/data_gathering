@@ -31,10 +31,12 @@ from .contracts import (
     IntegrationRequest,
     RollbackRequest,
     ConceptEditRequest,
+    RecrawlRequest,
 )
 from .build import authorize_build, create_integration, output_path, prepare_build
 from .db import Problem, decode_cursor, dump, norm, one, page
 from .features import document_query, selection_cte, rollback, edit_concept
+from .recrawl import recrawl, require_template_version, status_query, status_summary
 from .service import Service
 from .spec import address, bounds
 
@@ -999,6 +1001,35 @@ def install(app: FastAPI, root, start_worker=True):
                 "Content-Disposition": f'attachment; filename="template-{tid}.json"'
             },
         )
+
+    @router.post("/template-versions/{tid}/recrawl")
+    def template_recrawl(tid: str, body: RecrawlRequest, user=Depends(principal)):
+        body = body.payload()
+        return recrawl(
+            service, tid, body.get("mode", "fill"), body["request_key"], user
+        )
+
+    @router.get("/template-versions/{tid}/recrawl-status")
+    def template_recrawl_status(
+        tid: str,
+        request_key: str = Query(..., min_length=1, max_length=64),
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        with service.db.connect() as conn:
+            require_template_version(conn, tid)
+        sql, params = status_query(tid, request_key, user)
+        result = listing(
+            sql,
+            params,
+            ["recrawl-status", tid, request_key, user],
+            ["j.job_id"],
+            cursor,
+            limit,
+        )
+        result["summary"] = status_summary(service, tid, request_key, user)
+        return result
 
     app.include_router(router)
     if start_worker:

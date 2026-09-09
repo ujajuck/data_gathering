@@ -16,6 +16,16 @@ python -m examples.schema_v2.runtime_demo --workspace /tmp/data-gathering-v2-dem
 python -m kg.v2 --ws /tmp/data-gathering-v2-demo --port 8010
 ```
 
+```bash
+python -m kg.v2 watch --ws /tmp/data-gathering-v2-demo --once   # --once 없이 실행하면 --interval(기본 2초)마다 감시
+```
+
+`watch`는 `<workspace>/data/raw`(또는 그 아래 `--raw` 폴더)의 `*.xlsx`/`*.xlsm`을 폴링해
+`POST /documents/register`와 같은 경로로 등록한다. 같은 경로의 바뀐 파일은 같은 문서의 새 버전이
+되고 바뀌지 않은 파일은 `unchanged`로 기록만 남긴다. 암호화 문서는 `DRM_READER_REQUIRED`로
+건너뛰며 해제본을 만들지 않고, 삭제된 파일은 로그만 남기고 문서·버전 행을 지우지 않는다.
+이벤트마다 stdout에 JSON 한 줄을 쓴다.
+
 `http://localhost:8010/?v2=1`에 접속한다. 샘플 생성기는 가상 공정 기록 65개와 두 시트,
 병합 셀·서식·차트, 수동 KG와 검수 대기 템플릿을 만든다. 기존 샘플은 덮어쓰지 않는다.
 일반 문서의 경우 `<workspace>/data/raw`에 있는 원본을 참조한다. 브라우저 업로드로
@@ -206,6 +216,7 @@ FastAPI `/docs`가 요청 파라미터의 기준이다. POST 작업은 `request_
 | 개념 선택·편집 | `GET /kg/{id}/tree?roots=…&excluded=…`, `GET /series?kg_revision_id=…&roots=…`, `POST /kg/{id}/concepts/{id}/revisions` |
 | 전처리·내보내기 | `GET /normalization-presets`, `/template-versions/{id}/download`, `/builds/{id}/download?format=csv` |
 | 추출 | `POST /applications/{id}/extract`, `GET /series?run_id=…` 또는 KG/개념별 현재 출처 |
+| 재크롤링 | `POST /template-versions/{id}/recrawl` (`mode` fill/reset_auto, `request_key`; 검수 미완 적용 건은 `review_required`로 건너뜀, 매핑 리비전 불변), `GET /template-versions/{id}/recrawl-status?request_key=…` |
 | 값/출처 | `GET /series/{id}/items`, `/series/{id}/regions`, `/items/{id}`, `/items/{id}/regions` |
 | 통합 DB | `POST /integrations`, `/integrations/{id}/build`, `GET /builds?integration_version_id=…` |
 | 결과 | `GET /builds/{id}/rows`, `/builds/{id}/lineage?row_key=…&field_key=…`, `/builds/{id}/download` |
