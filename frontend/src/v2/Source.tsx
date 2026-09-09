@@ -16,6 +16,8 @@ import {
 } from "./client";
 import type { Row } from "./client";
 import { AssignTemplate, Heading } from "./Workbench";
+import { RevisionHistory } from "./Review";
+import Presets from "./Presets";
 
 export default function Source() {
   const { route, go, refresh, changed } = useNavigation();
@@ -301,6 +303,11 @@ export default function Source() {
                   : view.data?.fidelity || "현재 표시 범위만 불러옵니다."}
               </div>
               <State resource={view} />
+              {selection && !mapping.data && (
+                <p className="v2-note" role="status">
+                  먼저 추출 규칙을 선택하세요.
+                </p>
+              )}
               <div className="v2-view-scroll">
                 {view.data && (
                   <Grid
@@ -966,6 +973,15 @@ function MappingEditor({
           />
         </label>
       </div>
+      <Presets
+        value={spec.value_spec.normalization || { operation: "identity" }}
+        onChange={(normal) =>
+          setSpec((s) => ({
+            ...s,
+            value_spec: { ...s.value_spec, normalization: normal },
+          }))
+        }
+      />
       <h3>연결 개념</h3>
       <form
         className="v2-inline"
@@ -1084,6 +1100,7 @@ function MappingEditor({
       <p className="v2-muted">
         저장 후 현재 추출 결과가 해제됩니다. 승인된 규칙으로 다시 추출하세요.
       </p>
+      <RevisionHistory mapping={mapping} />
     </>
   );
 }

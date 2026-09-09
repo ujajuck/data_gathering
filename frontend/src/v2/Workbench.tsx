@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   api,
+  downloadFile,
   JobBar,
   NavigationContext,
   useDraft,
@@ -17,15 +18,14 @@ import {
 import type { Row } from "./client";
 import Source from "./Source";
 import Database from "./Database";
+import { ReviewQueue } from "./Review";
+import { TemplatePresets } from "./Presets";
+import ConceptEditor from "./ConceptEditor";
 import "./workbench.css";
+import "../product.css";
+import { PRODUCT_NAME, PRODUCT_DESCRIPTION, PRODUCT_STEPS } from "../product";
 
-const tabs = [
-  ["documents", "문서"],
-  ["kg", "도메인 KG"],
-  ["source", "원본 · 검수"],
-  ["templates", "템플릿"],
-  ["database", "사용자 DB"],
-];
+const tabs = PRODUCT_STEPS.map((s) => [s.v2, s.label]);
 export default function Workbench() {
   const navigation = useRoute();
   const [token, editToken] = useState("");
@@ -37,29 +37,26 @@ export default function Workbench() {
         <div className="v2">
           <header className="v2-header">
             <a className="v2-brand" href="?v2=1">
-              <span className="v2-logo">D</span>
               <span>
-                <strong>Data Gathering</strong>
-                <small>Excel → Domain → Database</small>
+                <strong>{PRODUCT_NAME}</strong>
+                <small>{PRODUCT_DESCRIPTION}</small>
               </span>
             </a>
-            <div className="v2-header-note">
-              스키마 v2 <span>SQLite PoC</span>
-            </div>
-            <a href="?v1=1">기존 작업 화면 ↗</a>
+            <nav className="v2-nav" aria-label="작업 단계">
+              {tabs.map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => navigation.go({ tab: id })}
+                  aria-current={current === id ? "page" : undefined}
+                >
+                  {label}
+                </button>
+              ))}
+            </nav>
+            <a href="?v1=1" title="이전 kg.db 데이터를 여는 호환 화면입니다.">
+              이전 데이터 ↗
+            </a>
           </header>
-          <nav className="v2-nav" aria-label="작업 단계">
-            {tabs.map(([id, label], i) => (
-              <button
-                key={id}
-                onClick={() => navigation.go({ tab: id })}
-                aria-current={current === id ? "page" : undefined}
-              >
-                <span>0{i + 1}</span>
-                {label}
-              </button>
-            ))}
-          </nav>
           <JobBar />
           {status.error ? (
             <main className="v2-main">
@@ -133,8 +130,28 @@ export function Documents() {
   const tasks = useTasks();
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
+  const [filters, setFilters] = useDraft<Record<string, string>>(
+    "document-filters",
+    {
+      author: "",
+      date_from: "",
+      date_to: "",
+      access_status: "",
+      extraction_status: "",
+      template: "",
+      sort: "name",
+      direction: "asc",
+    },
+  );
   const documents = usePage(
-    "/documents?q=" + encodeURIComponent(search) + "&r=" + refresh,
+    "/documents?q=" +
+      encodeURIComponent(search) +
+      "&r=" +
+      refresh +
+      "&" +
+      new URLSearchParams(
+        Object.fromEntries(Object.entries(filters).filter(([, v]) => v)),
+      ),
   );
   const [directory, setDirectory] = useState("");
   const sources = usePage(
@@ -171,6 +188,104 @@ export function Documents() {
             />
             <button>검색</button>
           </form>
+          <details className="v2-details">
+            <summary>문서 필터 · 정렬</summary>
+            <div className="v2-grid two">
+              {[
+                ["author", "작성자"],
+                ["template", "적용 템플릿"],
+              ].map(([key, label]) => (
+                <label key={key}>
+                  {label}
+                  <input
+                    value={filters[key]}
+                    onChange={(e) =>
+                      setFilters((f) => ({ ...f, [key]: e.target.value }))
+                    }
+                  />
+                </label>
+              ))}
+              {[
+                ["date_from", "작성일 시작"],
+                ["date_to", "작성일 종료"],
+              ].map(([key, label]) => (
+                <label key={key}>
+                  {label}
+                  <input
+                    type="date"
+                    value={filters[key]}
+                    onChange={(e) =>
+                      setFilters((f) => ({ ...f, [key]: e.target.value }))
+                    }
+                  />
+                </label>
+              ))}
+              <label>
+                접근 상태
+                <select
+                  value={filters.access_status}
+                  onChange={(e) =>
+                    setFilters((f) => ({ ...f, access_status: e.target.value }))
+                  }
+                >
+                  <option value="">전체</option>
+                  <option value="allowed">접근 가능</option>
+                  <option value="denied">접근 불가</option>
+                  <option value="expired">확인 만료</option>
+                  <option value="unknown">미확인</option>
+                </select>
+              </label>
+              <label>
+                추출 상태
+                <select
+                  value={filters.extraction_status}
+                  onChange={(e) =>
+                    setFilters((f) => ({
+                      ...f,
+                      extraction_status: e.target.value,
+                    }))
+                  }
+                >
+                  <option value="">전체</option>
+                  <option value="unassigned">미배정</option>
+                  <option value="review">검수 필요</option>
+                  <option value="pending">추출 필요</option>
+                  <option value="published">발행됨</option>
+                  <option value="failed">실패</option>
+                </select>
+              </label>
+              <label>
+                정렬 기준
+                <select
+                  value={filters.sort}
+                  onChange={(e) =>
+                    setFilters((f) => ({ ...f, sort: e.target.value }))
+                  }
+                >
+                  <option value="name">문서명</option>
+                  <option value="author">작성자</option>
+                  <option value="authored_at">작성일</option>
+                  <option value="registered_at">등록일</option>
+                </select>
+              </label>
+              <label>
+                정렬 방향
+                <select
+                  value={filters.direction}
+                  onChange={(e) =>
+                    setFilters((f) => ({ ...f, direction: e.target.value }))
+                  }
+                >
+                  <option value="asc">오름차순</option>
+                  <option value="desc">내림차순</option>
+                </select>
+              </label>
+            </div>
+            <p className="v2-muted">
+              접근 상태는 최근 확인 결과입니다. 원본을 열거나 추출할 때 권한을
+              다시 확인합니다.
+            </p>
+          </details>
           <State
             resource={documents}
             empty="원본 폴더의 파일을 선택해 첫 문서를 등록하세요."
@@ -200,6 +315,28 @@ export function Documents() {
                   <strong>{doc.display_name}</strong>
                   <small>
                     {doc.provider} · {doc.file_type.toUpperCase()}
+                  </small>
+                  <small>
+                    {doc.author || "작성자 미상"} ·{" "}
+                    {doc.authored_at?.slice(0, 10) || "작성일 미상"} ·{" "}
+                    {
+                      {
+                        allowed: "접근 가능",
+                        denied: "접근 불가",
+                        expired: "확인 만료",
+                        unknown: "접근 미확인",
+                      }[doc.access_status as string]
+                    }{" "}
+                    ·{" "}
+                    {
+                      {
+                        unassigned: "미배정",
+                        review: "검수 필요",
+                        pending: "추출 필요",
+                        published: "발행됨",
+                        failed: "실패",
+                      }[doc.extraction_status as string]
+                    }
                   </small>
                 </span>
                 <span>→</span>
@@ -311,6 +448,7 @@ export function Documents() {
         </section>
       </div>
       {route.document && <DocumentDetail key={route.document + refresh} />}
+      <ReviewQueue />
     </>
   );
 }
@@ -636,6 +774,15 @@ export function Knowledge() {
         </section>
         <section className="v2-card">
           <h2>{route.concept || "개념을 선택하세요"}</h2>
+          {concepts.data?.items.find((c) => c.concept_id === route.concept) && (
+            <ConceptEditor
+              key={kg + route.concept}
+              kg={kg}
+              concept={concepts.data.items.find(
+                (c) => c.concept_id === route.concept,
+              )!}
+            />
+          )}
           <h3>연결 관계</h3>
           <State resource={relations} empty="등록된 관계가 없습니다." />
           {relations.data?.items.map((edge, i) => (
@@ -764,10 +911,12 @@ export function Templates() {
   const versions = usePage(
     selectedTemplate ? "/templates/" + selectedTemplate + "/versions" : null,
   );
+  const [exportId, setExportId] = useDraft("template-export-version", "");
   async function edit(id: string, label: string) {
     setError("");
     try {
       const v = await api("/template-versions/" + id);
+      setExportId(id);
       setText(JSON.stringify(v.definition, null, 2));
       setTemplateId(v.template_id);
       setName(label);
@@ -798,6 +947,7 @@ export function Templates() {
           "를 저장했습니다. 문서 탭에서 시트를 연결하세요.",
       );
       setTemplateId(r.template_id);
+      setExportId(r.template_version_id);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -807,7 +957,7 @@ export function Templates() {
   return (
     <>
       <Heading
-        eyebrow="04 / TEMPLATES"
+        eyebrow="05 / TEMPLATES"
         title="양식의 차이를 규칙으로"
         description="템플릿은 재사용할 추출 규칙입니다. 한 문서의 위치 수정은 원본 · 검수에서, 공통 규칙 변경은 새 템플릿 버전으로 저장합니다."
       />
@@ -818,6 +968,7 @@ export function Templates() {
             <button
               onClick={() => {
                 setTemplateId("");
+                setExportId("");
                 setSelectedTemplate("");
                 setText(JSON.stringify(templateExample(kg), null, 2));
                 setMessage("새 템플릿을 작성합니다.");
@@ -865,6 +1016,18 @@ export function Templates() {
         </section>
         <section className="v2-card">
           <h2>{templateId ? "새 버전 작성" : "템플릿 작성"}</h2>
+          {exportId && (
+            <button
+              onClick={() =>
+                downloadFile(
+                  `/template-versions/${exportId}/download`,
+                  `template-${exportId}.json`,
+                ).catch((e) => setError(e.message))
+              }
+            >
+              선택한 버전 JSON 내보내기
+            </button>
+          )}
           <div className="v2-grid two">
             <label>
               템플릿 이름
@@ -898,6 +1061,7 @@ export function Templates() {
               onChange={(e) => setText(e.target.value)}
             />
           </label>
+          <TemplatePresets source={text} onChange={setText} />
           <button className="primary" disabled={busy} onClick={save}>
             검증하고 {templateId ? "새 버전 저장" : "템플릿 저장"}
           </button>

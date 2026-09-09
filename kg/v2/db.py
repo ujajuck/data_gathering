@@ -148,6 +148,7 @@ class Database:
                   UNIQUE(principal,kind,request_key)
                 );
                 CREATE INDEX IF NOT EXISTS runtime_job_queue ON runtime_job(state,created_at,job_id);
+                CREATE INDEX IF NOT EXISTS access_latest ON access_observation(document_version_id,principal_ref,checked_at DESC,access_id DESC);
                 CREATE INDEX IF NOT EXISTS app_source ON template_application(document_version_id,application_id);
                 CREATE INDEX IF NOT EXISTS version_provider ON document(provider,source_ref);
                 CREATE INDEX IF NOT EXISTS series_by_mapping ON extracted_series(mapping_revision_id,run_id,series_id);

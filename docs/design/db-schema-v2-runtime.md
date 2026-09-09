@@ -4,6 +4,10 @@
 설계 DDL을 실제 원본 읽기·검수·추출·통합 DB 생성에 연결한다.
 모든 값은 문서 버전, 템플릿 버전, 매핑 리비전, 추출 실행, 원자 출처를 참조한다.
 
+이후 사용자 검토에 따라 [기존 디자인·기능을 복원](v2-restoration.md)했다.
+제품명은 Semantic Excel Integration, 탭은 파일 분석/개념 탐색/원본 데이터/통합 DB/템플릿 관리다.
+문서 필터, 검수 큐, 개념 체크, 전처리, CSV, 이력 복원, 개념 편집, 템플릿 내보내기를 v2에 연결했다.
+
 ## 실행
 
 ```bash
@@ -86,7 +90,7 @@ python -m kg.v2 --ws /tmp/data-gathering-v2-demo --port 8010
 | 단일 값 결합 | `combine: concat/sum`; 각각의 입력 출처를 저장. 기본 `ordered_union`에서 여러 단일 값은 오류 |
 | 레코드 | `record_spec.scope`로 표를 구분; `key`는 `coordinate/physical_row/physical_column` 또는 `{column:"A"}` / `{row:1}` |
 | 값 타입 | `text/decimal/boolean/date/datetime`; 원문·정규값·수식·원본 위치 분리 |
-| 정규화 | `identity/trim/affine`; affine의 `factor/offset`은 문자열 Decimal |
+| 정규화 | `identity/trim/affine/pipeline`; affine의 `factor/offset`은 문자열 Decimal. pipeline은 프리셋 연산 배열을 버전에 고정 |
 | 단위 | 원본과 목표가 다르면 `source_unit` + 명시적인 affine 필요. 단순한 단위 이름 바꾸기는 거부 |
 | 수식 | 저장된 계산값만 사용 (`cached_only`), 캐시 없거나 Excel 오류면 실패. 외부 링크 갱신/재계산 없음 |
 
@@ -109,6 +113,8 @@ Decimal은 TEXT로 저장해 28자리 Decimal 기본 컨텍스트로 반올림�
   시작한 뒤 새 추출이 발행되어도 이미 시작한 빌드 입력은 바뀌지 않는다.
 - 출력 DB의 `data`는 사용자 필드, `_field_schema`는 타입·단위, `_manifest`는 고정 입력,
   `_lineage`는 각 결과의 원자 출처다. 숫자형 값도 정밀도 보존을 위해 TEXT이며 타입을 명시한다.
+- 새 빌드의 `_record_key`는 읽기 쉬운 업무키다. 내부 `_row_key`는 출처 연결을 위해 유지한다.
+  `/download?format=csv`는 `data`만 행별 스트리밍하며 기본 `/download`는 전체 SQLite다.
 
 ## DRM Reader 계약
 
@@ -196,6 +202,9 @@ FastAPI `/docs`가 요청 파라미터의 기준이다. POST 작업은 `request_
 | 템플릿 | `POST /templates`, `GET /templates`, `/templates/{id}/versions`, `/template-versions/{id}` |
 | 배정/검수 | `POST /applications`, `GET /applications?version_id=…`, `/applications/{id}/mappings`, `/mappings/{id}` |
 | 수정 | `POST /applications/{id}/mappings/{id}/revisions` (`expected_seq`, `effective_spec`, `concept_id`, `status`) |
+| 검수 큐·이력 | `GET /review-queue`, `/applications/{id}/rules/{rule_key}/revisions`, `POST /applications/{id}/mappings/{id}/rollback` |
+| 개념 선택·편집 | `GET /kg/{id}/tree?roots=…&excluded=…`, `GET /series?kg_revision_id=…&roots=…`, `POST /kg/{id}/concepts/{id}/revisions` |
+| 전처리·내보내기 | `GET /normalization-presets`, `/template-versions/{id}/download`, `/builds/{id}/download?format=csv` |
 | 추출 | `POST /applications/{id}/extract`, `GET /series?run_id=…` 또는 KG/개념별 현재 출처 |
 | 값/출처 | `GET /series/{id}/items`, `/series/{id}/regions`, `/items/{id}`, `/items/{id}/regions` |
 | 통합 DB | `POST /integrations`, `/integrations/{id}/build`, `GET /builds?integration_version_id=…` |
@@ -215,11 +224,11 @@ npm --prefix frontend test
 npm --prefix frontend run build
 ```
 
-최종 검증: 전체 회귀 **148개 통과**(추가 subtest 5개), React TypeScript/Vite 프로덕션 빌드 성공.
+초기 구현 검증: 전체 회귀 **148개 통과**(추가 subtest 5개), React TypeScript/Vite 프로덕션 빌드 성공.
 v2 DDL/런타임 검증은 이 가운데 44개다. 테스트 환경은 Python 3.12, FastAPI 0.141.1,
 openpyxl 3.1.5이며 기존 라이브러리의 경고 4개가 있었다.
 
-후속 화면 검증: `frontend/tests/workbench.test.tsx`의 **컴포넌트 회귀 6개 통과**.
+초기 후속 화면 검증: `frontend/tests/workbench.test.tsx`의 **컴포넌트 회귀 6개 통과**.
 Node 24.19.0에서 Vitest·jsdom으로 실제 React 화면을 마운트하고, 네트워크 접속 없이
 가상 API 응답으로 병합 셀 선택·복수 영역/시트 수정·검수 저장, 지연 응답 취소,
 확대 시 추가 조회 방지, 항목/결과 페이지 이동, DB 생성과 원자 출처 이동을 확인했다.

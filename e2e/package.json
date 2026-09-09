@@ -1,0 +1,11 @@
+{
+  "name": "data-gathering-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:v2": "playwright test --config=playwright.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

@@ -36,25 +36,31 @@ export async function api(
     );
   return data;
 }
-export async function download(build: string) {
+export async function download(
+  build: string,
+  format: "sqlite" | "csv" = "sqlite",
+) {
+  return downloadFile(
+    `/builds/${encodeURIComponent(build)}/download?format=${format}`,
+    `custom-db-${build}.${format}`,
+  );
+}
+export async function downloadFile(path: string, filename: string) {
   if (!accessToken) {
     const link = document.createElement("a");
-    link.href = "/api/v2/builds/" + encodeURIComponent(build) + "/download";
-    link.download = "";
+    link.href = "/api/v2" + path;
+    link.download = filename;
     link.click();
     return;
   }
   const picker = (window as any).showSaveFilePicker;
   const handle = picker
-    ? await picker({ suggestedName: "custom-db-" + build + ".sqlite" })
+    ? await picker.call(window, { suggestedName: filename })
     : null;
-  const response = await fetch(
-    "/api/v2/builds/" + encodeURIComponent(build) + "/download",
-    {
-      headers: accessToken ? { Authorization: "Bearer " + accessToken } : {},
-      cache: "no-store",
-    },
-  );
+  const response = await fetch("/api/v2" + path, {
+    headers: { Authorization: "Bearer " + accessToken },
+    cache: "no-store",
+  });
   if (!response.ok) {
     const data = await response.json();
     throw new Error(data.error?.message || "다운로드 실패");
@@ -63,15 +69,27 @@ export async function download(build: string) {
     await response.body.pipeTo(await handle.createWritable());
     return;
   }
-  // 다운로드의 브라우저 메모리를 제한: 서버 PoC 산출물 64MB까지, 큰 파일은 인증된 스트리밍 클라이언트 사용.
-  if (Number(response.headers.get("content-length") || 0) > 64 * 1024 * 1024)
-    throw new Error(
-      "64MB보다 큰 DB는 인증된 API 클라이언트로 스트리밍 다운로드하세요.",
-    );
-  const url = URL.createObjectURL(await response.blob());
+  // 길이를 알 수 없는 CSV 스트림도 실제 수신량을 세어 메모리 상한을 지킨다.
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("파일 응답이 비어 있습니다.");
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  let bytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > 64 * 1024 * 1024) {
+      await reader.cancel();
+      throw new Error(
+        "64MB보다 큰 파일은 스트리밍 다운로드를 지원하는 브라우저나 인증된 API 클라이언트를 사용하세요.",
+      );
+    }
+    chunks.push(value);
+  }
+  const url = URL.createObjectURL(new Blob(chunks));
   const link = document.createElement("a");
   link.href = url;
-  link.download = "custom-db-" + build + ".sqlite";
+  link.download = filename;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

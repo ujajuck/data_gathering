@@ -36,7 +36,7 @@ export function checker(name) {
 export const active = (page) => page.locator(".screen.active");
 
 export async function openTab(page, label) {
-  await page.goto(BASE + "/", { waitUntil: "networkidle" });
+  await page.goto(BASE + "/?v1=1", { waitUntil: "networkidle" });
   await page.waitForTimeout(1200);
   await page.locator("button", { hasText: label }).click();
   await page.waitForTimeout(700);

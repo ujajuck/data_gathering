@@ -19,6 +19,10 @@ def setup(tmp_path):
     raw = tmp_path / "data/raw"
     raw.mkdir(parents=True)
     wb = Workbook()
+    from datetime import datetime
+
+    wb.properties.creator = "홍길동"
+    wb.properties.created = datetime(2026, 9, 8, 10)
     ws = wb.active
     ws.title = "세로"
     ws["B2"], ws["D2"] = "공정", "온도"
@@ -167,10 +171,286 @@ def integration(s, sources=None, row_mode="record_scope"):
     )
 
 
+def test_restored_document_filters_and_cursor_scope(setup):
+    s = setup
+    query = "/documents?author=홍길동&date_from=2026-09-08&date_to=2026-09-09&template=공정&extraction_status=pending&access_status=allowed&sort=authored_at&direction=desc"
+    assert len(s["api"]("GET", query)["items"]) == 1
+    assert not s["api"]("GET", query.replace("홍길동", "다른 작성자"))["items"]
+    extracted(s)
+    assert len(s["api"]("GET", query.replace("pending", "published"))["items"]) == 1
+    # Metadata pages do not invoke the reader; permissions are rechecked on opening.
+    original = s["service"].read
+
+    def no_read(*args, **kwargs):
+        raise AssertionError("document listing opened source")
+
+    s["service"].read = no_read
+    try:
+        assert s["api"]("GET", "/documents?sort=author&direction=desc")["items"]
+    finally:
+        s["service"].read = original
+
+
+def test_csv_business_keys_contracts_and_actionable_error(setup):
+    import csv
+    import io
+
+    s = setup
+    schema = s["client"].get("/openapi.json").json()["components"]["schemas"]
+    assert "request_key" in schema["RegisterRequest"]["required"]
+    assert set(schema["JobResponse"]["properties"]["state"]["enum"]) == {
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled",
+    }
+    assert (
+        s["api"]("POST", "/documents/register", {"source_refs": ["sample.xlsx"]}, 422)[
+            "error"
+        ]["code"]
+        == "REQUEST_KEY_REQUIRED"
+    )
+    s["api"]("POST", "/integrations", {"name": "incomplete", "spec": {}}, 422)
+    extracted(s)
+    project = integration(s)
+    result = s["work"](
+        "/integrations/" + project["integration_version_id"] + "/build", {}
+    )
+    bid = result["result"]["build_id"]
+    rows = s["api"]("GET", "/builds/" + bid + "/rows")["items"]
+    assert [r["_record_key"] for r in rows] == ["lot-1", "lot-2", "lot-3"]
+    response = s["client"].get("/api/v2/builds/" + bid + "/download?format=csv")
+    parsed = list(csv.DictReader(io.StringIO(response.content.decode("utf-8-sig"))))
+    assert parsed[0]["_record_key"] == "lot-1"
+    assert parsed[0]["공정온도"] == "123456789012345678901234567890.125"
+    assert response.headers["cache-control"] == "no-store"
+    # The downloaded SQLite retains the same readable key, exact decimal, and lineage.
+    dbfile = s["path"].parent / "output.sqlite"
+    dbfile.write_bytes(s["client"].get("/api/v2/builds/" + bid + "/download").content)
+    with sqlite3.connect(dbfile) as conn:
+        assert (
+            conn.execute("SELECT _record_key FROM data ORDER BY _row_no").fetchone()[0]
+            == "lot-1"
+        )
+    with s["service"].db.connect() as conn:
+        bad = json.loads(
+            conn.execute(
+                "SELECT spec_json FROM integration_version WHERE integration_version_id=?",
+                (project["integration_version_id"],),
+            ).fetchone()[0]
+        )
+    bad["fields"][0]["target_unit"] = "celsius"
+    wrong = s["api"]("POST", "/integrations", {"name": "단위 오류", "spec": bad})
+    failed = s["work"](
+        "/integrations/" + wrong["integration_version_id"] + "/build", {}
+    )
+    assert failed["error_code"] == "OUTPUT_TYPE_UNIT_MISMATCH"
+    assert "°C" in failed["error_message"] and "celsius" in failed["error_message"]
+
+
+def test_review_queue_and_append_only_restore_cas(setup):
+    s = setup
+    aid = s["application"]["application_id"]
+    mapping = s["api"]("GET", "/applications/" + aid + "/mappings")["items"][0]
+    original = s["api"]("GET", "/mappings/" + mapping["mapping_revision_id"])
+    url = "/applications/" + aid + "/mappings/" + original["mapping_revision_id"]
+    changed = s["api"](
+        "POST",
+        url + "/revisions",
+        {
+            "expected_seq": original["edit_seq"],
+            "effective_spec": original["effective_spec"],
+            "concept_id": "ambient",
+            "status": "proposed",
+            "reason": "단위 재검수",
+        },
+    )
+    queue = s["api"]("GET", "/review-queue?status=proposed")["items"]
+    assert (
+        len(queue) == 1
+        and queue[0]["mapping_revision_id"] == changed["mapping_revision_id"]
+    )
+    history = s["api"](
+        "GET", f"/applications/{aid}/rules/temperature/revisions?limit=1"
+    )
+    assert history["items"][0]["revision_no"] == 2 and history["has_more"]
+    assert (
+        s["api"](
+            "GET",
+            f"/applications/{aid}/rules/temperature/revisions?limit=1&cursor="
+            + history["next_cursor"],
+        )["items"][0]["revision_no"]
+        == 1
+    )
+    current = s["api"]("GET", "/mappings/" + changed["mapping_revision_id"])
+    body = {
+        "expected_seq": current["edit_seq"],
+        "target_revision_id": original["mapping_revision_id"],
+        "reason": "원래 온도 매핑 복원",
+    }
+    restore_url = (
+        f"/applications/{aid}/mappings/{changed['mapping_revision_id']}/rollback"
+    )
+    restored = s["api"]("POST", restore_url, body)
+    detail = s["api"]("GET", "/mappings/" + restored["mapping_revision_id"])
+    assert (
+        detail["revision_no"] == 3
+        and detail["concept_id"] == "temperature"
+        and detail["status"] == "approved"
+    )
+    assert (
+        s["api"]("GET", "/mappings/" + original["mapping_revision_id"])[
+            "effective_spec"
+        ]
+        == original["effective_spec"]
+    )
+    s["api"]("POST", restore_url, body, 409)
+
+
+def test_tree_hidden_descendants_and_single_concept_revision(setup):
+    s = setup
+    kg = s["api"](
+        "POST",
+        "/kg/import",
+        {
+            "concepts": [
+                {"concept_id": id, "name": id, "level": level}
+                for id, level in [("root", 1), ("a", 2), ("b", 2), ("leaf", 3)]
+            ],
+            "relations": [
+                ["root", "a", "parent_of"],
+                ["root", "b", "parent_of"],
+                ["a", "leaf", "parent_of"],
+                ["b", "leaf", "parent_of"],
+            ],
+        },
+    )["kg_revision_id"]
+    base = f"/kg/{kg}/tree"
+    assert s["api"]("GET", base + "?roots=root")["items"][0]["checked"]
+    partial = s["api"]("GET", base + "?roots=root&excluded=a")["items"][0]
+    assert partial["indeterminate"] and set(partial["descendant_selections"]) == {
+        "root",
+        "a",
+    }
+    # Explicitly reselecting a descendant overrides an excluded ancestor.
+    children = s["api"]("GET", base + "?parent_id=a&roots=root&excluded=a&roots=leaf")[
+        "items"
+    ]
+    assert children[0]["checked"]
+    first = s["api"]("GET", base + "?parent_id=root&limit=1")
+    assert first["has_more"]
+    s["api"](
+        "GET",
+        base + "?parent_id=root&roots=root&cursor=" + first["next_cursor"],
+        code=422,
+    )
+    body = {
+        "expected_revision_id": kg,
+        "name": "새 이름",
+        "aliases": ["온도 별칭"],
+        "add_relations": [{"from": "root", "to": "leaf", "type": "related"}],
+    }
+    revised = s["api"]("POST", f"/kg/{kg}/concepts/leaf/revisions", body)
+    assert (
+        s["api"]("GET", f"/kg/{revised['kg_revision_id']}/aliases?text=온도 별칭")[
+            "items"
+        ][0]["name"]
+        == "새 이름"
+    )
+    assert not s["api"]("GET", f"/kg/{kg}/aliases?text=온도 별칭")["items"]
+    s["api"]("POST", f"/kg/{kg}/concepts/leaf/revisions", body, 409)
+
+
+def test_presets_freeze_exact_values_units_and_template_export(setup):
+    from kg.v2.db import Problem
+    from kg.v2.normalization import prepare
+    from kg.v2.spec import typed
+
+    s = setup
+    presets = s["api"]("GET", "/normalization-presets")["items"]
+    normal = next(p["normalization"] for p in presets if p["id"] == "automatic")
+    value, unit, ratio = prepare(
+        " 123,456,789,012,345,678,901,234,567,890.125 ℃ ", normal, "decimal"
+    )
+    assert typed(value, {"type": "decimal"})[1] == "123456789012345678901234567890.125"
+    assert unit == "℃" and not ratio
+    assert prepare("1.2e-12", normal, "decimal") == ("1.2e-12", None, False)
+    with pytest.raises(Problem, match="천 단위"):
+        prepare("1,25", normal, "decimal")
+    percent = next(p["normalization"] for p in presets if p["id"] == "percent")
+    assert prepare("12.345678901234567890123456789%", percent, "decimal")[:3] == (
+        "0.12345678901234567890123456789",
+        "%",
+        True,
+    )
+    definition = copy.deepcopy(s["definition"])
+    definition["rules"][0]["value_spec"]["normalization"] = normal
+    template = s["api"](
+        "POST", "/templates", {"name": "고정 전처리", "definition": definition}
+    )
+    exported = s["client"].get(
+        "/api/v2/template-versions/" + template["template_version_id"] + "/download"
+    )
+    assert (
+        exported.status_code == 200
+        and "attachment" in exported.headers["content-disposition"]
+    )
+    assert exported.json()["rules"][0]["value_spec"]["normalization"] == normal
+    # A changed YAML preset cannot change an already published template.
+    config = s["service"].root / "config"
+    config.mkdir(exist_ok=True)
+    (config / "normalizers.yaml").write_text("presets: []\n")
+    assert (
+        s["api"]("GET", "/template-versions/" + template["template_version_id"])[
+            "definition"
+        ]["rules"][0]["value_spec"]["normalization"]
+        == normal
+    )
+    wb = load_workbook(s["path"])
+    wb["세로"]["B3"] = " 123,456,789,012,345,678,901,234,567,890.125 ℃ "
+    wb.save(s["path"])
+    doc = s["work"]("/documents/register", {"source_refs": ["sample.xlsx"]})["result"][
+        "documents"
+    ][0]
+    sheets = s["api"]("GET", "/versions/" + doc["version_id"] + "/sheets")["items"]
+    application = s["api"](
+        "POST",
+        "/applications",
+        {
+            "version_id": doc["version_id"],
+            "template_version_id": template["template_version_id"],
+            "approved": True,
+            "bindings": {
+                "main": [sheets[0]["sheet_id"]],
+                "units": [sheets[1]["sheet_id"]],
+            },
+        },
+    )
+    result = s["work"](
+        "/applications/" + application["application_id"] + "/extract", {}
+    )
+    assert result["state"] == "succeeded", result
+    series = s["api"]("GET", "/series?run_id=" + result["result"]["run_id"])["items"][0]
+    item = s["api"]("GET", "/series/" + series["series_id"] + "/items")["items"][0]
+    assert (
+        item["value_text"] == "123456789012345678901234567890.125"
+        and item["unit_normalized"] == "°C"
+    )
+
+
 def test_full_extraction_pagination_and_build(setup):
     s = setup
     job, series = extracted(s)
     sid = series[0]["series_id"]
+    selected = s["api"](
+        "GET",
+        "/series?kg_revision_id=" + s["kg"]["kg_revision_id"] + "&roots=temperature",
+    )["items"]
+    assert [row["series_id"] for row in selected] == [sid]
+    assert (
+        selected[0]["target_type"] == "decimal" and selected[0]["target_unit"] == "°C"
+    )
     values = s["api"]("GET", "/series/" + sid + "/items?limit=2")
     assert values["has_more"] and len(values["items"]) == 2
     assert values["items"][0]["value_text"] == "123456789012345678901234567890.125"

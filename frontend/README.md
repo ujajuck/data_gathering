@@ -1,7 +1,9 @@
 # Semantic Excel Integration — React Frontend
 
 이 시스템의 **웹 프런트엔드**다 (React + TypeScript + Vite). 기본 화면은 `src/v2/`의
-문서·도메인 KG·원본 검수·템플릿·사용자 DB 탭이다. `/api/v2`는 독립 서버 `kg.v2` 또는
+파일 분석·개념 탐색·원본 데이터·통합 DB·템플릿 관리 탭이다. 제품명·파란색·탭 순서는
+v1과 공유한다(`src/product.ts`, `src/product.css`). [복원 범위와 결정 기록](../docs/design/v2-restoration.md)에
+복원한 기능과 남은 항목을 명시한다. `/api/v2`는 독립 서버 `kg.v2` 또는
 기존 `kg.webapp`에서 제공한다. [v2 실행 안내](../docs/design/db-schema-v2-runtime.md)에
 샘플 생성, 검수와 추출, DRM Reader 계약 및 지원 범위를 정리했다.
 빌드 산출물(`dist/`)이 커밋되어 서버가 루트
@@ -47,6 +49,8 @@ npm run build
 
 - `src/v2/` — 기본 v2 작업 화면, 범위별 원본 표시, 검수 초안, 작업 상태, 사용자 DB
 - `tests/workbench.test.tsx` — v2 화면 컴포넌트 상호작용 회귀 테스트
+- `tests/restoration.test.tsx` — 기존 제품 표현·필터·전처리·검수 큐·개념 선택 회귀
+- `../e2e/v2/` — 실제 서버·가상 XLSX를 사용하는 Playwright/CI
 - `src/lib/api.ts` — fetch 헬퍼 + colName/parseRange + cart 저장소
 - `src/lib/store.tsx` — 5탭 공유 상태
 - `src/screens/` — FilesScreen / KgScreen(+kg/) / SourceScreen(+source/) / DbScreen / TemplatesScreen

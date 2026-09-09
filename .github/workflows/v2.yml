@@ -1,0 +1,58 @@
+name: v2 regression
+on:
+  push:
+    branches: [main, master, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            e2e/package-lock.json
+      - name: Install Python dependencies
+        run: python -m pip install 'openpyxl>=3.1' 'PyYAML>=6' 'Pillow>=10' 'fastapi>=0.115' 'uvicorn>=0.30' 'pytest>=8' 'httpx>=0.27'
+      - name: Backend regression
+        run: python -m pytest -q
+      - name: Frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Component regression
+        run: npm test
+        working-directory: frontend
+      - name: Production build
+        run: npm run build
+        working-directory: frontend
+      - name: E2E dependencies
+        run: npm ci
+        working-directory: e2e
+      - name: Chromium dependencies
+        run: npx playwright install --with-deps chromium
+        working-directory: e2e
+      - name: v2 browser workflow
+        run: npm run test:v2
+        working-directory: e2e
+      - name: Browser report (synthetic documents only)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-browser-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          if-no-files-found: ignore
+          retention-days: 7

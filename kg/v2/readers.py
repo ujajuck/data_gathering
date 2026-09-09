@@ -544,8 +544,19 @@ class XlsxReader:
                 else "excel_error" if cached_cell.data_type == "e" else "present"
             )
         )
+        from .normalization import prepare
+
+        prepared, inline_unit, ratio = (
+            prepare(
+                value,
+                rule["value_spec"].get("normalization", {}),
+                rule["value_spec"].get("type", "text"),
+            )
+            if value_state == "present"
+            else (value, None, False)
+        )
         kind, text = (
-            typed(value, rule["value_spec"])
+            typed(prepared, rule["value_spec"])
             if value_state == "present"
             else ("null", None)
         )
@@ -584,18 +595,37 @@ class XlsxReader:
                 else f"c{c}" if key == "physical_column" else address(r, c)
             )
         spec = rule["value_spec"]
-        unit_raw = " ".join(
-            str(cached[a["sheet"]].cell(a["r1"], a["c1"]).value or "")
-            for a in selected.get("unit", [])
-        ) or spec.get("source_unit", spec.get("unit"))
+        region_unit = (
+            " ".join(
+                str(cached[a["sheet"]].cell(a["r1"], a["c1"]).value or "")
+                for a in selected.get("unit", [])
+            )
+            or None
+        )
+        if inline_unit and region_unit and norm(inline_unit) != norm(region_unit):
+            raise Problem(
+                "UNIT_MISMATCH",
+                f"값 셀의 단위는 {inline_unit}, 단위 영역의 단위는 {region_unit}입니다.",
+            )
+        unit_raw = (
+            inline_unit or region_unit or spec.get("source_unit", spec.get("unit"))
+        )
         target_unit = spec.get("unit", unit_raw)
-        if norm(unit_raw or "") != norm(target_unit or ""):
-            if spec.get("normalization", {}).get("operation") != "affine" or norm(
-                spec.get("source_unit", "")
-            ) != norm(unit_raw or ""):
+        if ratio:
+            if target_unit not in (None, "", "1"):
                 raise Problem(
                     "UNIT_MISMATCH",
-                    "원본 단위와 목표 단위가 다릅니다. 원본 단위와 명시적 변환식을 지정하세요.",
+                    f"비율 변환의 목표 단위는 없음 또는 1, 지정한 단위는 {target_unit}입니다.",
+                )
+            target_unit = target_unit or None
+        if norm(unit_raw or "") != norm(target_unit or ""):
+            if not ratio and (
+                spec.get("normalization", {}).get("operation") != "affine"
+                or norm(spec.get("source_unit", "")) != norm(unit_raw or "")
+            ):
+                raise Problem(
+                    "UNIT_MISMATCH",
+                    f"원본 단위는 {unit_raw or '없음'}, 목표 단위는 {target_unit or '없음'}입니다. 단위 변환에는 원본 단위와 명시적 변환식을 지정하세요.",
                 )
         return {
             "item_index": index,

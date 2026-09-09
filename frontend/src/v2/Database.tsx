@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   api,
   download,
@@ -13,6 +13,8 @@ import {
 } from "./client";
 import type { Row } from "./client";
 import { Heading } from "./Workbench";
+import ConceptTree, { selectionQuery } from "./ConceptTree";
+import type { TreeSelection } from "./ConceptTree";
 
 // Count has its own output type and no measurement unit. Keep the original
 // field metadata while counting so changing modes cannot corrupt that field.
@@ -44,6 +46,13 @@ export default function Database() {
   const concepts = usePage(
     kg ? "/kg/" + kg + "/concepts?q=" + encodeURIComponent(search) : null,
   );
+  const [selection, setSelection] = useDraft<TreeSelection>(
+    "database-selection:" + kg,
+    { roots: [], excluded: [] },
+  );
+  const [bulk, setBulk] = useState("");
+  const bulkController = useRef<AbortController | null>(null);
+  useEffect(() => () => bulkController.current?.abort(), [kg]);
   const sources = usePage(
     kg && route.concept
       ? "/series?kg_revision_id=" +
@@ -88,6 +97,89 @@ export default function Database() {
     business_key_confirmed: confirmed,
     fields,
   };
+  const latestFields = useRef(fields);
+  latestFields.current = fields;
+  async function addSelected() {
+    const controller = new AbortController();
+    bulkController.current = controller;
+    setError("");
+    setBulk("추출 소스 확인 중…");
+    try {
+      let cursor: string | null = null,
+        count = 0;
+      const pending = new Map<string, Row>();
+      do {
+        const result = await api(
+          `/series?kg_revision_id=${kg}&${selectionQuery(selection)}&limit=30${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`,
+          undefined,
+          controller.signal,
+        );
+        for (const source of result.items) {
+          let field = pending.get(source.concept_id);
+          if (!field) {
+            field = {
+              field_key: "field_" + crypto.randomUUID().replaceAll("-", ""),
+              concept_id: source.concept_id,
+              output_name: source.concept_name || source.concept_id,
+              target_type: source.target_type || "text",
+              target_unit: source.target_unit || null,
+              aggregate: "sum",
+              sources: [],
+            };
+            pending.set(source.concept_id, field);
+          }
+          if (
+            !field.sources.some(
+              (s: Row) =>
+                s.application_id === source.application_id &&
+                s.rule_key === source.rule_key,
+            )
+          )
+            field.sources.push({
+              application_id: source.application_id,
+              rule_key: source.rule_key,
+            });
+          if (pending.size > 100 || field.sources.length > 100)
+            throw new Error(
+              "100개 필드·필드당 100개 소스 이내로 개념 선택 범위를 줄이세요.",
+            );
+          count++;
+        }
+        setBulk(`추출 소스 ${count}개 확인 중…`);
+        cursor = result.has_more ? result.next_cursor : null;
+      } while (cursor && !controller.signal.aborted);
+      if (controller.signal.aborted) return;
+      if (!pending.size)
+        throw new Error("선택한 개념에 현재 발행된 추출 소스가 없습니다.");
+      // 페이지를 읽는 동안 수정한 출력 이름·기존 소스도 보존한다.
+      const next = structuredClone(latestFields.current);
+      for (const added of pending.values()) {
+        const current = next.find((f) => f.concept_id === added.concept_id);
+        if (current)
+          for (const link of added.sources) {
+            if (
+              !current.sources.some(
+                (s: Row) =>
+                  s.application_id === link.application_id &&
+                  s.rule_key === link.rule_key,
+              )
+            )
+              current.sources.push(link);
+            if (current.sources.length > 100)
+              throw new Error("한 필드에는 100개 소스까지 추가할 수 있습니다.");
+          }
+        else next.push(added);
+      }
+      if (next.length > 100)
+        throw new Error("한 DB에는 100개 필드까지 추가할 수 있습니다.");
+      setFields(next);
+    } catch (e) {
+      if (!controller.signal.aborted) setError((e as Error).message);
+    } finally {
+      setBulk("");
+      bulkController.current = null;
+    }
+  }
   async function add(source: Row) {
     setError("");
     try {
@@ -186,7 +278,7 @@ export default function Database() {
   return (
     <>
       <Heading
-        eyebrow="05 / CUSTOM DATABASE"
+        eyebrow="04 / CUSTOM DATABASE"
         title="필요한 정보로 나만의 DB를"
         description="개념별 추출 소스를 선택해 출력 필드를 구성합니다. 생성된 DB의 모든 값에서 기여한 원본 항목으로 돌아갈 수 있습니다."
       />
@@ -209,6 +301,42 @@ export default function Database() {
             </select>
           </label>
           <Pager page={revisions} />
+          <details className="v2-details">
+            <summary>개념 트리 · 하위 개념 일괄 선택</summary>
+            <ConceptTree
+              kg={kg}
+              selection={selection}
+              onChange={(next) => {
+                bulkController.current?.abort();
+                setSelection(next);
+              }}
+              onFocus={(concept) => go({ kg, concept })}
+            />
+            <div className="v2-inline">
+              <button
+                disabled={!selection.roots.length || !!bulk}
+                onClick={addSelected}
+              >
+                선택한 개념의 소스 모두 추가
+              </button>
+              <button
+                onClick={() => {
+                  bulkController.current?.abort();
+                  setSelection({ roots: [], excluded: [] });
+                }}
+              >
+                선택 초기화
+              </button>
+            </div>
+            {bulk && (
+              <p role="status">
+                {bulk}{" "}
+                <button onClick={() => bulkController.current?.abort()}>
+                  추가 취소
+                </button>
+              </p>
+            )}
+          </details>
           <form
             className="v2-inline"
             onSubmit={(e) => {
@@ -412,7 +540,7 @@ export default function Database() {
           </details>
           <button
             className="primary full"
-            disabled={busy || tasks.busy || !fields.length}
+            disabled={busy || tasks.busy || !!bulk || !fields.length}
             onClick={create}
           >
             통합 명세 저장 · DB 생성
@@ -519,6 +647,13 @@ export default function Database() {
             >
               SQLite 다운로드
             </button>
+            <button
+              onClick={() =>
+                download(route.build, "csv").catch((e) => setError(e.message))
+              }
+            >
+              CSV 다운로드
+            </button>
           </div>
           <p className="v2-muted">
             텍스트는 256자까지 표시합니다. 값의 출처를 열거나 다운로드에서 전체
@@ -531,6 +666,7 @@ export default function Database() {
               <thead>
                 <tr>
                   <th>행</th>
+                  <th>업무키 / 행키</th>
                   {rows.data?.fields?.map((f) => (
                     <th key={f.field_key}>
                       {f.output_name} <small>{f.unit || ""}</small>
@@ -542,6 +678,7 @@ export default function Database() {
                 {rows.data?.items.map((row) => (
                   <tr key={row._row_no}>
                     <td>{row._row_no}</td>
+                    <td>{row._record_key || "—"}</td>
                     {rows.data?.fields?.map((f) => (
                       <td key={f.field_key}>
                         <button

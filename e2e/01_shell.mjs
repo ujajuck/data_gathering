@@ -5,7 +5,7 @@ const { browser, page } = await launch();
 const c = checker("shell");
 
 for (const path of ["/", "/app/"]) {
-  await page.goto(BASE + path, { waitUntil: "networkidle" });
+  await page.goto(BASE + path + "?v1=1", { waitUntil: "networkidle" });
   await page.waitForTimeout(1000);
   const text = await page.locator(".wk").textContent();
   c.ok(["1. 파일 분석", "2. 개념 탐색", "3. 원본 데이터", "4. 통합 DB",

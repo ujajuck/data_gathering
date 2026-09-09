@@ -1,7 +1,7 @@
 /* web_kg/index.html의 스타일 포트 — 레거시 뷰어 CSS와 충돌하지 않게 .wk로 스코프.
    클래스 이름은 web_kg와 동일하게 유지한다 (화면 대조 검증 용이). */
-.wk{--bg:#f5f7fb;--panel:#fff;--line:#d9dee8;--text:#20242c;--muted:#6e7685;
- --blue:#3569e8;--blue2:#eaf0ff;--green:#3a8d6d;--green2:#e7f5ef;
+.wk{--bg:var(--product-bg,#f5f7fb);--panel:var(--product-panel,#fff);--line:var(--product-line,#d9dee8);--text:var(--product-text,#20242c);--muted:var(--product-muted,#6e7685);
+ --blue:var(--product-blue,#3569e8);--blue2:var(--product-blue-soft,#eaf0ff);--green:#3a8d6d;--green2:#e7f5ef;
  --amber:#b57b1b;--amber2:#fff4d8;--purple:#7b61c9;--purple2:#f0ebff;--red:#b84b4b;
  --shadow:0 1px 2px rgba(23,31,49,.04);
  font:13px/1.5 Inter,-apple-system,'Malgun Gothic','Noto Sans KR',sans-serif;

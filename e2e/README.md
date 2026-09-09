@@ -3,7 +3,30 @@
 현행 React UI 기준의 브라우저 시나리오 테스트. UI가 바뀌면 **여기 스크립트도
 같은 커밋에서 갱신한다** — 구버전 UI를 가정한 스크립트를 방치하지 않는다.
 
-## 실행
+## v2 실행 (기본 화면)
+
+Python 3.12와 프로젝트의 web/test 의존성, Node 24.15 이상이 필요하다.
+
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
+npm --prefix e2e ci
+cd e2e
+npx playwright install --with-deps chromium
+npm run test:v2
+```
+
+`KG_E2E_PYTHON`으로 Python 실행 경로를 지정할 수 있다. 서버와 다운로드 SQLite 검사 모두 같은
+Python을 쓴다. 러너는 `127.0.0.1:8021`에 임시 가상 작업 공간을 직접 생성·실행한다.
+기존 서버 재사용이나 실제 `kg.db` 변경은 하지 않는다. 실패 보고서는 `e2e/playwright-report`,
+trace·다운로드·스크린샷은 `e2e/test-results`에 남으며 Git에서는 제외한다.
+
+`v2/workbench.spec.ts`는 기존 브랜드/탭/파란색, 문서 필터, 미선택 안내, 병합·복수 영역 overlay,
+페이지 이동·확대, 승인·추출, 소스 일괄 선택, DB 생성, CSV/SQLite 업무키, 다른 시트의 lineage 이동을 검사한다.
+`.github/workflows/v2.yml`은 백엔드·컴포넌트·빌드·v2 브라우저 검사를 push/PR마다 실행한다.
+각 실행이 독립 작업 공간을 사용하므로 전체 워크플로를 재실행할 수 있다.
+
+## v1 실행 (`?v1=1`)
 
 ```bash
 # 1) 서버 기동 (financier 예제 도메인)
@@ -22,7 +45,7 @@ domains/financier), `PLAYWRIGHT_INDEX`/`CHROMIUM_PATH`(브라우저 경로).
 
 | 파일 | 검증 |
 |---|---|
-| 01_shell | 루트 `/`·`/app`이 React 5탭 서빙 |
+| 01_shell | `/`·`/app`의 `?v1=1`이 기존 React 5탭 서빙 |
 | 02_concept_tree_build | 개념 트리 상위→하위 일괄 선택, indeterminate, 빌드, .db/.csv 다운로드 |
 | 03_normalize_preset | '값·단위 분리' 프리셋으로 "195 ℃"→195 (미리보기+CSV) |
 | 04_build_reuse | 무변경 재생성 → 이전 빌드 즉시 재사용, 선택 변경 → 재계산 |

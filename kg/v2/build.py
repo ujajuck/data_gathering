@@ -290,7 +290,7 @@ def execute_build(service, payload, principal, checkpoint):
         columns = [f["output_name"] for f in fields.values()]
         quote = lambda name: '"' + name.replace('"', '""') + '"'
         disk.execute(
-            "CREATE TABLE data(_row_no INTEGER PRIMARY KEY,_row_key TEXT UNIQUE,"
+            "CREATE TABLE data(_row_no INTEGER PRIMARY KEY,_row_key TEXT UNIQUE,_record_key TEXT,"
             + ",".join(quote(c) + " TEXT" for c in columns)
             + ")"
         )
@@ -341,7 +341,8 @@ def execute_build(service, payload, principal, checkpoint):
                     ):
                         raise Problem(
                             "OUTPUT_TYPE_UNIT_MISMATCH",
-                            "출력 필드와 값의 타입/단위가 다릅니다. 추출 정규화 설정을 확인하세요.",
+                            f"{field['output_name']} 필드: 추출 타입은 {item['value_type']}, 지정한 타입은 {field.get('target_type', 'text')}; "
+                            f"추출 단위는 {item['unit_normalized'] or '없음'}, 지정한 단위는 {field.get('target_unit') or '없음'}입니다. 추출 정규화 설정을 확인하세요.",
                         )
                     row_key = (
                         "all"
@@ -450,9 +451,14 @@ def execute_build(service, payload, principal, checkpoint):
                 output.append(result)
             disk.execute(
                 "INSERT INTO data VALUES ("
-                + ",".join("?" for _ in range(len(output) + 2))
+                + ",".join("?" for _ in range(len(output) + 3))
                 + ")",
-                (row_count + 1, row_key, *output),
+                (
+                    row_count + 1,
+                    row_key,
+                    "전체" if row_key == "all" else json.loads(row_key)[-1],
+                    *output,
+                ),
             )
             for key, field in fields.items():
                 observations = disk.execute(

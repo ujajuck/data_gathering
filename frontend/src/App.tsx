@@ -9,36 +9,38 @@ import SourceScreen from "./screens/SourceScreen";
 import DbScreen from "./screens/DbScreen";
 import TemplatesScreen from "./screens/TemplatesScreen";
 import "./webkg.css";
+import "./product.css";
+import { PRODUCT_NAME, PRODUCT_DESCRIPTION, PRODUCT_STEPS } from "./product";
 
 const V2Workbench = lazy(() => import("./v2/Workbench"));
 
 const LegacyViewer = lazy(() => import("./LegacyViewer"));
 
-const STEPS: [Screen, string][] = [
-  ["files", "1. 파일 분석"],
-  ["kg", "2. 개념 탐색"],
-  ["source", "3. 원본 데이터"],
-  ["db", "4. 통합 DB"],
-  ["templates", "5. 템플릿 관리"],
-];
+const STEPS: [Screen, string][] = PRODUCT_STEPS.map((s) => [s.v1, s.label]);
 
 function Shell() {
   const s = useStore();
   return (
     <div className="wk">
       {s.initError && (
-        <div style={{ background: "#fbe9e9", padding: "10px 24px" }}>{s.initError}</div>
+        <div style={{ background: "#fbe9e9", padding: "10px 24px" }}>
+          {s.initError}
+        </div>
       )}
       <header className="top">
         <div className="brand">
-          <b>Semantic Excel Integration</b>
-          <div>도메인 온톨로지 · 문서군 · Source Location · Custom DB</div>
+          <b>{PRODUCT_NAME}</b>
+          <div>{PRODUCT_DESCRIPTION}</div>
         </div>
         <nav className="steps">
           {STEPS.map(([id, label]) => (
-            <button key={id} className={`step${s.screen === id ? " active" : ""}`}
-              onClick={() => s.show(id)}>
-              {label}{id === "db" && s.cartCount ? ` (${s.cartCount})` : ""}
+            <button
+              key={id}
+              className={`step${s.screen === id ? " active" : ""}`}
+              onClick={() => s.show(id)}
+            >
+              {label}
+              {id === "db" && s.cartCount ? ` (${s.cartCount})` : ""}
             </button>
           ))}
         </nav>
@@ -58,10 +60,22 @@ function Shell() {
 
 export default function App() {
   if (new URLSearchParams(window.location.search).has("legacy")) {
-    return <Suspense fallback={null}><LegacyViewer /></Suspense>;
+    return (
+      <Suspense fallback={null}>
+        <LegacyViewer />
+      </Suspense>
+    );
   }
   if (!new URLSearchParams(window.location.search).has("v1")) {
-    return <Suspense fallback={<p>작업 공간을 불러오는 중…</p>}><V2Workbench /></Suspense>;
+    return (
+      <Suspense fallback={<p>작업 공간을 불러오는 중…</p>}>
+        <V2Workbench />
+      </Suspense>
+    );
   }
-  return <StoreProvider><Shell /></StoreProvider>;
+  return (
+    <StoreProvider>
+      <Shell />
+    </StoreProvider>
+  );
 }

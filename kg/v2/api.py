@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import heapq
+import csv
+import io
+from datetime import date
+from typing import Literal
 import hmac
 import json
 import os
@@ -10,12 +14,27 @@ import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import APIRouter, Body, Depends, FastAPI, Header, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, Depends, FastAPI, Header, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 
+from .contracts import (
+    RegisterRequest,
+    ViewportRequest,
+    JobRequest,
+    JobResponse,
+    KGRequest,
+    TemplateRequest,
+    ApplicationRequest,
+    RevisionRequest,
+    IntegrationRequest,
+    RollbackRequest,
+    ConceptEditRequest,
+)
 from .build import authorize_build, create_integration, output_path, prepare_build
 from .db import Problem, decode_cursor, dump, norm, one, page
+from .features import document_query, selection_cte, rollback, edit_concept
 from .service import Service
 from .spec import address, bounds
 
@@ -30,6 +49,32 @@ def install(app: FastAPI, root, start_worker=True):
         return JSONResponse(
             {"error": {"code": exc.code, "message": exc.message}},
             status_code=exc.status,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_handler(request: Request, exc: RequestValidationError):
+        errors = [
+            {"field": ".".join(map(str, e["loc"])), "message": e["msg"]}
+            for e in exc.errors()
+        ]
+        code, status = "VALIDATION_ERROR", 422
+        if any(e["loc"][-1] == "request_key" for e in exc.errors()):
+            code = "REQUEST_KEY_REQUIRED"
+        if request.url.path == "/api/v2/viewports" and any(
+            e["loc"][-1] in ("rows", "cols", "r1", "c1") for e in exc.errors()
+        ):
+            code, status = "VIEWPORT_LIMIT", 413
+        return JSONResponse(
+            {
+                "error": {
+                    "code": code,
+                    "message": "; ".join(
+                        e["field"] + ": " + e["message"] for e in errors
+                    ),
+                    "fields": errors,
+                }
+            },
+            status_code=status,
         )
 
     @app.middleware("http")
@@ -63,14 +108,24 @@ def install(app: FastAPI, root, start_worker=True):
         # 클라이언트가 임의 사용자 이름을 전달해 권한을 바꾸지 못하게 한다.
         return os.environ.get("KG_V2_PRINCIPAL", "local-user")
 
-    def listing(sql, params, scope, keys, cursor, limit):
+    def listing(sql, params, scope, keys, cursor, limit, descending=False):
         values = decode_cursor(cursor, scope, len(keys))
         if values:
             sql += (
-                " AND (" + ",".join(keys) + ") > (" + ",".join("?" for _ in keys) + ")"
+                " AND ("
+                + ",".join(keys)
+                + ") "
+                + ("<" if descending else ">")
+                + " ("
+                + ",".join("?" for _ in keys)
+                + ")"
             )
             params = (*params, *values)
-        sql += " ORDER BY " + ",".join(keys) + " LIMIT ?"
+        sql += (
+            " ORDER BY "
+            + ",".join(k + (" DESC" if descending else " ASC") for k in keys)
+            + " LIMIT ?"
+        )
         with service.db.connect() as conn:
             return page(
                 conn.execute(sql, (*params, limit + 1)),
@@ -156,8 +211,9 @@ def install(app: FastAPI, root, start_worker=True):
         rows = heapq.nsmallest(limit + 1, entries(), key=lambda r: r["name"])
         return page(rows, limit, ["name"], scope)
 
-    @router.post("/documents/register", status_code=202)
-    def register(body: dict = Body(...), user=Depends(principal)):
+    @router.post("/documents/register", status_code=202, response_model=JobResponse)
+    def register(body: RegisterRequest, user=Depends(principal)):
+        body = body.payload()
         refs = body.get("source_refs")
         if (
             not isinstance(refs, list)
@@ -176,17 +232,53 @@ def install(app: FastAPI, root, start_worker=True):
     @router.get("/documents")
     def documents(
         q: str = Query("", max_length=200),
+        author: str = Query("", max_length=200),
+        date_from: date | None = None,
+        date_to: date | None = None,
+        access_status: Literal["", "unknown", "allowed", "denied", "expired"] = "",
+        extraction_status: Literal[
+            "", "unassigned", "review", "pending", "published", "failed"
+        ] = "",
+        template: str = Query("", max_length=200),
+        sort: Literal["name", "author", "authored_at", "registered_at"] = "name",
+        direction: Literal["asc", "desc"] = "asc",
         cursor: str | None = None,
         limit: int = Query(30, ge=1, le=100),
         user=Depends(principal),
     ):
+        if date_from and date_to and date_from > date_to:
+            raise Problem("INVALID_DATE_RANGE", "시작일은 종료일 이전이어야 합니다.")
+        sql, params = document_query(
+            user,
+            q,
+            author,
+            date_from,
+            date_to,
+            access_status,
+            extraction_status,
+            template,
+            sort,
+        )
         return listing(
-            "SELECT document_id,display_name,provider,file_type,current_version_id,registered_at FROM document WHERE display_name LIKE ?",
-            ("%" + q + "%",),
-            ["documents", q],
-            ["document_id"],
+            sql,
+            params,
+            [
+                "documents",
+                user,
+                q,
+                author,
+                str(date_from),
+                str(date_to),
+                access_status,
+                extraction_status,
+                template,
+                sort,
+                direction,
+            ],
+            ["sort_value", "document_id"],
             cursor,
             limit,
+            direction == "desc",
         )
 
     @router.get("/documents/{doc_id}/versions")
@@ -226,8 +318,9 @@ def install(app: FastAPI, root, start_worker=True):
         _, caps = service.authorize(vid, user)
         return caps
 
-    @router.post("/viewports", status_code=202)
-    def viewport(body: dict = Body(...), user=Depends(principal)):
+    @router.post("/viewports", status_code=202, response_model=JobResponse)
+    def viewport(body: ViewportRequest, user=Depends(principal)):
+        body = body.payload()
         for key, default, minimum, maximum in (
             ("r1", 1, 1, 1048576),
             ("c1", 1, 1, 16384),
@@ -251,7 +344,7 @@ def install(app: FastAPI, root, start_worker=True):
             raise Problem("SHEET_REQUIRED", "문서 버전과 시트를 선택하세요.")
         return submit("viewport", body, user)
 
-    @router.get("/jobs/{jid}")
+    @router.get("/jobs/{jid}", response_model=JobResponse)
     def job(jid: str, user=Depends(principal)):
         result = service.jobs.get(jid, user)
         if result["kind"] == "viewport" and result["result"]:
@@ -281,7 +374,8 @@ def install(app: FastAPI, root, start_worker=True):
         )
 
     @router.post("/kg/import")
-    def kg_import(body: dict = Body(...), user=Depends(principal)):
+    def kg_import(body: KGRequest, user=Depends(principal)):
+        body = body.payload()
         return safe_write(service.import_kg, body, user)
 
     @router.post("/kg/import-current")
@@ -355,7 +449,8 @@ def install(app: FastAPI, root, start_worker=True):
         )
 
     @router.post("/templates")
-    def template_create(body: dict = Body(...), user=Depends(principal)):
+    def template_create(body: TemplateRequest, user=Depends(principal)):
+        body = body.payload()
         return safe_write(
             service.create_template,
             body.get("name"),
@@ -392,7 +487,8 @@ def install(app: FastAPI, root, start_worker=True):
         return result
 
     @router.post("/applications")
-    def application_create(body: dict = Body(...), user=Depends(principal)):
+    def application_create(body: ApplicationRequest, user=Depends(principal)):
+        body = body.payload()
         service.authorize(body.get("version_id"), user)
         return safe_write(
             service.apply_template,
@@ -469,7 +565,8 @@ def install(app: FastAPI, root, start_worker=True):
         return result
 
     @router.post("/applications/{aid}/mappings/{mid}/revisions")
-    def revise(aid: str, mid: str, body: dict = Body(...), user=Depends(principal)):
+    def revise(aid: str, mid: str, body: RevisionRequest, user=Depends(principal)):
+        body = body.payload()
         previous = service.mapping(mid)
         service.authorize(previous["document_version_id"], user)
         return safe_write(
@@ -484,8 +581,11 @@ def install(app: FastAPI, root, start_worker=True):
             user,
         )
 
-    @router.post("/applications/{aid}/extract", status_code=202)
-    def extract(aid: str, body: dict = Body(...), user=Depends(principal)):
+    @router.post(
+        "/applications/{aid}/extract", status_code=202, response_model=JobResponse
+    )
+    def extract(aid: str, body: JobRequest, user=Depends(principal)):
+        body = body.payload()
         return submit(
             "extract",
             {"application_id": aid, "request_key": body.get("request_key")},
@@ -498,21 +598,31 @@ def install(app: FastAPI, root, start_worker=True):
         run_id: str | None = None,
         concept_id: str | None = None,
         kg_revision_id: str | None = None,
+        roots: list[str] = Query([]),
+        excluded: list[str] = Query([]),
         cursor: str | None = None,
         limit: int = Query(30, ge=1, le=100),
         user=Depends(principal),
     ):
-        sql = "SELECT s.*,m.concept_id,m.rule_key,m.application_id,m.kg_revision_id FROM extracted_series s JOIN mapping_revision m USING(mapping_revision_id) JOIN template_application a USING(application_id) JOIN document_version v ON v.document_version_id=s.document_version_id JOIN document d USING(document_id) WHERE "
+        sql = "SELECT s.*,m.concept_id,m.rule_key,m.application_id,m.kg_revision_id,(SELECT c.name FROM domain_concept c WHERE c.kg_revision_id=m.kg_revision_id AND c.concept_id=m.concept_id) concept_name,json_extract(m.effective_spec_json,'$.value_spec.type') target_type,(SELECT i.unit_normalized FROM extracted_item i WHERE i.series_id=s.series_id ORDER BY i.item_index LIMIT 1) target_unit FROM extracted_series s JOIN mapping_revision m USING(mapping_revision_id) JOIN template_application a USING(application_id) JOIN document_version v ON v.document_version_id=s.document_version_id JOIN document d USING(document_id) WHERE "
         if run_id:
             sql += "s.run_id=? AND EXISTS(SELECT 1 FROM extraction_run e WHERE e.run_id=s.run_id AND e.status='succeeded')"
             params = (run_id,)
+        elif roots:
+            cte, selected_params = selection_cte(kg_revision_id, roots, excluded)
+            sql = (
+                cte
+                + sql
+                + "s.run_id=a.published_run_id AND d.current_version_id=s.document_version_id AND m.kg_revision_id=? AND m.concept_id IN(SELECT id FROM selected)"
+            )
+            params = (*selected_params, kg_revision_id)
         else:
             sql += "s.run_id=a.published_run_id AND d.current_version_id=s.document_version_id AND m.concept_id=? AND m.kg_revision_id=?"
             params = (concept_id, kg_revision_id)
         result = listing(
             sql,
             params,
-            ["series", run_id, concept_id, kg_revision_id],
+            ["series", run_id, concept_id, kg_revision_id, roots, excluded],
             ["s.series_id"],
             cursor,
             limit,
@@ -598,7 +708,8 @@ def install(app: FastAPI, root, start_worker=True):
         return result
 
     @router.post("/integrations")
-    def integration_create(body: dict = Body(...), user=Depends(principal)):
+    def integration_create(body: IntegrationRequest, user=Depends(principal)):
+        body = body.payload()
         return safe_write(
             create_integration,
             service,
@@ -623,8 +734,11 @@ def install(app: FastAPI, root, start_worker=True):
             limit,
         )
 
-    @router.post("/integrations/{vid}/build", status_code=202)
-    def build(vid: str, body: dict = Body(...), user=Depends(principal)):
+    @router.post(
+        "/integrations/{vid}/build", status_code=202, response_model=JobResponse
+    )
+    def build(vid: str, body: JobRequest, user=Depends(principal)):
+        body = body.payload()
         return submit(
             "build",
             {"integration_version_id": vid, "request_key": body.get("request_key")},
@@ -674,6 +788,14 @@ def install(app: FastAPI, root, start_worker=True):
             result = page(
                 conn.execute(
                     "SELECT _row_no,_row_key,"
+                    + (
+                        "_record_key,"
+                        if any(
+                            r[1] == "_record_key"
+                            for r in conn.execute("PRAGMA table_info(data)")
+                        )
+                        else "NULL _record_key,"
+                    )
                     + preview
                     + " FROM data WHERE _row_no>? ORDER BY _row_no LIMIT ?",
                     ((values or [0])[0], limit + 1),
@@ -706,12 +828,175 @@ def install(app: FastAPI, root, start_worker=True):
         )
 
     @router.get("/builds/{bid}/download")
-    def download(bid: str, user=Depends(principal)):
+    def download(
+        bid: str, format: Literal["sqlite", "csv"] = "sqlite", user=Depends(principal)
+    ):
         authorize_build(service, bid, user)
+        path = output_path(service, bid)
+        if format == "csv":
+
+            def stream():
+                with sqlite3.connect(
+                    f"file:{path.as_posix()}?mode=ro", uri=True
+                ) as conn:
+                    rows = conn.execute("SELECT * FROM data ORDER BY _row_no")
+                    buffer = io.StringIO()
+                    writer = csv.writer(buffer)
+                    yield "\ufeff"
+                    writer.writerow([c[0] for c in rows.description])
+                    yield buffer.getvalue()
+                    buffer.seek(0)
+                    buffer.truncate(0)
+                    for row in rows:
+                        writer.writerow(row)
+                        yield buffer.getvalue()
+                        buffer.seek(0)
+                        buffer.truncate(0)
+
+            return StreamingResponse(
+                stream(),
+                media_type="text/csv; charset=utf-8",
+                headers={
+                    "Content-Disposition": f'attachment; filename="custom-db-{bid}.csv"'
+                },
+            )
         return FileResponse(
-            output_path(service, bid),
+            path,
             filename="custom-db-" + bid + ".sqlite",
             media_type="application/vnd.sqlite3",
+        )
+
+    @router.get("/review-queue")
+    def review_queue(
+        q: str = Query("", max_length=200),
+        status: Literal["proposed", "approved", "rejected", "all"] = "proposed",
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        sql = """SELECT m.mapping_revision_id,m.application_id,m.document_version_id,m.rule_key,m.status,m.revision_no,m.created_at,
+                 d.document_id,d.display_name,t.name template_name,coalesce(h.edit_seq,0) edit_seq
+                 FROM mapping_revision m JOIN document_version v USING(document_version_id) JOIN document d USING(document_id)
+                 JOIN template_version tv USING(template_version_id) JOIN template t USING(template_id)
+                 LEFT JOIN mapping_head h ON h.application_id=m.application_id AND h.rule_key=m.rule_key
+                 WHERE d.current_version_id=m.document_version_id AND m.revision_no=(SELECT max(x.revision_no) FROM mapping_revision x WHERE x.application_id=m.application_id AND x.rule_key=m.rule_key)
+                 AND (d.display_name LIKE ? OR m.rule_key LIKE ?)"""
+        params = ("%" + q + "%", "%" + q + "%")
+        if status != "all":
+            sql += " AND m.status=?"
+            params += (status,)
+        result = listing(
+            sql,
+            params,
+            ["review", q, status],
+            ["m.created_at", "m.mapping_revision_id"],
+            cursor,
+            limit,
+        )
+        for vid in {r["document_version_id"] for r in result["items"]}:
+            service.authorize(vid, user)
+        return result
+
+    @router.get("/normalization-presets")
+    def normalization_presets(user=Depends(principal)):
+        from .normalization import presets
+
+        return presets(service.root)
+
+    @router.get("/applications/{aid}/rules/{rule_key}/revisions")
+    def history(
+        aid: str,
+        rule_key: str,
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        application(aid, user)
+        return listing(
+            "SELECT mapping_revision_id,revision_no,status,concept_id,reason,created_by,created_at FROM mapping_revision WHERE application_id=? AND rule_key=?",
+            (aid, rule_key),
+            ["history", aid, rule_key],
+            ["revision_no"],
+            cursor,
+            limit,
+            True,
+        )
+
+    @router.post("/applications/{aid}/mappings/{mid}/rollback")
+    def restore(aid: str, mid: str, body: RollbackRequest, user=Depends(principal)):
+        previous = service.mapping(mid)
+        service.authorize(previous["document_version_id"], user)
+        return safe_write(rollback, service, aid, mid, body.payload(), user)
+
+    @router.get("/kg/{kg}/tree")
+    def tree(
+        kg: str,
+        parent_id: str = "",
+        roots: list[str] = Query([]),
+        excluded: list[str] = Query([]),
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        sql = """SELECT c.*,(SELECT count(*) FROM domain_edge e WHERE e.kg_revision_id=c.kg_revision_id AND e.from_concept_id=c.concept_id AND e.relation_type='parent_of') child_count
+                 FROM domain_concept c WHERE c.kg_revision_id=? AND c.status='active' AND """
+        params = (kg,)
+        if parent_id:
+            sql += "EXISTS(SELECT 1 FROM domain_edge e WHERE e.kg_revision_id=c.kg_revision_id AND e.to_concept_id=c.concept_id AND e.from_concept_id=? AND e.relation_type='parent_of')"
+            params += (parent_id,)
+        else:
+            sql += "NOT EXISTS(SELECT 1 FROM domain_edge e WHERE e.kg_revision_id=c.kg_revision_id AND e.to_concept_id=c.concept_id AND e.relation_type='parent_of')"
+        result = listing(
+            sql,
+            params,
+            ["tree", kg, parent_id, roots, excluded],
+            ["c.concept_id"],
+            cursor,
+            limit,
+        )
+        cte, values = selection_cte(kg, roots, excluded)
+        with service.db.connect() as conn:
+            # 페이지에 표시한 노드에만 하위 선택 상태를 계산한다.
+            for node in result["items"]:
+                sql = (
+                    cte
+                    + ", subtree(id) AS (SELECT ? UNION SELECT e.to_concept_id FROM domain_edge e JOIN subtree t ON t.id=e.from_concept_id WHERE e.kg_revision_id=? AND e.relation_type='parent_of') SELECT count(*) total,sum(concept_id IN(SELECT id FROM selected)) chosen FROM domain_concept WHERE kg_revision_id=? AND status='active' AND concept_id IN(SELECT id FROM subtree)"
+                )
+                counts = conn.execute(
+                    sql, (*values, node["concept_id"], kg, kg)
+                ).fetchone()
+                node["checked"] = bool(
+                    counts["total"] and counts["chosen"] == counts["total"]
+                )
+                node["indeterminate"] = bool(
+                    counts["chosen"] and counts["chosen"] < counts["total"]
+                )
+                candidates = list(dict.fromkeys([*roots, *excluded]))
+                node["descendant_selections"] = [
+                    r[0]
+                    for r in conn.execute(
+                        "WITH RECURSIVE subtree(id) AS (SELECT ? UNION SELECT e.to_concept_id FROM domain_edge e JOIN subtree t ON t.id=e.from_concept_id WHERE e.kg_revision_id=? AND e.relation_type='parent_of') SELECT id FROM subtree WHERE id IN ("
+                        + (",".join("?" for _ in candidates) or "NULL")
+                        + ")",
+                        (node["concept_id"], kg, *candidates),
+                    )
+                ]
+        return result
+
+    @router.post("/kg/{kg}/concepts/{cid}/revisions")
+    def concept_revision(
+        kg: str, cid: str, body: ConceptEditRequest, user=Depends(principal)
+    ):
+        return safe_write(edit_concept, service, kg, cid, body.payload(), user)
+
+    @router.get("/template-versions/{tid}/download")
+    def template_export(tid: str, user=Depends(principal)):
+        result = template_detail(tid, user)
+        return JSONResponse(
+            result["definition"],
+            headers={
+                "Content-Disposition": f'attachment; filename="template-{tid}.json"'
+            },
         )
 
     app.include_router(router)
@@ -732,7 +1017,7 @@ def install(app: FastAPI, root, start_worker=True):
 
 
 def create_app(root, start_worker=True):
-    app = FastAPI(title="Data Gathering v2")
+    app = FastAPI(title="Semantic Excel Integration v2")
     install(app, root, start_worker)
     dist = Path(__file__).resolve().parents[2] / "frontend/dist"
     if dist.is_dir():

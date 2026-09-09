@@ -242,8 +242,17 @@ def validate_rule(rule, roles):
             "UNSUPPORTED_FORMULA", "원본 수정 없이 저장된 수식 결과만 읽습니다."
         )
     normal = spec.setdefault("normalization", {"operation": "identity", "version": "1"})
-    if normal.get("operation", "identity") not in ("identity", "trim", "affine"):
+    if normal.get("operation", "identity") not in (
+        "identity",
+        "trim",
+        "affine",
+        "pipeline",
+    ):
         raise Problem("UNSUPPORTED_NORMALIZER", "등록되지 않은 변환입니다.")
+    if normal.get("operation") == "pipeline":
+        from .normalization import validate_pipeline
+
+        validate_pipeline(normal, spec.get("type", "text"))
     if (
         normal.get("operation") == "affine"
         and spec.get("type", "text") != "decimal"

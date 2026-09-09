@@ -1,0 +1,15 @@
+/* 기존 제품의 디자인 토큰을 v1과 v2가 공유한다. */
+:root {
+  --product-bg: #f5f7fb;
+  --product-panel: #fff;
+  --product-line: #d9dee8;
+  --product-text: #20242c;
+  --product-muted: #6e7685;
+  --product-blue: #3569e8;
+  --product-blue-soft: #eaf0ff;
+  --product-green: #3a8d6d;
+  --product-purple: #7b61c9;
+  --product-shadow: 0 1px 2px rgba(23, 31, 49, 0.04);
+  --product-font:
+    Inter, -apple-system, "Malgun Gothic", "Noto Sans KR", sans-serif;
+}

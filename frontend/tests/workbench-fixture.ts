@@ -46,7 +46,7 @@ export function workbenchFixture() {
       unit: { areas: [{ sheet_role: "common", range: "B1" }] },
     },
     value_spec: { type: "decimal", unit: "°C" },
-    record_spec: { scope: "process-table", key: { column: "A" } },
+    record_spec: { scope: ["process-table"], key: { column: "A" } },
   };
   const state: Row = {
     published: true,
@@ -88,6 +88,9 @@ export function workbenchFixture() {
     observed_key: "공정 온도",
     cardinality: "list",
     axis: "down",
+    concept_name: "공정온도",
+    target_type: "decimal",
+    target_unit: "°C",
   });
   function item(index: number) {
     return {
@@ -195,6 +198,34 @@ export function workbenchFixture() {
     const override = overrides.get(method + " " + path);
     if (override) return override(call);
     if (path === "/status") return { schema_version: 2 };
+    if (path === "/normalization-presets")
+      return page([
+        {
+          id: "identity",
+          label: "원값 유지",
+          normalization: { operation: "identity", version: "1" },
+        },
+        {
+          id: "automatic",
+          label: "자동 정규화",
+          normalization: {
+            operation: "pipeline",
+            version: "1",
+            preset_id: "automatic",
+            steps: [{ op: "automatic" }],
+          },
+        },
+      ]);
+    if (path === "/review-queue") return page([]);
+    if (path.endsWith("/tree"))
+      return page([
+        {
+          concept_id: ids.concept,
+          name: "공정온도",
+          child_count: 0,
+          checked: url.searchParams.getAll("roots").includes(ids.concept),
+        },
+      ]);
     if (path === "/documents")
       return page([
         {

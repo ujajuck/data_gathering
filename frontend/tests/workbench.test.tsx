@@ -70,9 +70,9 @@ describe("원본 검수와 사용자 DB 화면", () => {
 
     // Unsaved edits survive tab changes, including their visible overlays.
     const nav = within(screen.getByRole("navigation", { name: "작업 단계" }));
-    await user.click(nav.getByRole("button", { name: /문서/ }));
+    await user.click(nav.getByRole("button", { name: "1. 파일 분석" }));
     await screen.findByRole("heading", { name: "등록 문서" });
-    await user.click(nav.getByRole("button", { name: /원본 · 검수/ }));
+    await user.click(nav.getByRole("button", { name: "3. 원본 데이터" }));
     await screen.findByRole("button", { name: "common · B2" });
     expect(container.querySelectorAll(".v2-overlay.unit")).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "수정 버전 저장" }));

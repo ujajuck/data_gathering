@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 import json
 import os
 import re
@@ -67,6 +68,9 @@ class Service:
             {"source_ref": version["source_ref"], "required": required},
             checkpoint,
         )
+        from .features import record_access
+
+        record_access(self, version, principal, caps)
         key = {
             "view": "can_view",
             "extract": "can_extract",
@@ -303,13 +307,17 @@ class Service:
             "sheets": len(seen),
         }
 
-    def import_kg(self, definition, principal):
+    def import_kg(self, definition, principal, connection=None):
         if (
             not isinstance(definition, dict)
             or not 1 <= len(definition.get("concepts", [])) <= 10000
         ):
             raise Problem("INVALID_KG", "사람이 정의한 개념을 1~10,000개 지정하세요.")
-        with self.db.connect(write=True) as conn:
+        with (
+            nullcontext(connection)
+            if connection is not None
+            else self.db.connect(write=True)
+        ) as conn:
             hashed = digest(definition)
             exists = conn.execute(
                 "SELECT * FROM kg_revision WHERE content_sha256=?", (hashed,)
