@@ -13,6 +13,27 @@ import {
 } from "./client";
 import type { Row } from "./client";
 import { Heading } from "./Workbench";
+
+// Count has its own output type and no measurement unit. Keep the original
+// field metadata while counting so changing modes cannot corrupt that field.
+function fieldForMode(field: Row, mode: string, aggregate = field.aggregate) {
+  const measurementType = field.measurement_type ?? field.target_type;
+  const measurementUnit = Object.hasOwn(field, "measurement_unit")
+    ? field.measurement_unit
+    : field.target_unit;
+  const { measurement_type, measurement_unit, ...base } = field;
+  const counting = mode === "aggregate" && aggregate === "count";
+  return {
+    ...base,
+    aggregate,
+    target_type: counting ? "decimal" : measurementType,
+    target_unit: counting ? null : measurementUnit,
+    ...(counting
+      ? { measurement_type: measurementType, measurement_unit: measurementUnit }
+      : {}),
+  };
+}
+
 export default function Database() {
   const { route, go, refresh, changed } = useNavigation();
   const tasks = useTasks();
@@ -310,23 +331,7 @@ export default function Database() {
                     onChange={(e) =>
                       setFields((fs) =>
                         fs.map((f, n) =>
-                          n === i
-                            ? {
-                                ...f,
-                                aggregate: e.target.value,
-                                ...(e.target.value === "count"
-                                  ? {
-                                      target_type: "decimal",
-                                      target_unit: null,
-                                      measurement_unit:
-                                        f.measurement_unit ?? f.target_unit,
-                                    }
-                                  : {
-                                      target_unit:
-                                        f.measurement_unit ?? f.target_unit,
-                                    }),
-                              }
-                            : f,
+                          n === i ? fieldForMode(f, mode, e.target.value) : f,
                         ),
                       )
                     }
@@ -341,7 +346,14 @@ export default function Database() {
           ))}
           <label>
             행 결합 방식
-            <select value={mode} onChange={(e) => setMode(e.target.value)}>
+            <select
+              value={mode}
+              onChange={(e) => {
+                const next = e.target.value;
+                setFields((fs) => fs.map((f) => fieldForMode(f, next)));
+                setMode(next);
+              }}
+            >
               <option value="record_scope">같은 문서·시트·표의 업무 행</option>
               <option value="business_key">문서 간 명시한 업무키로 결합</option>
               <option value="aggregate">중복을 제거하고 전체 집계</option>

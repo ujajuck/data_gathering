@@ -39,6 +39,10 @@ export default function Source() {
       : null,
   );
   const mapping = useData(route.mapping ? "/mappings/" + route.mapping : null);
+  const [draftSpec, setDraftSpec] = useDraft<Row>(
+    "mapping:" + route.mapping,
+    mapping.data?.effective_spec || {},
+  );
   const [viewRevision, setViewRevision] = useState(0);
   const r1 = Math.max(1, Math.min(1048576, Number(route.row) || 1));
   const c1 = Math.max(1, Math.min(16384, Number(route.col) || 1));
@@ -64,7 +68,6 @@ export default function Source() {
   const parts = usePage(
     route.item ? "/items/" + route.item + "/regions" : null,
   );
-  const focused = useRef("");
   useEffect(() => {
     if (!route.sheet && sheets.data?.items[0])
       go({ sheet: sheets.data.items[0].sheet_id, row: "1", col: "1" }, true);
@@ -74,12 +77,7 @@ export default function Source() {
       go({ mapping: mappings.data.items[0].mapping_revision_id }, true);
   }, [route.mapping, mappings.data]);
   useEffect(() => {
-    if (
-      route.item &&
-      parts.data?.items.length &&
-      focused.current !== route.item
-    ) {
-      focused.current = route.item;
+    if (route.item && parts.data?.items.length && (!route.row || !route.col)) {
       const p =
         parts.data.items.find(
           (p) => p.role === "value" || p.role === "input",
@@ -94,7 +92,7 @@ export default function Source() {
         true,
       );
     }
-  }, [route.item, parts.data]);
+  }, [route.item, route.row, route.col, parts.data]);
   useEffect(() => {
     setSelection(null);
   }, [route.version, route.sheet, route.mapping]);
@@ -308,7 +306,7 @@ export default function Source() {
                   <Grid
                     view={view.data}
                     zoom={zoom}
-                    spec={mapping.data?.effective_spec}
+                    spec={draftSpec}
                     bindings={application.data?.bindings || []}
                     sheet={route.sheet}
                     selection={selection}
@@ -371,6 +369,8 @@ export default function Source() {
                 <MappingEditor
                   key={mapping.data.mapping_revision_id}
                   mapping={mapping.data}
+                  spec={draftSpec}
+                  setSpec={setDraftSpec}
                   application={application.data}
                   selection={selection}
                   clearSelection={() => setSelection(null)}
@@ -435,7 +435,9 @@ export default function Source() {
                           <td>
                             <button
                               className="v2-link"
-                              onClick={() => go({ item: i.item_id })}
+                              onClick={() =>
+                                go({ item: i.item_id, row: "", col: "" })
+                              }
                             >
                               {i.value_text ?? "빈칸"}
                               {i.preview_truncated ? "…" : ""}
@@ -676,20 +678,20 @@ function Grid({
 }
 function MappingEditor({
   mapping,
+  spec,
+  setSpec,
   application,
   selection,
   clearSelection,
 }: {
   mapping: Row;
+  spec: Row;
+  setSpec: (next: Row | ((old: Row) => Row)) => void;
   application: Row;
   selection: Row | null;
   clearSelection: () => void;
 }) {
   const { route, go, changed } = useNavigation();
-  const [spec, setSpec] = useDraft<Row>(
-    "mapping:" + mapping.mapping_revision_id,
-    structuredClone(mapping.effective_spec),
-  );
   const [concept, setConcept] = useDraft(
     "concept:" + mapping.mapping_revision_id,
     mapping.concept_id || "",

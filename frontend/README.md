@@ -1,11 +1,14 @@
 # Semantic Excel Integration — React Frontend
 
-이 시스템의 **유일한 웹 프론트**다 (React + TypeScript + Vite). REST API는
-`kg/webapp.py` 하나를 사용하고, 빌드 산출물(`dist/`)이 커밋되어 서버가 루트
+이 시스템의 **웹 프런트엔드**다 (React + TypeScript + Vite). 기본 화면은 `src/v2/`의
+문서·도메인 KG·원본 검수·템플릿·사용자 DB 탭이다. `/api/v2`는 독립 서버 `kg.v2` 또는
+기존 `kg.webapp`에서 제공한다. [v2 실행 안내](../docs/design/db-schema-v2-runtime.md)에
+샘플 생성, 검수와 추출, DRM Reader 계약 및 지원 범위를 정리했다.
+빌드 산출물(`dist/`)이 커밋되어 서버가 루트
 `/` 에 바로 서빙한다 — 프론트를 고치면 `npm run build` 후 dist까지 커밋한다.
 (초기 바닐라 JS UI `kg/web_kg`는 포트 완료 후 제거됐다.)
 
-## 화면
+## 기존 화면 (`?v1=1`)
 
 5탭 구성:
 
@@ -28,11 +31,12 @@
 ## 실행
 
 ```bash
-# 백엔드 (개발 프록시 대상)
-python -m kg.webapp --ws domains/financier --port 8010
+# v2 샘플과 백엔드 (개발 프록시 대상)
+python -m examples.schema_v2.runtime_demo --workspace /tmp/data-gathering-v2-demo
+python -m kg.v2 --ws /tmp/data-gathering-v2-demo --port 8010
 
 # 개발 서버 (Vite, /api → 127.0.0.1:8010 프록시)
-npm install
+npm ci
 npm run dev
 
 # 프로덕션: 빌드하면 kg.webapp이 / 에 서빙 (base: "./", dist는 커밋 대상)
@@ -41,10 +45,29 @@ npm run build
 
 ## 구조
 
+- `src/v2/` — 기본 v2 작업 화면, 범위별 원본 표시, 검수 초안, 작업 상태, 사용자 DB
+- `tests/workbench.test.tsx` — v2 화면 컴포넌트 상호작용 회귀 테스트
 - `src/lib/api.ts` — fetch 헬퍼 + colName/parseRange + cart 저장소
 - `src/lib/store.tsx` — 5탭 공유 상태
 - `src/screens/` — FilesScreen / KgScreen(+kg/) / SourceScreen(+source/) / DbScreen / TemplatesScreen
 - `src/webkg.css` — 앱 스타일(`.wk` 스코프)
+
+## 컴포넌트 검증
+
+```bash
+npm ci
+npm test
+npm run build
+```
+
+테스트 환경은 Node 24.19.0이다. 잠금 파일의 jsdom은 Node 22.22.2 이상(22.x) 또는
+24.15.0 이상(24.x), 26 이상을 요구한다. Vitest·jsdom·React Testing Library로 실제
+화면 컴포넌트를 마운트하고 가상 API 응답만 제공하며 외부 네트워크를 사용하지 않는다.
+
+병합 셀의 키보드 선택과 포인터 이벤트, 여러 영역/시트의 검수 초안·개념·승인 저장,
+늦은 표시 작업 취소, 확대 시 재조회 방지, 30개 단위 페이지 이동,
+DB 생성 요청과 선택한 출처로의 이동, 집계 변경 시 타입/단위 복원을 검증한다.
+jsdom에는 레이아웃·히트 테스트가 없으므로 실제 브라우저의 시각·마우스 드래그 검증과 구분한다.
 
 ## 레거시 PDF 근거 뷰어
 
