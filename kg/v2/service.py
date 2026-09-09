@@ -204,9 +204,11 @@ class Service:
                 self, result["version_id"], principal, checkpoint, described=metadata
             )["status"]
         except Problem as exc:
-            if exc.code == "CANCELLED":
-                raise
-            result["signature"] = "failed:" + exc.code
+            # 취소를 포함해 서명 실패는 등록 결과에 기록만 한다. 이미 커밋된 버전을 잃거나 작업을 실패시키지 않는다
+            # (sign CLI / POST /versions/{id}/signature로 나중에 계산한다).
+            result["signature"] = (
+                "skipped:CANCELLED" if exc.code == "CANCELLED" else "failed:" + exc.code
+            )
         except Exception:
             # 제공자 응답 형식 오류 등 예상하지 못한 예외도 이미 커밋된 등록을 실패시키지 않는다.
             result["signature"] = "failed:INTERNAL"

@@ -30,6 +30,7 @@ CLI는 `python -m kg.v2 <serve|watch|migrate|sign|export|age-projection>`이며,
 - 이관: v1 절대경로가 v2 raw 밖이면 사본을 찾지 않던 문제, 중단 후 재실행 시 템플릿 중복 생성, 사람의 `proposed` 리비전을 override가 덮어쓰던 문제, 같은 바이트의 v1 버전 누락, v1 스키마가 아닌 DB에서 `v2.db`를 만든 뒤 추적 오류 → 모두 수정·테스트.
 - watch: raw 밖 심볼릭 링크로 데몬이 죽던 문제, 끊어진 링크 하나가 전체 스캔을 막던 문제 → 항목별 건너뜀.
 - recrawl: `mode`가 멱등 키에 없어 같은 키로 배치가 섞이던 문제, 1,000건 절단 무표시, 상태 조회 오류 시 무음 중단 → 수정.
+- 문서군 제안: 구조 서명에 업무키·이름 같은 데이터 값이 섞이던 문제(라벨 규칙으로 제한, `structure-v2`), 등록 후 서명 단계의 비-Problem 예외·취소가 이미 커밋된 등록을 실패시키던 문제(best-effort로 기록만), 등록마다 리더 서브프로세스 3회 → 1회(describe가 권한·서명을 함께 반환), `has_more` 고정값, 반려된 리비전을 후보로 이식하던 문제(`SOURCE_REJECTED`), `sign` 범위, 제안 목록의 권한 확인·헤더 문자열 노출 → 모두 수정.
 - AGE 엣지 라벨이 정점 라벨과 충돌하거나 63바이트를 넘던 문제, `export --out`이 파일이면 traceback, DVC deps에 `__pycache__` 포함 → 수정.
 
 ## 남은 범위

@@ -679,6 +679,16 @@ def test_register_survives_malformed_or_crashing_signature(tmp_path, monkeypatch
         crashed = register("protected-reader", "opaque:protected-2")
         assert crashed["signature"] == "failed:INTERNAL"
         assert client.get(f"/api/v2/versions/{crashed['version_id']}/sheets").json()["items"]
+        # 커밋 뒤의 서명 계산이 취소되어도 등록 결과는 유지되고 서명만 건너뛴 것으로 남는다.
+        from kg.v2.db import Problem as _Problem
+
+        def cancelled(*args, **kwargs):
+            raise _Problem("CANCELLED", "취소")
+
+        monkeypatch.setattr(suggest, "store_signature", cancelled)
+        skipped = register("protected-reader", "opaque:protected-3")
+        assert skipped["signature"] == "skipped:CANCELLED"
+        assert client.get(f"/api/v2/versions/{skipped['version_id']}/sheets").json()["items"]
 
 
 def test_from_suggestion_skips_rejected_revisions(workspace):
