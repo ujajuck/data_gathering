@@ -392,6 +392,7 @@ class Migration:
         if units:
             self._skip("units", "unit", "v2 has no unit table; units.yaml stays the source")
         notes, definition = [], {"concepts": [], "relations": []}
+        levels = {}
         for c in concepts:
             match = re.fullmatch(r"L?(\d+)", str(c["domain_level"] or "L1").strip())
             level = int(match.group(1)) if match else 1
@@ -401,6 +402,7 @@ class Migration:
                 )
             if level < 1:
                 level = 1
+            levels[c["concept_id"]] = level
             status = (
                 "deprecated" if str(c["status"] or "").upper() == "DEPRECATED" else "active"
             )
@@ -423,10 +425,21 @@ class Migration:
             if status == "active":
                 self.active.add(c["concept_id"])
         ids = {c["concept_id"] for c in concepts}
+        translated = 0
         for source, target, kind in relations:
             if source == target or source not in ids or target not in ids:
                 notes.append(f"relation {source}→{target} {kind} dropped (self edge or unknown endpoint)")
                 continue
+            # v1 IS_A는 자식→부모, v2 parent_of는 부모→자식이며 레벨이 정확히 1 커야 한다(설계 §4.9).
+            # 그 조건을 만족하는 IS_A만 방향을 뒤집어 parent_of로 옮기고, 나머지는 그대로 복사한다.
+            if kind == "IS_A" and levels[source] == levels[target] + 1:
+                definition["relations"].append([target, source, "parent_of"])
+                translated += 1
+                continue
+            if kind == "IS_A":
+                notes.append(
+                    f"IS_A {source}(L{levels[source]})→{target}(L{levels[target]}) kept verbatim: level gap is not 1"
+                )
             definition["relations"].append([source, target, kind])
         if not definition["concepts"]:
             self._skip("kg", "kg", "no concepts in v1")
@@ -448,6 +461,7 @@ class Migration:
             "concepts": len(definition["concepts"]),
             "aliases": sum(len(c["aliases"]) for c in definition["concepts"]),
             "relations": len(definition["relations"]),
+            "parent_of_from_is_a": translated,
             "dropped_fields": dropped,
             "notes": notes,
         }
@@ -484,13 +498,23 @@ class Migration:
 
     # --------------------------------------------------------- documents ----
     def _locate(self, filename, filepath):
+        # v1의 절대경로는 대개 v2 raw 밖(이전 워크스페이스)을 가리키므로, v2 raw에 놓인 사본을
+        # 먼저 찾고 절대경로는 마지막 후보로만 쓴다. 바이트 해시 검증은 호출부가 수행한다.
         candidates = []
-        if filepath:
-            path = Path(filepath)
-            candidates.append(path if path.is_absolute() else self.raw / path)
+        path = Path(filepath) if filepath else None
+        if path is not None and not path.is_absolute():
+            candidates += [self.v2_raw / path, self.raw / path]
+        if path is not None:
+            candidates += [self.v2_raw / path.name, self.raw / path.name]
         if filename:
-            candidates.append(self.raw / filename)
+            candidates += [self.v2_raw / filename, self.raw / filename]
+        if path is not None and path.is_absolute():
+            candidates.append(path)
+        seen = set()
         for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
             if candidate.is_file():
                 return candidate
         return None

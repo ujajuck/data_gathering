@@ -89,6 +89,23 @@ describe("개념 탐색 커버리지 그래프", () => {
     expect(document.querySelectorAll(".v2-graph .gnode")).toHaveLength(5);
   });
 
+  it("하위 개념이 없는 L1도 문서군 hull과 출처 수로 그린다", async () => {
+    graphFixture({
+      nodes: [
+        { concept_id: "plant", name: "공정", level: 1, parent: null, root: "plant", sources: 3 },
+      ],
+      groups: [{ root_concept_id: "plant", name: "공정", member_document_count: 2 }],
+      edges: [],
+    });
+    render(<Workbench />);
+    expect(
+      await screen.findByRole("button", { name: "문서군 공정" }),
+    ).toBeTruthy();
+    expect(document.querySelectorAll(".v2-graph .hull")).toHaveLength(1);
+    expect(screen.getByText("공정 · 문서 2")).toBeTruthy();
+    expect(screen.getByText("3 src")).toBeTruthy();
+  });
+
   it("노드를 클릭하면 개념 상세로 이동한다", async () => {
     const f = graphFixture();
     const user = userEvent.setup();

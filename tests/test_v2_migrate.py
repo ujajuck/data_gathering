@@ -59,6 +59,8 @@ def v1_workspace(tmp_path):
     )
     store.add_alias("oven_temperature", "Oven Temp", "oven temp")
     store.add_relation("weight", "oven_temperature", "AFFECTS")
+    store.add_relation("weight", "oven_temperature", "IS_A")
+    store.add_relation("old_metric", "weight", "IS_A")
     store.upsert_unit("C", "temperature", 1.0, 0.0)
 
     store.upsert_document("doc-coffee", "coffee.xlsx", str(path))
@@ -211,10 +213,19 @@ def test_kg_becomes_single_revision(v1_workspace):
         assert conn.execute(
             "SELECT count(*) FROM domain_edge WHERE from_concept_id='weight' AND to_concept_id='oven_temperature' AND relation_type='AFFECTS'"
         ).fetchone()[0] == 1
+        # v1 IS_A(자식→부모, 레벨 차 1)는 v2 parent_of(부모→자식)로 방향을 뒤집어 옮긴다.
+        assert conn.execute(
+            "SELECT count(*) FROM domain_edge WHERE from_concept_id='oven_temperature' AND to_concept_id='weight' AND relation_type='parent_of'"
+        ).fetchone()[0] == 1
+        # old_metric(L1)→weight(L2)는 레벨 조건에 맞지 않아 IS_A 그대로 남긴다.
+        assert conn.execute(
+            "SELECT relation_type FROM domain_edge WHERE from_concept_id='old_metric' AND to_concept_id='weight'"
+        ).fetchone()[0] == "IS_A"
         stored = stored_links(conn)
         kg_links = [l for (entity, _), l in stored.items() if entity == "kg"]
         assert len(kg_links) == 1 and kg_links[0]["v2_id"] == rev
         assert kg_links[0]["detail"]["dropped_fields"] == ["canonical_name_en"]
+        assert kg_links[0]["detail"]["parent_of_from_is_a"] == 1
 
 
 def test_document_gets_new_stable_id_and_link(v1_workspace):
@@ -541,3 +552,21 @@ def test_dry_run_against_existing_v2_reports_existing(v1_workspace):
     for key in ("kg", "documents", "document_versions", "templates", "template_versions", "assignments", "overrides"):
         assert (report["counts"][key]["migrated"], report["counts"][key]["planned"]) == (0, 0), key
         assert report["counts"][key]["existing"] > 0, key
+
+
+def test_source_copied_into_separate_v2_raw_is_found(v1_workspace, tmp_path):
+    # v1의 절대경로는 이전 워크스페이스를 가리키지만, v2 raw에 같은 이름의 사본이 있으면 그것을 쓴다.
+    import shutil
+
+    ws2 = tmp_path / "v2ws"
+    (ws2 / "data/raw").mkdir(parents=True)
+    shutil.copy(v1_workspace / "data/raw/coffee.xlsx", ws2 / "data/raw/coffee.xlsx")
+    report = migrate(ws2, v1_workspace)
+    assert report["counts"]["documents"]["migrated"] == 1
+    assert not any(s["reason"].startswith("source outside") for s in report["skipped"])
+    with v2(ws2) as conn:
+        version = conn.execute(
+            "SELECT a.storage_ref FROM document_version v JOIN artifact a ON a.artifact_id=v.source_artifact_id JOIN document d USING(document_id) WHERE d.display_name='coffee.xlsx'"
+        ).fetchone()
+        assert version is not None and json.loads(version[0])["source_ref"] == "coffee.xlsx"
+    assert {"entity": "document", "v1_id": "doc-missing", "reason": "source missing"} in report["skipped"]

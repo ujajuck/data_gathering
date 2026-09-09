@@ -85,7 +85,8 @@ export function layoutDomain(graph: Graph): { groups: Laid[]; height: number } {
     const nodes = leafs.filter((n) =>
       rootId === ORPHAN ? !n.root || !known.has(n.root) : n.root === rootId,
     );
-    if (!nodes.length) continue;
+    // 하위 개념이 없는 L1도 문서군 hull로 보여준다 (L1만 있는 KG가 빈 캔버스가 되지 않게).
+    if (!nodes.length && rootId === ORPHAN) continue;
     // 부모(L2) 바로 뒤에 자식(L3)이 오도록 정렬 — 계층 엣지가 이웃 칸으로 떨어진다.
     const l2 = nodes
       .filter((n) => n.parent && l1s.has(n.parent))
@@ -122,7 +123,7 @@ export function layoutDomain(graph: Graph): { groups: Laid[]; height: number } {
     const cols = Math.min(4, Math.max(2, Math.ceil(g.nodes.length / 3)));
     const rows = Math.ceil(g.nodes.length / cols);
     g.w = cols * (NW + GX) - GX + PAD * 2;
-    g.h = PAD + L1H + 18 + rows * (NH + GY) - GY + LABEL + PAD;
+    g.h = PAD + L1H + (rows ? 18 + rows * (NH + GY) - GY : 0) + LABEL + PAD;
     if (x + g.w > MAXW) {
       x = 14;
       y += rowH + 26;
@@ -280,11 +281,16 @@ export default function DomainGraph({
               <text
                 className="ntext"
                 x={g.l1x}
-                y={g.l1y + L1H / 2 + 1}
+                y={g.l1y + L1H / 2 + (g.l1?.sources ? -5 : 1)}
                 style={{ fill: color }}
               >
                 {g.l1 ? g.l1.name : g.group.name}
               </text>
+              {g.l1?.sources ? (
+                <text className="ncnt" x={g.l1x} y={g.l1y + L1H / 2 + 11}>
+                  {g.l1.sources} src
+                </text>
+              ) : null}
             </g>
             {g.nodes.map((n) => {
               const sel = selectedConcept === n.concept_id ? " sel" : "";
