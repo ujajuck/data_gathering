@@ -12,6 +12,8 @@ export default defineConfig({
   expect: { timeout: 30_000 },
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
+    actionTimeout: 30_000,
+    navigationTimeout: 30_000,
     baseURL: "http://127.0.0.1:8021",
     browserName: "chromium",
     viewport: { width: 1600, height: 1100 },

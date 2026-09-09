@@ -25,11 +25,9 @@ test("문서 → 검수 → 오버레이 → 추출 → DB·다운로드 → 원
     "background-color",
     "rgb(53, 105, 232)",
   );
-  const documents = page
-    .locator("section")
-    .filter({
-      has: page.getByRole("heading", { name: "등록 문서", exact: true }),
-    });
+  const documents = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "등록 문서", exact: true }),
+  });
   await page.getByText("문서 필터 · 정렬", { exact: true }).click();
   await page.getByLabel("추출 상태", { exact: true }).selectOption("review");
   await expect(
@@ -51,6 +49,38 @@ test("문서 → 검수 → 오버레이 → 추출 → DB·다운로드 → 원
   ).toBeVisible();
   await expect(page.locator(".v2-overlay.key")).toHaveCount(2);
   await expect(page.locator(".v2-overlay.value")).toHaveCount(1);
+  // Exercise real hit testing across a merged key and its adjacent cell.
+  await page.getByRole("button", { name: "키 선택", exact: true }).click();
+  const dragFrom = await page
+    .getByRole("button", { name: "B3:C3 공정", exact: true })
+    .boundingBox();
+  const dragTo = await page
+    .getByRole("button", { name: "D3 온도", exact: true })
+    .boundingBox();
+  expect(dragFrom).not.toBeNull();
+  expect(dragTo).not.toBeNull();
+  await page.mouse.move(
+    dragFrom!.x + dragFrom!.width / 2,
+    dragFrom!.y + dragFrom!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    dragTo!.x + dragTo!.width / 2,
+    dragTo!.y + dragTo!.height / 2,
+    { steps: 5 },
+  );
+  await page.mouse.up();
+  await expect(
+    inspector.getByText("key · B3:D3", { exact: true }),
+  ).toBeVisible();
+  await inspector
+    .getByRole("button", { name: "이 영역 추가", exact: true })
+    .click();
+  await expect(page.locator(".v2-overlay.key")).toHaveCount(3);
+  await inspector
+    .getByRole("button", { name: "key 영역 3 삭제", exact: true })
+    .click();
+  await expect(page.locator(".v2-overlay.key")).toHaveCount(2);
   await page.getByLabel("원본 주소 이동").fill("A45");
   await page.getByRole("button", { name: "이동", exact: true }).click();
   await expect(page).toHaveURL(/row=45/);
@@ -65,15 +95,13 @@ test("문서 → 검수 → 오버레이 → 추출 → DB·다운로드 → 원
   await inspector.getByRole("button", { name: "수정 버전 저장" }).click();
   await expect(inspector.locator(".v2-badge").first()).toHaveText("r2");
   await page.getByRole("button", { name: "승인한 규칙으로 추출" }).click();
-  const extracted = page
-    .locator("section")
-    .filter({
-      has: page.getByRole("heading", {
-        name: "추출값 · 원본 출처",
-        exact: true,
-      }),
-    });
-  await extracted.getByRole("button", { name: /공정 온도/ }).click();
+  const extracted = page.locator("section").filter({
+    has: page.getByRole("heading", {
+      name: "추출값 · 원본 출처",
+      exact: true,
+    }),
+  });
+  await extracted.getByRole("button", { name: /공정온도/ }).click();
   await expect(extracted.getByRole("row")).toHaveCount(31);
   const items = extracted
     .locator("div")
@@ -108,11 +136,9 @@ test("문서 → 검수 → 오버레이 → 추출 → DB·다운로드 → 원
   await page.getByLabel("출력 열 이름").fill("운전 온도");
   await page.getByLabel("행 결합 방식").selectOption("record_scope");
   await page.getByRole("button", { name: "통합 명세 저장 · DB 생성" }).click();
-  const preview = page
-    .locator("section")
-    .filter({
-      has: page.getByRole("heading", { name: "결과 미리보기", exact: true }),
-    });
+  const preview = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "결과 미리보기", exact: true }),
+  });
   await expect(
     preview.getByRole("row").filter({ hasText: "LOT-001" }),
   ).toBeVisible();
