@@ -9,10 +9,11 @@ type Row = Record<string, any>;
 function suggestion(f: ReturnType<typeof workbenchFixture>, score: number, extra: Row = {}) {
   return {
     score,
+    // 서버는 헤더·병합 성분을 개수로만 설명한다(다른 문서의 셀 문자열은 오지 않는다).
     breakdown: {
-      sheet_names: { score: 1 },
-      headers: { score: 0.9 },
-      merges: { score: 0.8 },
+      sheet_names: { score: 1, shared: ["공정 기록", "공통 정보"] },
+      headers: { score: 0.9, shared_count: 5, target_count: 5, source_count: 6 },
+      merges: { score: 0.8, shared_count: 3, target_count: 3, source_count: 4 },
     },
     source_application_id: "app-src",
     source_document_id: "doc-src",
@@ -80,6 +81,7 @@ describe("같은 양식 문서군 제안", () => {
       screen.getAllByText(/main: 공정 기록 → 공정 기록/).length,
     ).toBeGreaterThan(0);
     expect(screen.getAllByText(/승인 규칙 1\/1/).length).toBe(2);
+    expect(screen.getAllByText(/헤더 90% \(공통 라벨 5개\)/).length).toBe(2);
     expect(screen.getByText(/이전 보고서.xlsx · v1/)).toBeTruthy();
   });
 

@@ -68,6 +68,11 @@ class Service:
             {"source_ref": version["source_ref"], "required": required},
             checkpoint,
         )
+        self.grant(version, principal, caps, required)
+        return version, caps
+
+    def grant(self, version, principal, caps, required="view"):
+        """제공자가 돌려준 권한을 기록하고 요구 수준을 검사한다. `describe`가 함께 돌려준 권한도 같은 검사를 거친다."""
         from .features import record_access
 
         record_access(self, version, principal, caps)
@@ -87,7 +92,7 @@ class Service:
             raise Problem(
                 "ACCESS_EXPIRED", "제공자의 접근 권한이 만료되었습니다.", 403
             ) from None
-        return version, caps
+        return caps
 
     def handle_job(self, kind, payload, principal, checkpoint):
         if kind == "register":
@@ -187,20 +192,24 @@ class Service:
         document_id=None,
         checkpoint=lambda **kw: None,
     ):
-        result = self._register_version(
+        result, metadata = self._register_version(
             source_ref, provider, principal, document_id, checkpoint
         )
         from .suggest import store_signature
 
         # 구조 서명은 등록 트랜잭션이 끝난 뒤 계산하며 실패해도 등록은 유지한다.
+        # describe가 함께 돌려준 권한/서명을 재사용해 Reader 프로세스를 다시 띄우지 않는다.
         try:
             result["signature"] = store_signature(
-                self, result["version_id"], principal, checkpoint
+                self, result["version_id"], principal, checkpoint, described=metadata
             )["status"]
         except Problem as exc:
             if exc.code == "CANCELLED":
                 raise
             result["signature"] = "failed:" + exc.code
+        except Exception:
+            # 제공자 응답 형식 오류 등 예상하지 못한 예외도 이미 커밋된 등록을 실패시키지 않는다.
+            result["signature"] = "failed:INTERNAL"
         return result
 
     def _register_version(
@@ -269,7 +278,7 @@ class Service:
                     "document_id": document_id,
                     "version_id": old["document_version_id"],
                     "unchanged": True,
-                }
+                }, metadata
             version_id = uid()
             source_artifact = uid()
             insert(
@@ -329,7 +338,7 @@ class Service:
             "version_id": version_id,
             "unchanged": False,
             "sheets": len(seen),
-        }
+        }, metadata
 
     def import_kg(self, definition, principal, connection=None):
         if (

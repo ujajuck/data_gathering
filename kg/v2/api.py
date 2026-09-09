@@ -1049,7 +1049,8 @@ def install(app: FastAPI, root, start_worker=True):
         limit: int = Query(10, ge=1, le=100),
         user=Depends(principal),
     ):
-        # 메타데이터와 캐시된 서명만 비교한다. 후보 원본은 열지 않는다.
+        # 대상 버전의 원본 권한을 확인한 뒤 메타데이터와 캐시된 서명만 비교한다. 후보 원본은 열지 않는다.
+        service.authorize(vid, user)
         return list_suggestions(service, vid, threshold, limit)
 
     @router.post("/versions/{vid}/signature")

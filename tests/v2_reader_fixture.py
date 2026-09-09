@@ -32,13 +32,14 @@ class Reader:
         }
 
     def describe(self, source_ref):
-        self.authorize(source_ref)
         return {
             "token": file_hash(self.root / "data/raw/protected.bin"),
             "filename": "보안문서.xlsx",
             "sheets": [
                 {"name": "Protected", "estimated_rows": 10, "estimated_cols": 10}
             ],
+            # 등록 경로가 별도 authorize 호출 없이 재사용하는 추출 권한. 서명 연산은 없으므로 viewport로 대체된다.
+            "capabilities": self.authorize(source_ref, "extract"),
         }
 
     def viewport(self, source_ref, expected_token, sheet, r1, c1, rows, cols):
@@ -98,7 +99,21 @@ class Reader:
         }
 
 
+class MalformedSignature(Reader):
+    """describe가 계약에 맞지 않는 서명을 돌려주는 제공자. 등록은 성공하고 서명만 실패해야 한다."""
+
+    def describe(self, source_ref):
+        result = super().describe(source_ref)
+        result["signature"] = {
+            "token": result["token"],
+            "sheets": [{"headers": "not-a-list", "merges": None}],
+        }
+        return result
+
+
 def factory(root, provider, principal):
+    if provider == "malformed-signature":
+        return MalformedSignature(root, provider, principal)
     if provider == "revocable-xlsx":
 
         class Revocable(XlsxReader):

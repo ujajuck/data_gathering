@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import io
 import os
+import re
 import zipfile
 from bisect import bisect_right
 from decimal import localcontext
@@ -141,10 +142,17 @@ class XlsxReader:
                 "excel_date_system": "1904" if wb.epoch.year == 1904 else "1900",
                 "byte_size": path.stat().st_size,
                 "sheets": sheets,
-                "capabilities": self.authorize(source_ref),
+                # 등록 경로가 별도 authorize 호출 없이 재사용할 수 있도록 추출 권한 기준으로 돌려준다.
+                "capabilities": self.authorize(source_ref, "extract"),
             }
         finally:
             wb.close()
+        # 구조 서명은 같은 호출 안에서 계산해 등록 시 Reader 프로세스를 한 번만 띄운다.
+        # 서명 계산 실패는 등록을 막지 않으므로 필드를 생략하고 서비스의 별도 호출에 맡긴다.
+        try:
+            result["signature"] = self._signature(path, token)
+        except Exception:
+            pass
         if file_hash(path) != token:
             raise Problem(
                 "SOURCE_VERSION_CHANGED", "읽는 동안 원본이 변경되었습니다.", 409
@@ -812,28 +820,33 @@ class XlsxReader:
                 "VIEWPORT_LIMIT", "서명 범위는 100행·30열 이내여야 합니다.", 413
             )
         path, token = self._check(source_ref, expected_token)
+        result = self._signature(path, token, rows, cols)
+        self._check(source_ref, token)
+        return result
+
+    @staticmethod
+    def _signature(path, token, rows=None, cols=None):
+        rows, cols = rows or SIGNATURE_ROWS, cols or SIGNATURE_COLS
         # read_only 워크시트는 병합 범위를 제공하지 않으므로 viewport와 같은 방식으로 연다.
         wb = load_workbook(path, data_only=True, keep_links=False)
         try:
             sheets = []
             for n, ws in enumerate(wb.worksheets[:SIGNATURE_SHEETS]):
-                terms = set()
-                for row in ws.iter_rows(
-                    min_row=1,
-                    max_row=min(rows, ws.max_row or 1),
-                    min_col=1,
-                    max_col=min(cols, ws.max_column or 1),
-                    values_only=True,
-                ):
-                    for value in row:
-                        term = header_term(value)
-                        if term:
-                            terms.add(term)
-                merges = sorted(
-                    str(m)
+                grid = [
+                    list(row)
+                    for row in ws.iter_rows(
+                        min_row=1,
+                        max_row=min(rows, ws.max_row or 1),
+                        min_col=1,
+                        max_col=min(cols, ws.max_column or 1),
+                        values_only=True,
+                    )
+                ]
+                merged = [
+                    m
                     for m in ws.merged_cells.ranges
                     if m.min_row <= rows and m.min_col <= cols
-                )[:SIGNATURE_TERMS]
+                ]
                 sheets.append(
                     {
                         "name": ws.title,
@@ -842,28 +855,114 @@ class XlsxReader:
                             ws.sheet_state, ws.sheet_state
                         ),
                         "dims": {"rows": ws.max_row, "cols": ws.max_column},
-                        "headers": sorted(terms)[:SIGNATURE_TERMS],
-                        "merges": merges,
+                        "headers": signature_terms(
+                            grid, {(m.min_row, m.min_col) for m in merged}
+                        ),
+                        "merges": sorted(str(m) for m in merged)[:SIGNATURE_TERMS],
                     }
                 )
         finally:
             wb.close()
-        self._check(source_ref, token)
         return {"token": token, "sheets": sheets}
 
 
 SIGNATURE_ROWS, SIGNATURE_COLS, SIGNATURE_SHEETS, SIGNATURE_TERMS = 30, 30, 64, 200
 
 
-def header_term(value):
-    """문자열 라벨의 정규형만 반환한다. 숫자·날짜·숫자 문자열은 데이터로 보고 제외한다."""
+# 서명 헤더는 라벨로 판정한 셀만 담는다. 같은 열에서 이 값보다 길게 이어지는 값 옆 문자열은 레코드 값으로 본다.
+SIGNATURE_COLUMN_RUN = 3
+# lot-001, no.12, id_2024 처럼 접두어 뒤에 숫자가 이어지는 식별자 모양 문자열.
+_ID_LIKE = re.compile(r"^[^\W\d_]{0,8}[-_./#:]?\d{2,}[^\W\d_]?$")
+
+
+def cell_kind(value):
+    """빈칸·숫자(숫자/날짜/숫자 문자열 등 문자열이 아닌 모든 값)·문자열을 구분한다. 숫자는 항상 데이터로 본다."""
+    if value is None:
+        return "empty"
     if not isinstance(value, str):
+        return "number"
+    if not value.strip():
+        return "empty"
+    try:
+        decimal(value.strip())
+    except Problem:
+        return "text"
+    return "number"
+
+
+def header_term(value):
+    """문자열 라벨의 정규형만 반환한다. 숫자·날짜·숫자 문자열과 식별자 모양 문자열은 데이터로 보고 제외한다."""
+    if cell_kind(value) != "text":
         return None
     term = norm(value)
     if not term or len(term) > 64:
         return None
-    try:
-        decimal(term)
-    except Problem:
-        return term
-    return None
+    compact = term.replace(" ", "")
+    digits = sum(ch.isdigit() for ch in compact)
+    if _ID_LIKE.match(compact) or digits * 2 > len(compact):
+        return None
+    return term
+
+
+def signature_terms(grid, anchors=()):
+    """창(grid)의 문자열 셀 중 라벨로 판정한 셀의 정규형을 정렬해 돌려준다.
+
+    라벨 판정(하나라도 해당): 빈 행 다음의 첫 행(블록 머리), 병합 범위의 왼쪽 위 셀, 오른쪽/아래 이웃이 숫자인 셀,
+    문자열만 있는 행(라벨 행)의 셀. 제외: 식별자·숫자 모양 문자열, 4행 이상 문자열만 이어지는 표의 둘째 행부터,
+    같은 열에서 SIGNATURE_COLUMN_RUN칸을 넘겨 연속되는 값 옆 문자열(이름·자유 텍스트 같은 레코드 값).
+    """
+    anchors = {(int(r), int(c)) for r, c in anchors}
+    height = len(grid)
+    width = max((len(row) for row in grid), default=0)
+    kinds = [
+        [cell_kind(row[c]) if c < len(row) else "empty" for c in range(width)]
+        for row in grid
+    ]
+
+    def kind(r, c):
+        return kinds[r][c] if 0 <= r < height and 0 <= c < width else "empty"
+
+    filled = [[k for k in row if k != "empty"] for row in kinds]
+    block_head = [
+        bool(filled[r]) and (r == 0 or not filled[r - 1]) for r in range(height)
+    ]
+    text_row = [
+        len(filled[r]) >= 2 and all(k == "text" for k in filled[r])
+        for r in range(height)
+    ]
+    label_row = [text_row[r] and _text_run_start(text_row, r) for r in range(height)]
+    strong, weak = set(), {}
+    for r in range(height):
+        for c in range(width):
+            if kinds[r][c] != "text" or header_term(grid[r][c]) is None:
+                continue
+            if block_head[r] or (r + 1, c + 1) in anchors or label_row[r]:
+                strong.add((r, c))
+            elif kind(r, c + 1) == "number" or kind(r + 1, c) == "number":
+                weak.setdefault(c, []).append(r)
+    chosen = set(strong)
+    for c, rows in weak.items():
+        # 같은 열에서 연속으로 이어지는 값 옆 문자열은 SIGNATURE_COLUMN_RUN칸까지만 라벨로 본다.
+        runs, current = [], []
+        for r in rows:
+            if current and r != current[-1] + 1:
+                runs.append(current)
+                current = []
+            current.append(r)
+        runs.append(current)
+        for group in runs:
+            if len(group) <= SIGNATURE_COLUMN_RUN:
+                chosen.update((r, c) for r in group)
+    terms = {header_term(grid[r][c]) for r, c in chosen}
+    return sorted(t for t in terms if t)[:SIGNATURE_TERMS]
+
+
+def _text_run_start(text_row, r):
+    # 문자열만 있는 행 묶음이 SIGNATURE_COLUMN_RUN행을 넘기면 첫 행만 라벨 행(표 머리)이고 나머지는 레코드다.
+    start = r
+    while start > 0 and text_row[start - 1]:
+        start -= 1
+    end = r
+    while end + 1 < len(text_row) and text_row[end + 1]:
+        end += 1
+    return end - start + 1 <= SIGNATURE_COLUMN_RUN or r == start
