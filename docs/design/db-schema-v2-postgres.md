@@ -14,7 +14,7 @@
 ## A. PostgreSQL DDL (`db/v2/schema_postgres.sql`)
 
 `schema_sqlite.sql`과 테이블 32개, 트리거 72개, 인덱스 14개(+런타임 인덱스 5개), 뷰 1개가 이름 단위로 1:1이다.
-`kg/v2/db.py`가 런타임에 만드는 SQLite 전용 `runtime_job` 테이블과 §10의 AGE projection/outbox 테이블은 포함하지 않는다.
+`kg/v2/db.py`가 런타임에 만드는 SQLite 전용 `runtime_job`(작업 큐)·`version_signature`(문서군 제안용 파생 캐시, 재계산 가능) 테이블과 §10의 AGE projection/outbox 테이블은 포함하지 않는다. PostgreSQL로 옮길 때 이 둘은 서비스 마이그레이션에서 같은 컬럼으로 만든다.
 
 ### 타입 변환
 

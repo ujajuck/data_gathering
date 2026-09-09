@@ -99,7 +99,7 @@ v1 ID와 새 v2 ID의 대응은 `artifact` 행(`kind='manifest'`, `policy_ref='v
 | `kg/v2/suggest.py` | 문서 버전 구조 서명 캐시, 같은 양식 문서군 점수, 시트 역할 매칭, 검수 대기 레시피 이식, `sign` CLI 백필 |
 | `frontend/src/v2/` | 다섯 화면, 원본 범위 선택, 검수, 작업 표시, 결과와 원본 간 이동 |
 
-`db/v2/schema_sqlite.sql`의 32개 테이블에 런타임 작업 상태용 `runtime_job`이 추가된다.
+`db/v2/schema_sqlite.sql`의 32개 테이블에 런타임 작업 상태용 `runtime_job`과 문서군 제안용 파생 캐시 `version_signature`가 `CREATE TABLE IF NOT EXISTS`로 추가된다.
 버전 원본의 주소는 `document_version.source_artifact_id → artifact.storage_ref`에 고정하며,
 바이트 복사본은 만들지 않는다. 원본 위치가 변경되면 기존 버전의 참조는 보존된다.
 기본 XLSX Reader는 과거 바이트가 원래 위치에 없거나 변경되었으면 옛 버전의 렌더/재추출을 거부한다.

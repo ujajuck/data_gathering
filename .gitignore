@@ -39,3 +39,7 @@ data/kg/
 data/v2-builds/
 *.sqlite-wal
 *.sqlite-shm
+# python -m kg.v2 export / age-projection 기본 출력 경로와 사용자 DB 파일 (dvc add 전에는 git에 두지 않는다)
+exports/
+age/
+*.sqlite

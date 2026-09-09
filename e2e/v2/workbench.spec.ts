@@ -192,3 +192,44 @@ test("문서 → 검수 → 오버레이 → 추출 → DB·다운로드 → 원
   });
   expect(failures).toEqual([]);
 });
+
+test("개념 그래프 · 문서군 제안 · 재크롤링 화면", async ({ page }) => {
+  const failures: string[] = [];
+  page.on("pageerror", (error) => failures.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error" && !message.text().includes("favicon"))
+      failures.push(message.text());
+  });
+  await page.goto("/");
+  // 개념 탐색: 커버리지 그래프 카드가 v1처럼 그려지고, L1만 있는 KG도 hull로 보인다.
+  await page.getByRole("button", { name: "2. 개념 탐색" }).click();
+  const graph = page.getByLabel("전체 개념 트리와 문서군 커버리지");
+  await expect(graph).toBeVisible();
+  await expect(graph.locator(".hull")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: /^문서군 공정온도/ })).toBeVisible();
+  await page.getByRole("button", { name: "그래프 확대" }).click();
+  await expect(page.getByRole("button", { name: "원래 크기로" })).toHaveText("125%");
+  await page.getByRole("button", { name: "목록", exact: true }).click();
+  await expect(graph).toHaveCount(0);
+
+  // 파일 분석: 문서 하나뿐이라 같은 양식 제안은 빈 상태를 보여준다.
+  await page.getByRole("button", { name: "1. 파일 분석" }).click();
+  const documents = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "등록 문서", exact: true }),
+  });
+  await documents.getByRole("button", { name: /공정운전_샘플.xlsx/ }).click();
+  await expect(page.locator(".v2-suggestions")).toBeVisible();
+  await expect(page.locator(".v2-suggestions")).toContainText(/양식/);
+  await expect(
+    page.getByRole("button", { name: /선택한 문서군으로 등록/ }),
+  ).toBeDisabled();
+
+  // 템플릿 관리: 재크롤링은 검수 미완/발행됨 건을 건너뛴 결과를 보여준다.
+  await page.getByRole("button", { name: "5. 템플릿 관리" }).click();
+  await page.getByRole("button", { name: /공정 운전 기록/ }).first().click();
+  const recrawl = page.locator(".v2-recrawl");
+  await expect(recrawl).toBeVisible();
+  await recrawl.getByRole("button", { name: "실행", exact: true }).click();
+  await expect(recrawl.getByRole("status")).toContainText(/대기열 \d+건 · 건너뜀 \d+건/);
+  expect(failures).toEqual([]);
+});

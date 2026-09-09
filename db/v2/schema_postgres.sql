@@ -5,7 +5,7 @@
 --   concept_id/rule_key/field_key 같은 논리 키와 모든 sha256/참조 문자열은 TEXT를 유지한다.
 --   제공자가 보고한 naive ISO(document_version.authored_at/source_modified_at)는 시간대를 추정하지 않기 위해 TEXT를 유지한다(§5).
 --   extracted_item.value_text는 value_type별 다형 컬럼이므로 TEXT를 유지하고 NUMERIC 파생 컬럼 value_numeric을 둔다.
--- 포함하지 않는 것: kg/v2/db.py가 런타임에 만드는 SQLite 전용 runtime_job 테이블, AGE projection/outbox 테이블(§10: 실제 확장 시 추가).
+-- 포함하지 않는 것: kg/v2/db.py가 런타임에 만드는 SQLite 전용 runtime_job(작업 큐)·version_signature(문서군 제안용 파생 캐시, 재계산 가능) 테이블, AGE projection/outbox 테이블(§10: 실제 확장 시 추가).
 -- 검증 범위: pglast 구문 검증(tests/test_schema_postgres.py)만 수행했다. 실제 PostgreSQL 서버에서 실행 검증하지 않았다.
 -- JSONB는 키 순서/공백을 정규화한다. definition_sha256/spec_sha256/content_sha256은 항상 애플리케이션의 dump()(kg/v2/db.py)
 -- 결과로 계산하며 JSONB 텍스트에서 재계산하지 않는다.
