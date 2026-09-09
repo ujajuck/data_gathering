@@ -11,7 +11,10 @@ test("문서 → 검수 → 오버레이 → 추출 → DB·다운로드 → 원
     if (message.type() === "error" && !message.text().includes("favicon"))
       failures.push(message.text());
   });
-  await page.goto("/");
+  // 별도 그래프 시나리오가 KG를 발행해도 이 흐름은 최초 샘플의 KG에 고정한다.
+  const kgResponse = await page.request.get("/api/v2/kg/revisions");
+  const originalKG = (await kgResponse.json()).items[0].kg_revision_id;
+  await page.goto(`/?kg=${originalKG}`);
   await expect(page).toHaveTitle("Semantic Excel Integration");
   const nav = page.getByRole("navigation", { name: "작업 단계" });
   await expect(nav.getByRole("button")).toHaveText([
@@ -124,6 +127,24 @@ test("문서 → 검수 → 오버레이 → 추출 → DB·다운로드 → 원
   await expect(
     extracted.getByRole("button", { name: /record_key/ }),
   ).toHaveCount(1);
+
+  await nav.getByRole("button", { name: "2. 개념 탐색" }).click();
+  const graph = page.getByRole("region", { name: "KG 커버리지 그래프" });
+  const covered = graph.getByRole("button", {
+    name: /공정온도 · 승인 1 · 검수 0 · 반려 0 · 발행 시리즈 1/,
+  });
+  await expect(covered).toBeVisible();
+  await covered.focus();
+  await covered.press("Enter");
+  const conceptDetail = page.getByRole("region", { name: "선택 개념 상세" });
+  await expect(
+    conceptDetail.getByRole("heading", { name: "공정온도", exact: true }),
+  ).toBeVisible();
+  await conceptDetail.getByRole("button", { name: /검수 →/ }).click();
+  await expect(page).toHaveURL(/tab=source/);
+  await expect(page.locator(".v2-inspector .v2-badge").first()).toHaveText(
+    "r2",
+  );
 
   await nav.getByRole("button", { name: "4. 통합 DB" }).click();
   await page

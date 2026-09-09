@@ -1060,3 +1060,204 @@ def test_count_deduplicates_and_uses_no_measurement_unit(setup):
     assert build["state"] == "succeeded", build
     rows = s["api"]("GET", "/builds/" + build["result"]["build_id"] + "/rows")
     assert rows["items"][0]["개수"] == "3" and rows["fields"][0]["unit"] is None
+
+
+def test_graph_is_bounded_and_cursor_scoped_with_cycles_and_many_parents(
+    setup, monkeypatch
+):
+    s = setup
+    # 다부모, 기타 관계 순환, 조밀한 엣지를 포함해 단순 트리 가정을 깨뜨린다.
+    children = [f"n{i:02}" for i in range(35)]
+    definition = {
+        "concepts": [
+            {"concept_id": "root", "name": "공정", "level": 1},
+            {"concept_id": "parent", "name": "상위", "level": 1},
+        ]
+        + [
+            {
+                "concept_id": cid,
+                "name": cid,
+                "level": 2,
+                "aliases": ["찾는 별칭"] if cid == "n34" else [],
+            }
+            for cid in children
+        ],
+        "relations": [["root", cid, "parent_of"] for cid in children]
+        + [
+            ["parent", "root", "related"],
+            ["parent", "n00", "parent_of"],
+            ["n00", "root", "related"],
+        ]
+        + [[a, b, "related"] for a in children for b in children if a != b],
+    }
+    kg = s["api"]("POST", "/kg/import", definition)["kg_revision_id"]
+
+    def no_source(*args, **kwargs):
+        pytest.fail("KG 탐색은 원본을 열면 안 됩니다")
+
+    monkeypatch.setattr(s["service"], "read", no_source)
+    url = f"/kg/{kg}/graph?focus_id=root"
+    first = s["api"]("GET", url)
+    assert len(first["items"]) == 30 and first["has_more"]
+    assert first["focus"]["concept_id"] == "root"
+    assert len(first["edges"]) == 120 and first["edges_truncated"]
+    assert any(e["from_concept_id"] == "root" for e in first["edges"])
+    assert any(e["to_concept_id"] == "root" for e in first["edges"])
+    assert all(n["coverage"] is None for n in first["items"])
+    visible = {n["concept_id"] for n in first["items"]} | {"root"}
+    assert all(
+        e["from_concept_id"] in visible and e["to_concept_id"] in visible
+        for e in first["edges"]
+    )
+    last = s["api"]("GET", url + "&cursor=" + first["next_cursor"])
+    assert len(last["items"]) == 6 and not last["has_more"]
+    assert {n["concept_id"] for n in first["items"] + last["items"]} == set(
+        children
+    ) | {"parent"}
+    assert (
+        s["api"]("GET", url + "&q=변경&cursor=" + first["next_cursor"], code=422)[
+            "error"
+        ]["code"]
+        == "INVALID_CURSOR"
+    )
+    assert (
+        s["api"]("GET", f"/kg/{kg}/graph?limit=31", code=422)["error"]["code"]
+        == "VALIDATION_ERROR"
+    )
+    assert (
+        s["api"]("GET", f"/kg/{kg}/graph?focus_id=missing", code=404)["error"]["code"]
+        == "NOT_FOUND"
+    )
+    found = s["api"]("GET", f"/kg/{kg}/graph?q=찾는 별칭")
+    assert [n["concept_id"] for n in found["items"]] == ["n34"]
+    # 다른 페이지의 개념도 선택/편집에 필요한 원문 정의를 개별 조회한다.
+    assert s["api"]("GET", f"/kg/{kg}/concepts/n34")["name"] == "n34"
+
+
+def test_graph_coverage_tracks_latest_reviews_and_selected_document_version(setup):
+    s = setup
+    kg, version = s["kg"]["kg_revision_id"], s["doc"]["version_id"]
+    url = f"/kg/{kg}/graph?document_version_id={version}"
+
+    def coverage():
+        return next(
+            n["coverage"]
+            for n in s["api"]("GET", url)["items"]
+            if n["concept_id"] == "temperature"
+        )
+
+    assert coverage() == {
+        "proposed": 0,
+        "approved": 1,
+        "rejected": 0,
+        "published_series": 0,
+    }
+    extracted(s)
+    extracted(s)
+    # 재추출과 리스트 항목 3개를 승인 규칙 수 또는 발행 시리즈 수로 중복 계산하지 않는다.
+    assert coverage()["published_series"] == 1
+    second = s["api"](
+        "POST", "/templates", {"name": "다른 목적", "definition": s["definition"]}
+    )
+    s["api"](
+        "POST",
+        "/applications",
+        {
+            "version_id": version,
+            "template_version_id": second["template_version_id"],
+            "bindings": {
+                "main": [s["sheets"][0]["sheet_id"]],
+                "units": [s["sheets"][1]["sheet_id"]],
+            },
+            "approved": False,
+        },
+    )
+    assert coverage() == {
+        "proposed": 1,
+        "approved": 1,
+        "rejected": 0,
+        "published_series": 1,
+    }
+    mappings_url = (
+        f"/kg/{kg}/concepts/temperature/mappings?document_version_id={version}"
+    )
+    first = s["api"]("GET", mappings_url + "&limit=1")
+    assert first["has_more"]
+    mappings = (
+        first["items"]
+        + s["api"]("GET", mappings_url + "&limit=1&cursor=" + first["next_cursor"])[
+            "items"
+        ]
+    )
+    assert {m["status"] for m in mappings} == {"approved", "proposed"}
+    assert all(
+        m["document_id"] == s["doc"]["document_id"] and m["sheet_id"] for m in mappings
+    )
+
+    # 원본의 새 버전을 등록해도 과거 버전을 명시한 그래프/출처는 그 버전에 고정된다.
+    wb = load_workbook(s["path"])
+    wb.active["J1"] = "새 버전"
+    wb.save(s["path"])
+    registered = s["work"]("/documents/register", {"source_refs": [s["path"].name]})
+    newer = registered["result"]["documents"][0]["version_id"]
+    assert newer != version
+    assert not s["api"]("GET", url)["coverage_version"]["is_current"]
+    series_url = f"/series?kg_revision_id={kg}&concept_id=temperature"
+    assert s["api"]("GET", series_url)["items"] == []
+    assert (
+        len(s["api"]("GET", series_url + f"&document_version_id={version}")["items"])
+        == 1
+    )
+    assert all(
+        not any(n["coverage"].values())
+        for n in s["api"]("GET", url.replace(version, newer))["items"]
+    )
+
+    aid = s["application"]["application_id"]
+    current = s["api"]("GET", f"/applications/{aid}/mappings")["items"][0]
+    current = s["api"]("GET", "/mappings/" + current["mapping_revision_id"])
+    s["api"](
+        "POST",
+        f"/applications/{aid}/mappings/{current['mapping_revision_id']}/revisions",
+        {
+            "expected_seq": current["edit_seq"],
+            "effective_spec": current["effective_spec"],
+            "concept_id": "temperature",
+            "status": "rejected",
+            "reason": "검수 재확인",
+        },
+    )
+    assert coverage() == {
+        "proposed": 1,
+        "approved": 0,
+        "rejected": 1,
+        "published_series": 0,
+    }
+
+
+def test_graph_coverage_rechecks_permission_without_reading_cells(setup, monkeypatch):
+    from kg.v2.db import now
+
+    s = setup
+    calls = []
+    original = s["service"].read
+
+    def read(provider, principal, operation, payload, *args):
+        calls.append(operation)
+        assert operation == "authorize"
+        return original(provider, principal, operation, payload, *args)
+
+    monkeypatch.setattr(s["service"], "read", read)
+    kg, version = s["kg"]["kg_revision_id"], s["doc"]["version_id"]
+    s["api"]("GET", f"/kg/{kg}/graph?document_version_id={version}")
+    assert calls == ["authorize"]
+    monkeypatch.setattr(
+        s["service"], "read", lambda *a: {"can_view": False, "expires_at": now()}
+    )
+    for url in (
+        f"/kg/{kg}/graph",
+        f"/kg/{kg}/concepts/temperature/mappings",
+        "/series?concept_id=temperature",
+    ):
+        url += ("&" if "?" in url else "?") + "document_version_id=" + version
+        assert s["api"]("GET", url, code=403)["error"]["code"] == "ACCESS_DENIED"

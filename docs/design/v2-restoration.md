@@ -87,6 +87,9 @@ python -m kg.v2.reader_probe --ws <workspace> --provider protected-reader \
 `extraction_verified: false`를 명시한다. 실제 추출 정확도와 원본 충실도는 제공자 SDK·승인된
 DRM 샘플로 별도 검증해야 한다. 현재 미설정 환경의 실행 결과는 `DRM_READER_REQUIRED`다.
 
-v1 데이터 자동 마이그레이션, PostgreSQL+AGE, DVC 자동 연동, KG 그래프 캔버스,
+후속 `codex/v2-kg-coverage`에서 [문서 버전별 KG 커버리지 캔버스](v2-kg-coverage.md)를 추가했다.
+문서군 hull과 실제 DRM 연동은 별도 범위다.
+
+v1 데이터 자동 마이그레이션, PostgreSQL+AGE, DVC 자동 연동,
 겹친 템플릿 동시 overlay, 문서군 자동 제안/레시피 이식, 재크롤링 정책, watch 자동 등록은 후속 범위다.
 기존 기능 목록과 동등하다고 주장하지 않으며, 각각 v2 버전·권한·재검수 정책에 맞춰 설계한다.

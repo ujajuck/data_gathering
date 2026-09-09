@@ -21,6 +21,7 @@ import Database from "./Database";
 import { ReviewQueue } from "./Review";
 import { TemplatePresets } from "./Presets";
 import ConceptEditor from "./ConceptEditor";
+import KnowledgeGraph, { coverageVersion } from "./KnowledgeGraph";
 import "./workbench.css";
 import "../product.css";
 import { PRODUCT_NAME, PRODUCT_DESCRIPTION, PRODUCT_STEPS } from "../product";
@@ -668,8 +669,22 @@ export function Knowledge() {
   const kg = route.kg || revisions.data?.items.at(-1)?.kg_revision_id || "";
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
+  const graphView = route.kg_view !== "list";
+  const coverage = coverageVersion(route);
   const concepts = usePage(
-    kg ? "/kg/" + kg + "/concepts?q=" + encodeURIComponent(search) : null,
+    kg && !graphView
+      ? "/kg/" + kg + "/concepts?q=" + encodeURIComponent(search)
+      : null,
+  );
+  const selected = useData(
+    kg && route.concept
+      ? `/kg/${kg}/concepts/${encodeURIComponent(route.concept)}`
+      : null,
+  );
+  const mappings = usePage(
+    kg && route.concept && coverage
+      ? `/kg/${kg}/concepts/${encodeURIComponent(route.concept)}/mappings?document_version_id=${encodeURIComponent(coverage)}&r=${refresh}`
+      : null,
   );
   const [definition, setDefinition] = useState(
     '{\n  "concepts": [\n    {"concept_id": "process_temperature", "name": "공정온도", "level": 1, "aliases": ["공정 온도", "Process Temp"], "canonical_unit": "°C"}\n  ],\n  "relations": []\n}',
@@ -690,7 +705,12 @@ export function Knowledge() {
       ? "/series?kg_revision_id=" +
           kg +
           "&concept_id=" +
-          encodeURIComponent(route.concept)
+          encodeURIComponent(route.concept) +
+          (coverage
+            ? "&document_version_id=" + encodeURIComponent(coverage)
+            : "") +
+          "&r=" +
+          refresh
       : null,
   );
   async function save(current = false) {
@@ -702,7 +722,7 @@ export function Knowledge() {
         current ? {} : JSON.parse(definition),
       );
       changed();
-      go({ kg: r.kg_revision_id, concept: "" });
+      go({ kg: r.kg_revision_id, concept: "", graph_focus: "" });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -716,19 +736,21 @@ export function Knowledge() {
         title="표현은 달라도, 의미는 하나로"
         description="사람이 정의한 도메인 KG를 버전으로 관리합니다. 같은 동의어가 여러 개념에 속하면 검수자가 문맥을 보고 연결합니다."
       />
-      <div className="v2-grid two">
+      <div className="v2-grid v2-knowledge">
         <section className="v2-card">
           <h2>도메인 개념</h2>
           <label>
             KG 버전
             <select
               value={kg}
-              onChange={(e) => go({ kg: e.target.value, concept: "" })}
+              onChange={(e) =>
+                go({ kg: e.target.value, concept: "", graph_focus: "" })
+              }
             >
               <option value="">KG 선택</option>
               {revisions.data?.items.map((k) => (
                 <option key={k.kg_revision_id} value={k.kg_revision_id}>
-                  v{k.revision_no} · {k.created_at.slice(0, 10)}
+                  v{k.revision_no} · {k.created_at?.slice(0, 10)}
                 </option>
               ))}
             </select>
@@ -749,39 +771,105 @@ export function Knowledge() {
             />
             <button>검색</button>
           </form>
-          <State resource={concepts} />
-          <div className="v2-list">
-            {concepts.data?.items.map((c) => (
-              <button
-                key={c.concept_id}
-                className={
-                  "v2-list-item " +
-                  (route.concept === c.concept_id ? "selected" : "")
-                }
-                onClick={() => go({ kg, concept: c.concept_id })}
-              >
-                <span className="v2-level">L{c.level}</span>
-                <span>
-                  <strong>{c.name}</strong>
-                  <small>
-                    {c.definition} · {c.canonical_unit || "단위 없음"}
-                  </small>
-                </span>
-              </button>
-            ))}
+          <div className="v2-inline" role="group" aria-label="개념 보기 방식">
+            <button
+              aria-pressed={graphView}
+              onClick={() => go({ kg_view: "graph" })}
+            >
+              그래프
+            </button>
+            <button
+              aria-pressed={!graphView}
+              onClick={() => go({ kg_view: "list" })}
+            >
+              목록
+            </button>
           </div>
-          <Pager page={concepts} />
+          {graphView ? (
+            <KnowledgeGraph kg={kg} query={search} />
+          ) : (
+            <>
+              <State resource={concepts} />
+              <div className="v2-list">
+                {concepts.data?.items.map((c) => (
+                  <button
+                    key={c.concept_id}
+                    className={
+                      "v2-list-item " +
+                      (route.concept === c.concept_id ? "selected" : "")
+                    }
+                    onClick={() => go({ kg, concept: c.concept_id })}
+                  >
+                    <span className="v2-level">L{c.level}</span>
+                    <span>
+                      <strong>{c.name}</strong>
+                      <small>
+                        {c.definition} · {c.canonical_unit || "단위 없음"}
+                      </small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <Pager page={concepts} />
+            </>
+          )}
         </section>
-        <section className="v2-card">
-          <h2>{route.concept || "개념을 선택하세요"}</h2>
-          {concepts.data?.items.find((c) => c.concept_id === route.concept) && (
+        <section className="v2-card" aria-label="선택 개념 상세">
+          <h2>{selected.data?.name || route.concept || "개념을 선택하세요"}</h2>
+          <State resource={selected} />
+          {selected.data && (
             <ConceptEditor
               key={kg + route.concept}
               kg={kg}
-              concept={concepts.data.items.find(
-                (c) => c.concept_id === route.concept,
-              )!}
+              concept={selected.data}
             />
+          )}
+          {coverage && route.concept && (
+            <>
+              <h3>선택 문서의 검수 규칙</h3>
+              <State
+                resource={mappings}
+                empty="선택한 KG·문서 버전에 연결된 규칙이 없습니다."
+              />
+              {mappings.data?.items.map((m) => (
+                <button
+                  key={m.mapping_revision_id}
+                  className="v2-list-item"
+                  onClick={() =>
+                    go({
+                      tab: "source",
+                      document: m.document_id,
+                      version: m.document_version_id,
+                      application: m.application_id,
+                      mapping: m.mapping_revision_id,
+                      sheet: m.sheet_id || "",
+                      series: "",
+                      item: "",
+                      row: "1",
+                      col: "1",
+                    })
+                  }
+                >
+                  <span>
+                    <strong>
+                      {m.template_name} · {m.rule_key}
+                    </strong>
+                    <small>
+                      r{m.revision_no} ·{" "}
+                      {
+                        {
+                          approved: "승인",
+                          proposed: "검수 대기",
+                          rejected: "반려",
+                        }[m.status as string]
+                      }
+                    </small>
+                  </span>
+                  <span>검수 →</span>
+                </button>
+              ))}
+              <Pager page={mappings} />
+            </>
           )}
           <h3>연결 관계</h3>
           <State resource={relations} empty="등록된 관계가 없습니다." />
@@ -803,7 +891,7 @@ export function Knowledge() {
             </button>
           ))}
           {route.concept && <Pager page={relations} />}
-          <h3>현재 추출 출처</h3>
+          <h3>{coverage ? "선택 문서의 발행 출처" : "현재 추출 출처"}</h3>
           <State
             resource={sources}
             empty="이 개념으로 발행된 현재 추출이 없습니다."
@@ -815,6 +903,7 @@ export function Knowledge() {
               onClick={() =>
                 go({
                   tab: "source",
+                  document: s.document_id,
                   version: s.document_version_id,
                   application: s.application_id,
                   mapping: s.mapping_revision_id,
