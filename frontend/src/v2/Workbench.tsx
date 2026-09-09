@@ -21,6 +21,8 @@ import Database from "./Database";
 import { ReviewQueue } from "./Review";
 import { TemplatePresets } from "./Presets";
 import ConceptEditor from "./ConceptEditor";
+import DomainGraph from "./DomainGraph";
+import type { Graph, GraphNode } from "./DomainGraph";
 import "./workbench.css";
 import "../product.css";
 import { PRODUCT_NAME, PRODUCT_DESCRIPTION, PRODUCT_STEPS } from "../product";
@@ -693,6 +695,38 @@ export function Knowledge() {
           encodeURIComponent(route.concept)
       : null,
   );
+  const graph = useData(kg ? "/kg/" + kg + "/graph" : null);
+  const [view, setView] = useState<"graph" | "list">("graph");
+  const [zoom, setZoom] = useState(1);
+  const rootFilter = route.root || "";
+  const selectedOnPage = concepts.data?.items.find(
+    (c) => c.concept_id === route.concept,
+  );
+  // 그래프에서 고른 개념이 현재 목록 페이지에 없으면 편집기를 위해 한 번만 보조 조회한다.
+  const lookup = useData(
+    kg && route.concept && concepts.data && !selectedOnPage
+      ? "/kg/" + kg + "/concepts?q=" + encodeURIComponent(route.concept)
+      : null,
+  );
+  const selected =
+    selectedOnPage ||
+    lookup.data?.items?.find((c: Row) => c.concept_id === route.concept);
+  const graphData = graph.data as Graph | null;
+  const rootName =
+    graphData?.groups.find((g) => g.root_concept_id === rootFilter)?.name ||
+    rootFilter;
+  const filtered: GraphNode[] | null =
+    rootFilter && graphData
+      ? graphData.nodes
+          .filter(
+            (n) =>
+              n.root === rootFilter &&
+              (!search ||
+                n.name.includes(search) ||
+                n.concept_id.includes(search)),
+          )
+          .sort((a, b) => a.level - b.level || a.name.localeCompare(b.name))
+      : null;
   async function save(current = false) {
     setBusy(true);
     setError("");
@@ -702,7 +736,7 @@ export function Knowledge() {
         current ? {} : JSON.parse(definition),
       );
       changed();
-      go({ kg: r.kg_revision_id, concept: "" });
+      go({ kg: r.kg_revision_id, concept: "", root: "" });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -716,14 +750,36 @@ export function Knowledge() {
         title="표현은 달라도, 의미는 하나로"
         description="사람이 정의한 도메인 KG를 버전으로 관리합니다. 같은 동의어가 여러 개념에 속하면 검수자가 문맥을 보고 연결합니다."
       />
-      <div className="v2-grid two">
-        <section className="v2-card">
-          <h2>도메인 개념</h2>
+      <div
+        className={
+          "v2-grid " + (view === "graph" ? "three v2-kg-layout" : "two")
+        }
+      >
+        <section className="v2-card" aria-label="도메인 개념">
+          <div className="v2-card-head">
+            <h2>도메인 개념</h2>
+            <div className="v2-segment" role="group" aria-label="보기 전환">
+              <button
+                aria-pressed={view === "graph"}
+                onClick={() => setView("graph")}
+              >
+                그래프
+              </button>
+              <button
+                aria-pressed={view === "list"}
+                onClick={() => setView("list")}
+              >
+                목록
+              </button>
+            </div>
+          </div>
           <label>
             KG 버전
             <select
               value={kg}
-              onChange={(e) => go({ kg: e.target.value, concept: "" })}
+              onChange={(e) =>
+                go({ kg: e.target.value, concept: "", root: "" })
+              }
             >
               <option value="">KG 선택</option>
               {revisions.data?.items.map((k) => (
@@ -749,38 +805,133 @@ export function Knowledge() {
             />
             <button>검색</button>
           </form>
-          <State resource={concepts} />
-          <div className="v2-list">
-            {concepts.data?.items.map((c) => (
-              <button
-                key={c.concept_id}
-                className={
-                  "v2-list-item " +
-                  (route.concept === c.concept_id ? "selected" : "")
-                }
-                onClick={() => go({ kg, concept: c.concept_id })}
-              >
-                <span className="v2-level">L{c.level}</span>
-                <span>
-                  <strong>{c.name}</strong>
-                  <small>
-                    {c.definition} · {c.canonical_unit || "단위 없음"}
-                  </small>
-                </span>
-              </button>
-            ))}
-          </div>
-          <Pager page={concepts} />
+          {filtered ? (
+            <>
+              <p className="v2-chips">
+                <span className="v2-chip">문서군 필터: {rootName}</span>
+                <button className="v2-link" onClick={() => go({ root: "" })}>
+                  필터 해제
+                </button>
+              </p>
+              {filtered.length === 0 && (
+                <p className="v2-empty">이 문서군에 해당하는 개념이 없습니다.</p>
+              )}
+              <div className="v2-list">
+                {filtered.map((c) => (
+                  <button
+                    key={c.concept_id}
+                    className={
+                      "v2-list-item " +
+                      (route.concept === c.concept_id ? "selected" : "")
+                    }
+                    onClick={() => go({ kg, concept: c.concept_id })}
+                  >
+                    <span className="v2-level">L{c.level}</span>
+                    <span>
+                      <strong>{c.name}</strong>
+                      <small>
+                        {c.sources ? `현재 출처 ${c.sources}` : "미연결"}
+                      </small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <State resource={concepts} />
+              <div className="v2-list">
+                {concepts.data?.items.map((c) => (
+                  <button
+                    key={c.concept_id}
+                    className={
+                      "v2-list-item " +
+                      (route.concept === c.concept_id ? "selected" : "")
+                    }
+                    onClick={() => go({ kg, concept: c.concept_id })}
+                  >
+                    <span className="v2-level">L{c.level}</span>
+                    <span>
+                      <strong>{c.name}</strong>
+                      <small>
+                        {c.definition} · {c.canonical_unit || "단위 없음"}
+                      </small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <Pager page={concepts} />
+            </>
+          )}
         </section>
+        {view === "graph" && (
+          <section className="v2-card v2-graph-card" aria-label="개념 그래프">
+            <div className="v2-card-head">
+              <div>
+                <h2>전체 개념 · 문서군 Coverage</h2>
+                <p className="v2-muted">
+                  반투명 영역은 각 문서군(L1)이 어떤 개념을 덮는지, 숫자는 현재
+                  문서 버전에서 발행된 추출 출처 수입니다.
+                </p>
+              </div>
+              <div className="v2-inline">
+                <button
+                  aria-label="그래프 축소"
+                  onClick={() =>
+                    setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 4) / 4))
+                  }
+                >
+                  −
+                </button>
+                <button aria-label="원래 크기로" onClick={() => setZoom(1)}>
+                  {Math.round(zoom * 100)}%
+                </button>
+                <button
+                  aria-label="그래프 확대"
+                  onClick={() =>
+                    setZoom((z) => Math.min(2.5, Math.round((z + 0.25) * 4) / 4))
+                  }
+                >
+                  ＋
+                </button>
+              </div>
+            </div>
+            <State
+              resource={{
+                ...graph,
+                data: graphData && { items: graphData.nodes },
+              }}
+              empty="이 KG 버전에 표시할 개념이 없습니다."
+            />
+            {graphData?.truncated && (
+              <p className="v2-note">
+                개념이 {(graphData.node_cap || 2000).toLocaleString()}개를 넘어
+                일부만 표시합니다. 나머지는 왼쪽 검색으로 찾으세요.
+              </p>
+            )}
+            {graphData && graphData.nodes.length > 0 && (
+              <div className="v2-graph-wrap">
+                <DomainGraph
+                  graph={graphData}
+                  selectedRoot={rootFilter}
+                  selectedConcept={route.concept || ""}
+                  zoom={zoom}
+                  onSelectNode={(id) => go({ kg, concept: id })}
+                  onSelectRoot={(id) =>
+                    go({ root: rootFilter === id ? "" : id })
+                  }
+                />
+              </div>
+            )}
+          </section>
+        )}
         <section className="v2-card">
           <h2>{route.concept || "개념을 선택하세요"}</h2>
-          {concepts.data?.items.find((c) => c.concept_id === route.concept) && (
+          {selected && (
             <ConceptEditor
               key={kg + route.concept}
               kg={kg}
-              concept={concepts.data.items.find(
-                (c) => c.concept_id === route.concept,
-              )!}
+              concept={selected}
             />
           )}
           <h3>연결 관계</h3>

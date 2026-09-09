@@ -198,7 +198,7 @@ FastAPI `/docs`가 요청 파라미터의 기준이다. POST 작업은 `request_
 | 원본 등록/버전 | `POST /documents/register`, `GET /documents`, `/documents/{id}/versions`, `/versions/{id}/sheets` |
 | 권한/표시 | `GET /versions/{id}/access`, `POST /viewports` |
 | 작업 | `GET /jobs/{id}`, `POST /jobs/{id}/cancel` |
-| KG | `POST /kg/import`, `/kg/import-current`, `GET /kg/revisions`, `/kg/{id}/concepts`, `/kg/{id}/aliases` |
+| KG | `POST /kg/import`, `/kg/import-current`, `GET /kg/revisions`, `/kg/{id}/concepts`, `/kg/{id}/aliases`, `GET /kg/{id}/graph`(개념 트리 + 현재 문서 버전·발행 실행 기준 출처 수, 최대 2000 노드 초과 시 `truncated`) |
 | 템플릿 | `POST /templates`, `GET /templates`, `/templates/{id}/versions`, `/template-versions/{id}` |
 | 배정/검수 | `POST /applications`, `GET /applications?version_id=…`, `/applications/{id}/mappings`, `/mappings/{id}` |
 | 수정 | `POST /applications/{id}/mappings/{id}/revisions` (`expected_seq`, `effective_spec`, `concept_id`, `status`) |
