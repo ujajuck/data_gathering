@@ -29,7 +29,7 @@ test("문서 → 검수 → 오버레이 → 추출 → DB·다운로드 → 원
     has: page.getByRole("heading", { name: "등록 문서", exact: true }),
   });
   await page.getByText("문서 필터 · 정렬", { exact: true }).click();
-  await page.getByLabel("추출 상태", { exact: true }).selectOption("review");
+  await page.getByLabel("추출 상태").selectOption("review");
   await expect(
     documents.getByRole("button", { name: /공정운전_샘플.xlsx/ }),
   ).toBeVisible();
