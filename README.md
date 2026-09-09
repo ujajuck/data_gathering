@@ -11,10 +11,31 @@ DB를 생성한다. 문서는 `docs/`에 모은다 — 아키텍처 다이어그
 대응은 [kg/README.md](kg/README.md), 작업 이력은
 [docs/PROGRESS.md](docs/PROGRESS.md) 참고.
 
-DB v2 재설계 제안은 [docs/design/db-schema-v2.md](docs/design/db-schema-v2.md)에 있다.
-DRM 읽기 전용 접근, 여러 시트·복수 영역, 항목별 출처, 목적별 중복 처리와
-화면/API 연결을 다룬다. `db/v2/schema_sqlite.sql`은 별도 빈 DB용 검증 스키마이며
-현행 `kg/schema.sql`을 대체하거나 기존 DB를 자동 변경하지 않는다.
+## v2 실행
+
+별도 브랜치 `codex/db-schema-redesign`에서 버전형 스키마와 실제 실행 경로를 연결했다.
+문서·KG·템플릿·매핑 수정·추출·사용자 DB는 별도 `data/kg/v2.db`를 사용한다.
+기존 `kg.db`를 자동 변경하지 않는다.
+
+```bash
+pip install -e ".[web,test]"
+# 가상 데이터로 처음부터 실행 — 새 폴더를 지정한다
+python -m examples.schema_v2.runtime_demo --workspace /tmp/data-gathering-v2-demo
+python -m kg.v2 --ws /tmp/data-gathering-v2-demo --port 8010
+# http://localhost:8010/?v2=1
+```
+
+문서 → 원본 · 검수 → 승인/추출 → 도메인 개념별 소스 선택 → 사용자 DB 순서로 사용한다.
+원본 화면은 기본 40행×12열, 데이터 목록은 30개씩 읽는다. 키·값의 복수 영역,
+병합 셀, 가로/세로 목록, 여러 시트의 역할 연결과 항목별 출처를 지원한다.
+
+일반 XLSX의 기본 뷰어는 **간략 보기**다. 실제 DRM 문서의 읽기와 원본 스타일·차트·도형
+재현은 운영자가 승인한 읽기·렌더 어댑터로 연결해야 한다. v2는 기존 해제본 등록/SaveAs 경로를 호출하지 않는다.
+
+- [실행·Reader 계약·지원 범위·검증](docs/design/db-schema-v2-runtime.md)
+- [DB 설계와 ERD](docs/design/db-schema-v2.md), [목표 UI/API 설계](docs/design/db-schema-v2-ui.md)
+- 기존 서버 `python -m kg.webapp ...`에도 `/api/v2`가 연결되며 기본 화면은 v2다.
+  기존 작업 화면은 `?v1=1`, 기존 PDF 뷰어는 `?legacy=1`로 접근한다.
 
 ## 구성
 
@@ -32,10 +53,10 @@ domains/<d>/ 도메인 워크스페이스 — config(개념·단위 units.yaml·
 tests/       회귀 전체 (python -m pytest)
 ```
 
-## 빠른 시작 (웹)
+## 기존 v1 CLI 및 호환 서버
 
 ```bash
-pip install -e ".[test]"
+pip install -e ".[web,test]"
 
 # 최초 1회 — 온톨로지 시드 + 원본 적재/매핑 (financier 예제 도메인)
 python -m kg.cli --ws domains/financier seed
@@ -43,7 +64,7 @@ python -m kg.cli --ws domains/financier ingest --raw domains/financier/data/raw 
 
 # 웹 실행 — 이 서버 하나가 API와 웹 UI를 모두 서빙한다
 python -m kg.webapp --ws domains/financier --port 8010
-#  → http://localhost:8010/      5탭 UI (React — /app 경로도 동일)
+#  → http://localhost:8010/?v1=1  기존 5탭 UI
 ```
 
 React 개발/빌드 (선택):
@@ -55,14 +76,14 @@ npm run dev     # http://localhost:5173 — /api 는 8010 백엔드로 프록시
 npm run build   # dist/ 갱신 → kg.webapp 재시작 시 / 에 서빙 (dist는 커밋 대상)
 ```
 
-운영 참고: 원본 충실 PDF 프리뷰에는 LibreOffice(`libreoffice-calc`)가,
+기존 v1 운영 참고 (v2 경로에는 적용하지 않음): 원본 충실 PDF 프리뷰에는 LibreOffice(`libreoffice-calc`)가,
 DRM(암호화) 문서의 COM 렌더에는 Windows + Excel이 필요하다. 둘 다 없어도
 셀 그리드 렌더·매핑·빌드는 동작한다. 사내(벤더) DRM 컨테이너 판별은
 환경변수 `KG_DRM_MAGIC`(파일 선두 바이트 시그니처, 콤마 구분)으로 주입한다 —
 시그니처를 저장소에 두지 않기 위한 규약이며, 미설정 시 해당 판별은 꺼진다.
 전체 환경변수 목록과 기본값은 [.env.sample](.env.sample) 참고.
 
-## 5개 화면
+## 기존 v1의 5개 화면
 
 1. **파일 분석** — 파일명·작성자·템플릿 검색, 작성일 필터, 정렬, 템플릿
    배정/미배정 필터. 미등록(raw) 파일은

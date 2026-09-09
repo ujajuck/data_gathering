@@ -1,4 +1,4 @@
--- data_gathering v2 제안 스키마. 새 DB 전용이며 kg/schema.sql의 자동 마이그레이션이 아니다.
+-- data_gathering v2 스키마. 새 DB 전용이며 kg/schema.sql의 자동 마이그레이션이 아니다.
 -- 문서/템플릿 ID는 애플리케이션이 생성하는 안정 ID(UUID 권장), 해시는 버전 검증용이다.
 -- 각 연결에서도 foreign_keys/busy_timeout을 설정한다. WAL은 배포 시 로컬 디스크에서 설정한다.
 PRAGMA foreign_keys = ON;
@@ -8,7 +8,7 @@ CREATE TABLE schema_meta (
     version INTEGER PRIMARY KEY CHECK (version = 2),
     description TEXT NOT NULL
 );
-INSERT INTO schema_meta VALUES (2, 'Design prototype; separate database; no runtime migration');
+INSERT INTO schema_meta VALUES (2, 'Versioned extraction v2; separate database; no v1 migration');
 
 -- 큰 원본/렌더/산출물 바이트는 DB 밖에 둔다. URI는 서버 전용 불투명 참조다.
 CREATE TABLE artifact (

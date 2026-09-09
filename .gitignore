@@ -30,3 +30,9 @@ frontend/node_modules/
 
 # 환경변수 (샘플: .env.sample)
 .env
+
+# v2 runtime outputs (source data and DB artifacts never enter git)
+data/kg/
+data/v2-builds/
+*.sqlite-wal
+*.sqlite-shm

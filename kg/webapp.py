@@ -2689,6 +2689,9 @@ def create_app(ws_root: str | Path) -> FastAPI:
             _yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
             media_type="text/yaml; charset=utf-8")
 
+    from .v2.api import install as install_v2
+    install_v2(app, root)
+
     # 프론트는 React(frontend/) 하나다 — 빌드(dist)를 루트 / 에 서빙하고,
     # 구 경로 /app 도 같은 앱으로 유지한다 (북마크 호환).
     react_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"

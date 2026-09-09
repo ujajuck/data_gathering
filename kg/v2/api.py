@@ -1,0 +1,740 @@
+"""유한 범위 조회와 비동기 작업으로 제공하는 v2 API. 기본 배포는 로컬 단일 사용자다."""
+
+from __future__ import annotations
+
+import heapq
+import hmac
+import json
+import os
+import sqlite3
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import APIRouter, Body, Depends, FastAPI, Header, Query, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from .build import authorize_build, create_integration, output_path, prepare_build
+from .db import Problem, decode_cursor, dump, norm, one, page
+from .service import Service
+from .spec import address, bounds
+
+
+def install(app: FastAPI, root, start_worker=True):
+    service = Service(root)
+    app.state.v2 = service
+    router = APIRouter(prefix="/api/v2")
+
+    @app.exception_handler(Problem)
+    async def problem_handler(request: Request, exc: Problem):
+        return JSONResponse(
+            {"error": {"code": exc.code, "message": exc.message}},
+            status_code=exc.status,
+        )
+
+    @app.middleware("http")
+    async def bounded_request(request: Request, call_next):
+        if request.url.path.startswith("/api/v2/"):
+            if request.method in ("POST", "PUT", "PATCH"):
+                data = bytearray()
+                async for chunk in request.stream():
+                    data.extend(chunk)
+                    if len(data) > 2 * 1024 * 1024:
+                        return JSONResponse(
+                            {
+                                "error": {
+                                    "code": "BODY_LIMIT",
+                                    "message": "요청 본문은 2MB 이하여야 합니다.",
+                                }
+                            },
+                            status_code=413,
+                        )
+                request._body = bytes(data)
+            response = await call_next(request)
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            return response
+        return await call_next(request)
+
+    def principal(authorization: str | None = Header(None)):
+        token = os.environ.get("KG_V2_ACCESS_TOKEN")
+        if token and not hmac.compare_digest(authorization or "", "Bearer " + token):
+            raise Problem("AUTH_REQUIRED", "서버 접근 토큰이 필요합니다.", 401)
+        # 클라이언트가 임의 사용자 이름을 전달해 권한을 바꾸지 못하게 한다.
+        return os.environ.get("KG_V2_PRINCIPAL", "local-user")
+
+    def listing(sql, params, scope, keys, cursor, limit):
+        values = decode_cursor(cursor, scope, len(keys))
+        if values:
+            sql += (
+                " AND (" + ",".join(keys) + ") > (" + ",".join("?" for _ in keys) + ")"
+            )
+            params = (*params, *values)
+        sql += " ORDER BY " + ",".join(keys) + " LIMIT ?"
+        with service.db.connect() as conn:
+            return page(
+                conn.execute(sql, (*params, limit + 1)),
+                limit,
+                [k.split(".")[-1] for k in keys],
+                scope,
+            )
+
+    def submit(kind, body, user, prepare=None):
+        payload = dict(body)
+        request_key = payload.pop("request_key", None)
+        try:
+            return service.jobs.submit(kind, payload, user, request_key, prepare)
+        except sqlite3.IntegrityError:
+            raise Problem(
+                "INTEGRITY_CONFLICT",
+                "같은 항목이 이미 있거나 버전·출처 관계가 유효하지 않습니다.",
+                409,
+            ) from None
+
+    def safe_write(function, *args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except sqlite3.IntegrityError:
+            raise Problem(
+                "INTEGRITY_CONFLICT",
+                "중복 ID 또는 올바르지 않은 버전·개념 연결이 있습니다.",
+                409,
+            ) from None
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise Problem(
+                "INVALID_DEFINITION", "필수 항목과 정의 형식을 확인하세요."
+            ) from None
+
+    @router.get("/status")
+    def status(user=Depends(principal)):
+        return {
+            "schema_version": 2,
+            "engine": "data-gathering-v2.0",
+            "principal": user,
+            "reader_configured": bool(os.environ.get("KG_V2_READER_FACTORY")),
+            "limits": {"page": 100, "viewport_rows": 100, "viewport_cols": 30},
+            "local_reader_fidelity": "simplified",
+            "worker": "single-process",
+        }
+
+    @router.get("/sources")
+    def sources(
+        directory: str = "",
+        cursor: str | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        raw = (service.root / "data/raw").resolve()
+        folder = (raw / directory).resolve()
+        if not folder.is_relative_to(raw) or not folder.is_dir():
+            return {"items": [], "has_more": False, "next_cursor": None}
+        scope = ["sources", directory]
+        after = decode_cursor(cursor, scope, 1)
+
+        def entries():
+            with os.scandir(folder) as files:
+                for n, item in enumerate(files):
+                    if n > 50000:
+                        raise Problem(
+                            "DIRECTORY_LIMIT",
+                            "원본 폴더를 하위 폴더로 나누거나 경로를 직접 지정하세요.",
+                            413,
+                        )
+                    if item.is_symlink() or after and item.name <= after[0]:
+                        continue
+                    if item.is_dir() or Path(item.name).suffix.lower() in (
+                        ".xlsx",
+                        ".xlsm",
+                        ".xls",
+                    ):
+                        yield {
+                            "name": item.name,
+                            "source_ref": str(Path(directory) / item.name),
+                            "directory": item.is_dir(),
+                        }
+
+        rows = heapq.nsmallest(limit + 1, entries(), key=lambda r: r["name"])
+        return page(rows, limit, ["name"], scope)
+
+    @router.post("/documents/register", status_code=202)
+    def register(body: dict = Body(...), user=Depends(principal)):
+        refs = body.get("source_refs")
+        if (
+            not isinstance(refs, list)
+            or not 1 <= len(refs) <= 100
+            or any(not isinstance(r, str) or not r or len(r) > 2048 for r in refs)
+        ):
+            raise Problem("INVALID_SOURCES", "원본 참조를 1~100개 지정하세요.")
+        if body.get("document_id") and len(refs) != 1:
+            raise Problem(
+                "ONE_DOCUMENT_REQUIRED", "기존 문서의 새 버전은 한 파일씩 등록하세요."
+            )
+        if not isinstance(body.get("provider", "local-xlsx"), str):
+            raise Problem("INVALID_PROVIDER", "제공자 이름을 지정하세요.")
+        return submit("register", body, user)
+
+    @router.get("/documents")
+    def documents(
+        q: str = Query("", max_length=200),
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        return listing(
+            "SELECT document_id,display_name,provider,file_type,current_version_id,registered_at FROM document WHERE display_name LIKE ?",
+            ("%" + q + "%",),
+            ["documents", q],
+            ["document_id"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/documents/{doc_id}/versions")
+    def versions(
+        doc_id: str,
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        return listing(
+            "SELECT document_version_id,document_id,revision_no,filename,author,authored_at,byte_size,captured_at FROM document_version WHERE document_id=?",
+            (doc_id,),
+            ["versions", doc_id],
+            ["revision_no"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/versions/{vid}/sheets")
+    def sheets(
+        vid: str,
+        cursor: str | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        return listing(
+            "SELECT * FROM sheet WHERE document_version_id=?",
+            (vid,),
+            ["sheets", vid],
+            ["ordinal"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/versions/{vid}/access")
+    def access(vid: str, user=Depends(principal)):
+        _, caps = service.authorize(vid, user)
+        return caps
+
+    @router.post("/viewports", status_code=202)
+    def viewport(body: dict = Body(...), user=Depends(principal)):
+        for key, default, minimum, maximum in (
+            ("r1", 1, 1, 1048576),
+            ("c1", 1, 1, 16384),
+            ("rows", 40, 1, 100),
+            ("cols", 12, 1, 30),
+        ):
+            value = body.setdefault(key, default)
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise Problem(
+                    "VIEWPORT_LIMIT", "표시 범위는 100행·30열 이내로 지정하세요.", 413
+                )
+        bounds(
+            address(
+                body["r1"],
+                body["c1"],
+                body["r1"] + body["rows"] - 1,
+                body["c1"] + body["cols"] - 1,
+            )
+        )
+        if not body.get("version_id") or not body.get("sheet_id"):
+            raise Problem("SHEET_REQUIRED", "문서 버전과 시트를 선택하세요.")
+        return submit("viewport", body, user)
+
+    @router.get("/jobs/{jid}")
+    def job(jid: str, user=Depends(principal)):
+        result = service.jobs.get(jid, user)
+        if result["kind"] == "viewport" and result["result"]:
+            service.authorize(result["result"]["version_id"], user, "render")
+        if result["kind"] == "build" and result["result"]:
+            authorize_build(service, result["result"]["build_id"], user)
+        return result
+
+    @router.post("/jobs/{jid}/cancel")
+    def cancel(jid: str, user=Depends(principal)):
+        service.jobs.cancel(jid, user)
+        return {"cancel_requested": True}
+
+    @router.get("/kg/revisions")
+    def kg_revisions(
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        return listing(
+            "SELECT * FROM kg_revision WHERE 1=1",
+            (),
+            ["kg"],
+            ["revision_no"],
+            cursor,
+            limit,
+        )
+
+    @router.post("/kg/import")
+    def kg_import(body: dict = Body(...), user=Depends(principal)):
+        return safe_write(service.import_kg, body, user)
+
+    @router.post("/kg/import-current")
+    def kg_current(user=Depends(principal)):
+        return safe_write(service.import_current_kg, user)
+
+    @router.get("/kg/{kg}/concepts")
+    def concepts(
+        kg: str,
+        q: str = Query("", max_length=200),
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        return listing(
+            "SELECT c.* FROM domain_concept c WHERE c.kg_revision_id=? AND (c.name LIKE ? OR c.concept_id LIKE ? OR EXISTS (SELECT 1 FROM domain_alias a WHERE a.kg_revision_id=c.kg_revision_id AND a.concept_id=c.concept_id AND a.alias_norm LIKE ?))",
+            (kg, "%" + q + "%", "%" + q + "%", "%" + norm(q) + "%"),
+            ["concepts", kg, q],
+            ["c.concept_id"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/kg/{kg}/concepts/{cid}/relations")
+    def relations(
+        kg: str,
+        cid: str,
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        return listing(
+            "SELECT * FROM domain_edge WHERE kg_revision_id=? AND (from_concept_id=? OR to_concept_id=?)",
+            (kg, cid, cid),
+            ["edges", kg, cid],
+            ["from_concept_id", "to_concept_id", "relation_type"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/kg/{kg}/aliases")
+    def aliases(
+        kg: str,
+        text: str = Query(..., max_length=200),
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        return listing(
+            "SELECT a.*,c.name FROM domain_alias a JOIN domain_concept c USING(kg_revision_id,concept_id) WHERE a.kg_revision_id=? AND a.alias_norm=?",
+            (kg, norm(text)),
+            ["aliases", kg, norm(text)],
+            ["a.concept_id", "a.context_key"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/templates")
+    def templates(
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        return listing(
+            "SELECT t.*,v.template_version_id,v.revision_no,v.kg_revision_id FROM template t JOIN template_version v USING(template_id) WHERE v.revision_no=(SELECT max(revision_no) FROM template_version x WHERE x.template_id=t.template_id)",
+            (),
+            ["templates"],
+            ["t.template_id"],
+            cursor,
+            limit,
+        )
+
+    @router.post("/templates")
+    def template_create(body: dict = Body(...), user=Depends(principal)):
+        return safe_write(
+            service.create_template,
+            body.get("name"),
+            body.get("definition"),
+            user,
+            body.get("template_id"),
+        )
+
+    @router.get("/templates/{tid}/versions")
+    def template_versions(
+        tid: str,
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        return listing(
+            "SELECT template_version_id,template_id,revision_no,kg_revision_id,created_at FROM template_version WHERE template_id=?",
+            (tid,),
+            ["template-versions", tid],
+            ["revision_no"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/template-versions/{tid}")
+    def template_detail(tid: str, user=Depends(principal)):
+        with service.db.connect() as conn:
+            result = one(
+                conn,
+                "SELECT * FROM template_version WHERE template_version_id=?",
+                (tid,),
+            )
+        result["definition"] = json.loads(result.pop("definition_json"))
+        return result
+
+    @router.post("/applications")
+    def application_create(body: dict = Body(...), user=Depends(principal)):
+        service.authorize(body.get("version_id"), user)
+        return safe_write(
+            service.apply_template,
+            body.get("version_id"),
+            body.get("template_version_id"),
+            body.get("bindings", {}),
+            body.get("scope_key"),
+            body.get("approved", False) is True,
+            user,
+        )
+
+    @router.get("/applications")
+    def applications(
+        version_id: str,
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        return listing(
+            "SELECT a.*,t.name,v.kg_revision_id,v.revision_no FROM template_application a JOIN template_version v USING(template_version_id) JOIN template t USING(template_id) WHERE a.document_version_id=?",
+            (version_id,),
+            ["applications", version_id],
+            ["a.application_id"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/applications/{aid}")
+    def application(aid: str, user=Depends(principal)):
+        with service.db.connect() as conn:
+            result = one(
+                conn,
+                "SELECT a.*,v.kg_revision_id,v.definition_json,t.name FROM template_application a JOIN template_version v USING(template_version_id) JOIN template t USING(template_id) WHERE application_id=?",
+                (aid,),
+            )
+            result["bindings"] = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT a.*,s.name FROM application_sheet a JOIN sheet s USING(sheet_id) WHERE application_id=? ORDER BY role_key,ordinal",
+                    (aid,),
+                )
+            ]
+        service.authorize(result["document_version_id"], user)
+        result["definition"] = json.loads(result.pop("definition_json"))
+        return result
+
+    @router.get("/applications/{aid}/mappings")
+    def mappings(
+        aid: str,
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        with service.db.connect() as conn:
+            v = one(
+                conn,
+                "SELECT document_version_id FROM template_application WHERE application_id=?",
+                (aid,),
+            )
+        service.authorize(v["document_version_id"], user)
+        return listing(
+            "SELECT m.mapping_revision_id,m.rule_key,m.revision_no,m.status,m.concept_id,m.created_at,coalesce(h.edit_seq,0) edit_seq FROM mapping_revision m LEFT JOIN mapping_head h ON h.application_id=m.application_id AND h.rule_key=m.rule_key WHERE m.application_id=? AND m.revision_no=(SELECT max(revision_no) FROM mapping_revision x WHERE x.application_id=m.application_id AND x.rule_key=m.rule_key)",
+            (aid,),
+            ["mappings", aid],
+            ["m.rule_key"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/mappings/{mid}")
+    def mapping(mid: str, user=Depends(principal)):
+        result = service.mapping(mid)
+        service.authorize(result["document_version_id"], user)
+        return result
+
+    @router.post("/applications/{aid}/mappings/{mid}/revisions")
+    def revise(aid: str, mid: str, body: dict = Body(...), user=Depends(principal)):
+        previous = service.mapping(mid)
+        service.authorize(previous["document_version_id"], user)
+        return safe_write(
+            service.revise,
+            aid,
+            mid,
+            body.get("expected_seq"),
+            body.get("effective_spec"),
+            body.get("concept_id"),
+            body.get("status", "approved"),
+            body.get("reason"),
+            user,
+        )
+
+    @router.post("/applications/{aid}/extract", status_code=202)
+    def extract(aid: str, body: dict = Body(...), user=Depends(principal)):
+        return submit(
+            "extract",
+            {"application_id": aid, "request_key": body.get("request_key")},
+            user,
+            service.prepare_extraction,
+        )
+
+    @router.get("/series")
+    def series(
+        run_id: str | None = None,
+        concept_id: str | None = None,
+        kg_revision_id: str | None = None,
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        sql = "SELECT s.*,m.concept_id,m.rule_key,m.application_id,m.kg_revision_id FROM extracted_series s JOIN mapping_revision m USING(mapping_revision_id) JOIN template_application a USING(application_id) JOIN document_version v ON v.document_version_id=s.document_version_id JOIN document d USING(document_id) WHERE "
+        if run_id:
+            sql += "s.run_id=? AND EXISTS(SELECT 1 FROM extraction_run e WHERE e.run_id=s.run_id AND e.status='succeeded')"
+            params = (run_id,)
+        else:
+            sql += "s.run_id=a.published_run_id AND d.current_version_id=s.document_version_id AND m.concept_id=? AND m.kg_revision_id=?"
+            params = (concept_id, kg_revision_id)
+        result = listing(
+            sql,
+            params,
+            ["series", run_id, concept_id, kg_revision_id],
+            ["s.series_id"],
+            cursor,
+            limit,
+        )
+        for vid in {r["document_version_id"] for r in result["items"]}:
+            service.authorize(vid, user)
+        return result
+
+    @router.get("/series/{sid}/items")
+    def items(
+        sid: str,
+        cursor: str | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        with service.db.connect() as conn:
+            s = one(
+                conn,
+                "SELECT s.* FROM extracted_series s JOIN extraction_run r USING(run_id) WHERE s.series_id=? AND r.status='succeeded'",
+                (sid,),
+            )
+        service.authorize(s["document_version_id"], user)
+        return listing(
+            "SELECT item_id,series_id,item_index,substr(record_key,1,256) record_key,value_type,substr(value_text,1,2048) value_text,value_state,substr(display_text,1,2048) display_text,unit_normalized,formula_state,length(value_text)>2048 preview_truncated FROM extracted_item WHERE series_id=?",
+            (sid,),
+            ["items", sid],
+            ["item_index"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/series/{sid}/regions")
+    def series_regions(
+        sid: str,
+        cursor: str | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        with service.db.connect() as conn:
+            s = one(conn, "SELECT * FROM extracted_series WHERE series_id=?", (sid,))
+        service.authorize(s["document_version_id"], user)
+        return listing(
+            "SELECT r.*,x.role,x.ordinal,s.name FROM series_region x JOIN source_region r USING(region_id) JOIN sheet s USING(sheet_id) WHERE x.series_id=?",
+            (sid,),
+            ["series-regions", sid],
+            ["x.role", "x.ordinal"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/items/{iid}/regions")
+    def item_regions(
+        iid: str,
+        cursor: str | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        with service.db.connect() as conn:
+            i = one(
+                conn,
+                "SELECT i.* FROM extracted_item i JOIN extracted_series s USING(series_id) JOIN extraction_run r USING(run_id) WHERE item_id=? AND r.status='succeeded'",
+                (iid,),
+            )
+        service.authorize(i["document_version_id"], user)
+        return listing(
+            "SELECT r.*,x.role,x.ordinal,s.name FROM item_region x JOIN source_region r USING(region_id) JOIN sheet s USING(sheet_id) WHERE x.item_id=?",
+            (iid,),
+            ["item-regions", iid],
+            ["x.role", "x.ordinal"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/items/{iid}")
+    def item_detail(iid: str, user=Depends(principal)):
+        with service.db.connect() as conn:
+            result = one(
+                conn,
+                "SELECT i.item_id,i.series_id,i.document_version_id,s.mapping_revision_id,m.application_id,v.document_id FROM extracted_item i JOIN extracted_series s USING(series_id) JOIN mapping_revision m USING(mapping_revision_id) JOIN document_version v ON v.document_version_id=i.document_version_id JOIN extraction_run r USING(run_id) WHERE i.item_id=? AND r.status='succeeded'",
+                (iid,),
+            )
+        service.authorize(result["document_version_id"], user)
+        return result
+
+    @router.post("/integrations")
+    def integration_create(body: dict = Body(...), user=Depends(principal)):
+        return safe_write(
+            create_integration,
+            service,
+            body.get("name"),
+            body.get("spec"),
+            user,
+            body.get("project_id"),
+        )
+
+    @router.get("/integrations")
+    def integrations(
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        return listing(
+            "SELECT p.*,v.integration_version_id,v.revision_no FROM integration_project p JOIN integration_version v USING(project_id) WHERE v.revision_no=(SELECT max(revision_no) FROM integration_version x WHERE x.project_id=p.project_id)",
+            (),
+            ["integrations"],
+            ["p.project_id"],
+            cursor,
+            limit,
+        )
+
+    @router.post("/integrations/{vid}/build", status_code=202)
+    def build(vid: str, body: dict = Body(...), user=Depends(principal)):
+        return submit(
+            "build",
+            {"integration_version_id": vid, "request_key": body.get("request_key")},
+            user,
+            prepare_build,
+        )
+
+    @router.get("/builds")
+    def builds(
+        integration_version_id: str,
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        return listing(
+            "SELECT build_id,integration_version_id,status,row_count,created_at,finished_at FROM build_run WHERE integration_version_id=?",
+            (integration_version_id,),
+            ["builds", integration_version_id],
+            ["created_at", "build_id"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/builds/{bid}/rows")
+    def build_rows(
+        bid: str,
+        cursor: str | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        authorize_build(service, bid, user)
+        path = output_path(service, bid)
+        scope = ["build-rows", bid]
+        values = decode_cursor(cursor, scope, 1)
+        with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            fields = [dict(r) for r in conn.execute("SELECT * FROM _field_schema")]
+            limit = min(limit, max(1, 3000 // len(fields)))
+            quote = lambda value: '"' + value.replace('"', '""') + '"'
+            preview = ",".join(
+                "substr("
+                + quote(f["output_name"])
+                + ",1,256) AS "
+                + quote(f["output_name"])
+                for f in fields
+            )
+            result = page(
+                conn.execute(
+                    "SELECT _row_no,_row_key,"
+                    + preview
+                    + " FROM data WHERE _row_no>? ORDER BY _row_no LIMIT ?",
+                    ((values or [0])[0], limit + 1),
+                ),
+                limit,
+                ["_row_no"],
+                scope,
+            )
+            result["fields"] = fields
+            result["preview_char_limit"] = 256
+        return result
+
+    @router.get("/builds/{bid}/lineage")
+    def lineage(
+        bid: str,
+        row_key: str,
+        field_key: str,
+        cursor: str | None = None,
+        limit: int = Query(50, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        authorize_build(service, bid, user)
+        return listing(
+            "SELECT * FROM build_lineage WHERE build_id=? AND output_row_key=? AND field_key=?",
+            (bid, row_key, field_key),
+            ["lineage", bid, row_key, field_key],
+            ["ordinal"],
+            cursor,
+            limit,
+        )
+
+    @router.get("/builds/{bid}/download")
+    def download(bid: str, user=Depends(principal)):
+        authorize_build(service, bid, user)
+        return FileResponse(
+            output_path(service, bid),
+            filename="custom-db-" + bid + ".sqlite",
+            media_type="application/vnd.sqlite3",
+        )
+
+    app.include_router(router)
+    if start_worker:
+        previous_lifespan = app.router.lifespan_context
+
+        @asynccontextmanager
+        async def lifespan(application):
+            async with previous_lifespan(application) as state:
+                service.jobs.start()
+                try:
+                    yield state
+                finally:
+                    service.jobs.close()
+
+        app.router.lifespan_context = lifespan
+    return service
+
+
+def create_app(root, start_worker=True):
+    app = FastAPI(title="Data Gathering v2")
+    install(app, root, start_worker)
+    dist = Path(__file__).resolve().parents[2] / "frontend/dist"
+    if dist.is_dir():
+        app.mount("/", StaticFiles(directory=dist, html=True))
+    return app

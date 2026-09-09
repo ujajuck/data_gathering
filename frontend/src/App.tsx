@@ -10,6 +10,8 @@ import DbScreen from "./screens/DbScreen";
 import TemplatesScreen from "./screens/TemplatesScreen";
 import "./webkg.css";
 
+const V2Workbench = lazy(() => import("./v2/Workbench"));
+
 const LegacyViewer = lazy(() => import("./LegacyViewer"));
 
 const STEPS: [Screen, string][] = [
@@ -57,6 +59,9 @@ function Shell() {
 export default function App() {
   if (new URLSearchParams(window.location.search).has("legacy")) {
     return <Suspense fallback={null}><LegacyViewer /></Suspense>;
+  }
+  if (!new URLSearchParams(window.location.search).has("v1")) {
+    return <Suspense fallback={<p>작업 공간을 불러오는 중…</p>}><V2Workbench /></Suspense>;
   }
   return <StoreProvider><Shell /></StoreProvider>;
 }

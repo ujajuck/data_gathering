@@ -8,9 +8,10 @@
 [`be1c75ab46ebbe96918a4f6de830e0e8a4d026e9`](https://github.com/ujajuck/data_gathering/commit/be1c75ab46ebbe96918a4f6de830e0e8a4d026e9).
 작업 브랜치: `codex/db-schema-redesign`.
 
-이 브랜치는 **새 빈 DB용 SQLite DDL, 합성 데이터 예시, 제약 검증, UI/API 및 이행 설계**를 제공한다.
-현행 앱의 실행 스키마는 `kg/schema.sql`이다. 새 DDL을 기존 `kg.db`에 실행하지 않는다.
-DRM 제품 연동, Excel 렌더러 교체, v2 API/UI 구현과 실제 데이터 마이그레이션은 후속 구현 범위다.
+2026-09-09 후속 구현으로 **v2 API, 실제 XLSX 추출기, 검수 UI, 사용자 SQLite DB 빌더**를 연결했다.
+실행 경로·지원 명세·검증 범위는 [런타임 안내](db-schema-v2-runtime.md)가 기준이다.
+기존 `kg.db`는 보존하고 별도 `data/kg/v2.db`에 이 DDL을 적용한다.
+실제 DRM 제품 어댑터, 모든 Excel 요소의 원본 렌더 실환경 검증, 기존 데이터 마이그레이션, PostgreSQL/AGE 전환은 후속 연동 범위다.
 
 - [실행 가능한 SQLite DDL](../../db/v2/schema_sqlite.sql)
 - [여러 시트·여러 영역 템플릿 JSON](../../examples/schema_v2/template_multisheet.json)
