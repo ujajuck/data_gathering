@@ -23,6 +23,7 @@ import { TemplatePresets } from "./Presets";
 import ConceptEditor from "./ConceptEditor";
 import DomainGraph from "./DomainGraph";
 import type { Graph, GraphNode } from "./DomainGraph";
+import Recrawl from "./Recrawl";
 import "./workbench.css";
 import "../product.css";
 import { PRODUCT_NAME, PRODUCT_DESCRIPTION, PRODUCT_STEPS } from "../product";
@@ -1179,6 +1180,7 @@ export function Templates() {
               선택한 버전 JSON 내보내기
             </button>
           )}
+          {exportId && <Recrawl key={exportId} templateVersionId={exportId} />}
           <div className="v2-grid two">
             <label>
               템플릿 이름
