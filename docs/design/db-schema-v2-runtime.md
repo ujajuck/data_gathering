@@ -25,6 +25,30 @@ python -m kg.v2 --ws /tmp/data-gathering-v2-demo --port 8010
 기존 `kg.webapp`에도 v2 API가 연결되지만 v1 API는 그대로 남는다. v2만 사용할 때는 위의
 독립 서버를 사용한다. 기본 바인딩은 `127.0.0.1`, 단일 사용자·단일 서버 워커 PoC다.
 
+## v1 이관 (`migrate`)
+
+기존 `data/kg/kg.db`(v1)를 새 v2 워크스페이스로 옮긴다. v1은 읽기 전용(`mode=ro`)으로만 열고,
+기존 스키마를 덮어쓰지 않는다 (설계 §12 이행 순서 1~5).
+
+```bash
+python -m kg.v2 migrate --ws <v2 워크스페이스> --from-ws <v1 워크스페이스> [--raw DIR] [--dry-run] [--report report.json]
+python -m kg.v2 serve --ws <v2 워크스페이스> --port 8010   # 서브커맨드를 생략하면 serve로 해석한다
+```
+
+| v1 | v2 | 규칙 |
+|---|---|---|
+| `domain_concept`/`domain_alias`/`domain_relation` | `kg_revision` 1개 | 관계 유형은 그대로 복사한다(`parent_of`를 만들지 않으므로 개념 탐색 화면에서는 평면으로 보인다). `canonical_name_en`/`concept_type`/`unit_dimension`은 KG를 키우지 않기 위해 옮기지 않고 링크에 기록한다. `unit`은 units.yaml이 원본이므로 옮기지 않는다. |
+| `document`/`document_version` | 새 안정 ID의 `document`/`document_version` | 원본 파일이 `<v2 ws>/data/raw` 아래에 있고 바이트 해시가 v1 `file_hash`와 같을 때만 다시 읽어 등록한다. 파일이 없으면 `source missing`, 해시가 다르면 `source changed`로 건너뛴다. 해시나 이름만으로 기존 v2 문서와 병합하지 않는다. |
+| `parsing_template_version`/`sheet_template`/`template_mapping` | `template`/`template_version` | `range`는 값 영역(단일 셀 scalar, 한 열/행 list, 그 외 matrix)으로, `key_search`+`offset`은 `find`+`relative`로 변환한다. `range`만 있던 매핑의 키 영역은 매핑 키·개념 이름·별칭으로 추론하므로 추출 시 키를 못 찾을 수 있다 — 검수에서 확정한다. 변환할 수 없으면(잘못된 범위, 시트 17개 이상 등) `template_version`을 만들지 않고 원본 JSON을 artifact(`policy_ref='v1-migration-source'`)로 보관하며 `needs_review`로 표시한다. |
+| `document_template_assignment` (+`document_override`) | `template_application` (`scope_key='v1-migration'`) + `mapping_revision` | 모든 매핑은 `proposed`이며 `mapping_head`를 만들지 않는다(§4.10 — 사람이 다시 검수한다). 승인된 override는 `origin='manual'`의 새 `proposed` 리비전이 된다. 이미 사람이 v2에서 수정·승인한 매핑은 `EDIT_CONFLICT`로 건너뛰고 절대 덮어쓰지 않는다. `headers`만으로 시트를 고르던 배정은 시트를 열지 않고는 판단할 수 없어 건너뛴다. |
+| `parsed_source.value_json`/`payload_value` | 옮기지 않음 | 원자 출처가 없으므로 발행 추출로 복사하지 않는다. 보고서의 `re_extract_required`에 parse run 단위로 나열되며, v2에서 검수 후 다시 추출한다. |
+
+v1 ID와 새 v2 ID의 대응은 `artifact` 행(`kind='manifest'`, `policy_ref='v1-migration'`,
+`storage_ref`에 `{"schema":"v1-migration/1","entity":…,"v1_id":…,"v2_id":…}`)으로 남는다. 다시 실행하면
+이미 링크된 v1 행은 `existing`으로 건너뛰므로 멱등이며, 중간에 중단된 실행도 그대로 이어서 실행한다.
+`--dry-run`은 `v2.db`를 만들거나 쓰지 않고 계획(`planned`)만 보고한다. 보고서(`--report`)는
+`{format, counts, skipped:[{entity,v1_id,reason}], links, re_extract_required}` JSON이며 건너뛴 항목이 있어도 종료 코드는 0이다.
+
 ## 화면에서 확인할 순서
 
 1. **문서**: 샘플 문서를 선택하고 현재/과거 등록 버전과 시트를 확인한다. 새 템플릿은
