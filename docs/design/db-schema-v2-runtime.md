@@ -250,3 +250,8 @@ Node 24.19.0에서 Vitest·jsdom으로 실제 React 화면을 마운트하고, �
 PostgreSQL/AGE는 동일 안정 ID/관계형 출처를 옮기고 KG를 투영하는 [이행 설계](db-schema-v2.md)를 따른다.
 DVC 자동 연동은 하지 않았다. JSON 템플릿은 Git, 승인된 파생 산출물·manifest는 선택적으로 DVC에
 연결할 수 있도록 artifact의 Git/DVC 참조 컬럼을 유지한다. DRM 원본/렌더를 자동 커밋하지 않는다.
+
+확장 도구(구문/구조 검증만, 실제 PostgreSQL·AGE·DVC 런타임 미검증 — [상세](db-schema-v2-postgres.md)):
+- `db/v2/schema_postgres.sql` — SQLite DDL의 1:1 PostgreSQL 번역(UUID/TIMESTAMPTZ/BOOLEAN/JSONB, PL/pgSQL 트리거).
+- `python -m kg.v2 age-projection` — KG 리비전 하나를 서비스 ID 속성으로 MERGE하는 멱등 Apache AGE 스크립트.
+- `python -m kg.v2 export` + `dvc.yaml`의 `v2_export_build` — 완료 빌드의 SQLite와 manifest.json을 DVC 추적 폴더로 내보내기.

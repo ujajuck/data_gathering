@@ -17,7 +17,9 @@ npm run test:v2
 ```
 
 `KG_E2E_PYTHON`으로 Python 실행 경로를 지정할 수 있다. 서버와 다운로드 SQLite 검사 모두 같은
-Python을 쓴다. 러너는 `127.0.0.1:8021`에 임시 가상 작업 공간을 직접 생성·실행한다.
+Python을 쓴다. `CHROMIUM_PATH`를 지정하면 v1 러너(`helpers.mjs`)와 같은 브라우저 실행 파일을
+`launchOptions.executablePath`로 사용한다. 미지정 시 `npx playwright install`이 설치한 chromium을 쓴다
+(`.github/workflows/v2.yml`은 지정하지 않는다). 러너는 `127.0.0.1:8021`에 임시 가상 작업 공간을 직접 생성·실행한다.
 기존 서버 재사용이나 실제 `kg.db` 변경은 하지 않는다. 실패 보고서는 `e2e/playwright-report`,
 trace·다운로드·스크린샷은 `e2e/test-results`에 남으며 Git에서는 제외한다.
 
