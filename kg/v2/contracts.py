@@ -292,3 +292,56 @@ class FromSuggestionRequest(Contract):
         None,
         description="적용 건 구분 이름(scope_key). 같은 템플릿 버전을 한 버전에 여러 번 연결할 때 구분한다.",
     )
+# ----------------------------------------------------- v1 → v2 이관 보고서 --
+MigrationEntity = Literal[
+    "kg",
+    "units",
+    "document",
+    "document_version",
+    "template",
+    "template_version",
+    "assignment",
+    "override",
+]
+MigrationStatus = Literal["migrated", "existing", "needs_review", "planned"]
+
+
+class MigrationLink(Contract):
+    entity: MigrationEntity
+    v1_id: str
+    v2_id: str | None = None
+    status: MigrationStatus
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class MigrationSkip(Contract):
+    entity: MigrationEntity
+    v1_id: str
+    reason: str
+
+
+class ReExtractItem(Contract):
+    v1_parse_run_id: str
+    v1_document_id: str
+    v1_document_version: str
+    v1_template_id: str
+    v1_template_version: int
+    v1_status: str
+    sources: int = Field(ge=0)
+    v2_application_id: str | None = None
+
+
+class MigrationReport(Contract):
+    # BaseModel.schema를 가리지 않도록 format이라 부른다.
+    format: Literal["v1-migration-report/1"] = "v1-migration-report/1"
+    source_db: str
+    workspace: str
+    raw_dir: str
+    dry_run: bool
+    principal: str
+    started_at: str
+    finished_at: str
+    counts: dict[str, dict[str, int]]
+    skipped: list[MigrationSkip]
+    links: list[MigrationLink]
+    re_extract_required: list[ReExtractItem]
