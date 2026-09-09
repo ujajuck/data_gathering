@@ -152,6 +152,8 @@ def export_build(service, build_id: str, out, principal: str) -> dict:
     authorize_build(service, build_id, principal)
     source = output_path(service, build_id)
     out = Path(out).resolve()
+    if out.exists() and not out.is_dir():
+        raise Problem("EXPORT_TARGET_NOT_DIRECTORY", "내보내기 대상은 폴더여야 합니다.", 409)
     if out.exists() and any(out.iterdir()):
         raise Problem("EXPORT_EXISTS", "이미 내보낸 폴더입니다. 새 폴더를 지정하세요.", 409)
     collected = _collect(service, build_id)

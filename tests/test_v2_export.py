@@ -142,3 +142,18 @@ def test_dvc_stage_excludes_live_db_and_raw_sources():
         for path in spec.get("deps", []):
             assert "v2.db" not in path and "kg.db" not in path, name
     assert "data/raw" not in " ".join(stage["deps"])
+
+
+def test_export_into_existing_file_is_a_problem_not_a_traceback(setup, tmp_path):
+    s = setup
+    bid, _ = built(s)
+    target = tmp_path / "not-a-dir"
+    target.write_text("x", encoding="utf-8")
+    with pytest.raises(Problem) as failure:
+        export_build(s["service"], bid, target, "local-user")
+    assert failure.value.code == "EXPORT_TARGET_NOT_DIRECTORY"
+
+
+def test_dvcignore_excludes_python_caches():
+    text = (ROOT / ".dvcignore").read_text(encoding="utf-8")
+    assert "__pycache__/" in text and "*.pyc" in text

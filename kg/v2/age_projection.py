@@ -58,7 +58,14 @@ def cypher_text(value) -> str:
 
 
 def edge_label(relation_type: str) -> str:
-    if LABEL.match(relation_type):
+    # AGE의 라벨 이름은 정점/엣지가 한 네임스페이스를 쓰고(ag_label), PostgreSQL 식별자는 63바이트에서 잘린다.
+    # 정점 라벨과 충돌하거나 내부 접두사(_ag_)를 쓰거나 너무 길면 해시 기반 이름으로 바꾼다.
+    if (
+        LABEL.match(relation_type)
+        and relation_type != VERTEX_LABEL
+        and not relation_type.startswith("_ag_")
+        and len(relation_type.encode()) <= 63
+    ):
         return relation_type
     return "rel_" + hashlib.sha256(relation_type.encode()).hexdigest()[:12]
 

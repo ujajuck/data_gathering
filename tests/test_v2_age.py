@@ -134,3 +134,14 @@ def test_cli_age_projection_writes_file(kg, capsys):
     assert result["out"] == str(out)
     direct = write_projection(kg["root"], "1", kg["root"] / "age" / "r1.sql")
     assert direct["vertices"] == 3 and direct["revision_no"] == 1
+
+
+def test_edge_label_avoids_vertex_label_internal_prefix_and_long_names():
+    from kg.v2.age_projection import VERTEX_LABEL, edge_label
+
+    assert edge_label("parent_of") == "parent_of"
+    assert edge_label(VERTEX_LABEL).startswith("rel_")
+    assert edge_label("_ag_internal").startswith("rel_")
+    long = "r" * 70
+    assert edge_label(long).startswith("rel_") and len(edge_label(long)) <= 63
+    assert edge_label(long) != edge_label("r" * 71)
