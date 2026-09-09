@@ -135,7 +135,11 @@ export default function Suggestions() {
                     </span>
                     <small>
                       시트명 {pct(b.sheet_names?.score) ?? 0}% · 헤더{" "}
-                      {pct(b.headers?.score) ?? 0}% · 병합{" "}
+                      {pct(b.headers?.score) ?? 0}%
+                      {b.headers?.shared_count != null
+                        ? ` (공통 라벨 ${b.headers.shared_count}개)`
+                        : ""}{" "}
+                      · 병합{" "}
                       {b.merges ? pct(b.merges.score) + "%" : "해당 없음"} ·{" "}
                       {s.template_name} v{s.template_revision_no} · 승인 규칙{" "}
                       {s.approved_rules}/{s.total_rules}
@@ -156,7 +160,8 @@ export default function Suggestions() {
           {data?.unsigned_candidates > 0 && (
             <p className="v2-muted">
               서명이 없는 적용 문서 {data.unsigned_candidates}건은 비교에서
-              제외했습니다. `python -m kg.v2 sign`으로 계산할 수 있습니다.
+              제외했습니다. `python -m kg.v2 sign`은 템플릿을 연결한 이전
+              버전까지 서명을 계산합니다.
             </p>
           )}
         </>

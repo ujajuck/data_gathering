@@ -7,10 +7,17 @@ import json
 import os
 
 from .db import Problem, digest, dump, insert, norm, now, one, uid
-from .readers import SIGNATURE_COLS, SIGNATURE_ROWS, SIGNATURE_SHEETS, SIGNATURE_TERMS, header_term
+from .readers import (
+    SIGNATURE_COLS,
+    SIGNATURE_ROWS,
+    SIGNATURE_SHEETS,
+    SIGNATURE_TERMS,
+    signature_terms,
+)
 from .spec import address, validate_rule
 
-ALGORITHM = "structure-v1"
+# v2: 헤더 성분이 라벨로 판정한 셀만 담는다. 알고리즘이 바뀌면 이전 캐시는 재계산 대상이다.
+ALGORITHM = "structure-v2"
 WEIGHTS = {"sheet_names": 0.4, "headers": 0.4, "merges": 0.2}
 CANDIDATE_LIMIT = 2000
 LIST_PREVIEW = 20
@@ -39,17 +46,18 @@ def _fallback_signature(service, version, sheets, principal, checkpoint):
             },
             checkpoint,
         )
-        terms, merges = set(), set()
-        for cell in view.get("cells", []):
-            term = header_term(cell.get("text"))
-            if term:
-                terms.add(term)
+        grid = [[None] * SIGNATURE_COLS for _ in range(SIGNATURE_ROWS)]
+        anchors, merges = set(), set()
+        for cell in view.get("cells", []) if isinstance(view, dict) else []:
             try:
                 r1, c1, r2, c2 = (int(cell[k]) for k in ("r1", "c1", "r2", "c2"))
             except (KeyError, TypeError, ValueError):
                 continue
+            if 1 <= r1 <= SIGNATURE_ROWS and 1 <= c1 <= SIGNATURE_COLS:
+                grid[r1 - 1][c1 - 1] = cell.get("text")
             if r2 > r1 or c2 > c1:
                 merges.add(address(r1, c1, r2, c2))
+                anchors.add((r1, c1))
         result.append(
             {
                 "name": sheet["name"],
@@ -59,14 +67,63 @@ def _fallback_signature(service, version, sheets, principal, checkpoint):
                     "rows": view.get("estimated_rows", sheet.get("estimated_rows")),
                     "cols": view.get("estimated_cols", sheet.get("estimated_cols")),
                 },
-                "headers": sorted(terms)[:SIGNATURE_TERMS],
+                "headers": signature_terms(grid, anchors),
                 "merges": sorted(merges)[:SIGNATURE_TERMS],
             }
         )
     return {"token": version["provider_version_token"], "sheets": result}
 
 
-def store_signature(service, version_id, principal, checkpoint=lambda **kw: None):
+def _normalize(raw, version):
+    """제공자의 서명 응답을 검증해 저장 형태로 바꾼다. 형식 오류는 INVALID_READER_CONTRACT다."""
+    invalid = Problem(
+        "INVALID_READER_CONTRACT", "제공자의 구조 서명 응답이 유효하지 않습니다."
+    )
+    if not isinstance(raw, dict) or not isinstance(raw.get("sheets"), list):
+        raise invalid
+    if raw.get("token") != version["provider_version_token"]:
+        raise Problem(
+            "SOURCE_VERSION_CHANGED", "원본이 변경되었습니다. 새 버전을 등록하세요.", 409
+        )
+    sheets = []
+    for n, sheet in enumerate(raw["sheets"][:SIGNATURE_SHEETS]):
+        if not isinstance(sheet, dict) or not isinstance(sheet.get("name"), str):
+            raise invalid
+        headers, merges = sheet.get("headers", []), sheet.get("merges", [])
+        dims = sheet.get("dims") or {}
+        if not isinstance(headers, (list, tuple)) or not isinstance(merges, (list, tuple)):
+            raise invalid
+        if not isinstance(dims, dict) or not all(
+            isinstance(t, str) for t in (*headers, *merges)
+        ):
+            raise invalid
+        sheets.append(
+            {
+                "name": sheet["name"],
+                "name_norm": norm(sheet["name"]),
+                "ordinal": n,
+                "visibility": str(sheet.get("visibility") or "visible"),
+                "dims": {k: dims.get(k) for k in ("rows", "cols")},
+                # 정렬 뒤 절단하므로 같은 입력에는 항상 같은 bounded 목록이 나온다.
+                "headers": sorted(set(headers))[:SIGNATURE_TERMS],
+                "merges": sorted(set(merges))[:SIGNATURE_TERMS],
+            }
+        )
+    return {
+        "algorithm": ALGORITHM,
+        "window": {"rows": SIGNATURE_ROWS, "cols": SIGNATURE_COLS},
+        "sheets": sheets,
+    }
+
+
+def store_signature(
+    service, version_id, principal, checkpoint=lambda **kw: None, described=None
+):
+    """구조 서명을 계산해 캐시한다.
+
+    `described`는 같은 등록 절차의 `describe` 응답이다. 그 안의 `capabilities`(제공자 authorize(extract) 결과)와
+    `signature`가 있으면 별도의 authorize/signature Reader 호출 없이 재사용한다. 없으면 기존 경로로 호출한다.
+    """
     with service.db.connect() as conn:
         cached = conn.execute(
             "SELECT algorithm FROM version_signature WHERE document_version_id=?",
@@ -74,65 +131,46 @@ def store_signature(service, version_id, principal, checkpoint=lambda **kw: None
         ).fetchone()
     if cached and cached["algorithm"] == ALGORITHM:
         return {"status": "ready", "cached": True, "algorithm": ALGORITHM}
-    version, _ = service.authorize(version_id, principal, "extract", checkpoint)
+    described = described if isinstance(described, dict) else {}
+    caps = described.get("capabilities")
+    if isinstance(caps, dict):
+        version = service.version(version_id)
+        service.grant(version, principal, caps, "extract")
+    else:
+        version, _ = service.authorize(version_id, principal, "extract", checkpoint)
     if not version.get("provider_version_token"):
         raise Problem(
             "VERSION_REQUIRED",
             "제공자가 고정 원본 버전을 지원해야 구조 서명을 계산할 수 있습니다.",
         )
-    with service.db.connect() as conn:
-        sheets = [
-            dict(r)
-            for r in conn.execute(
-                "SELECT sheet_id,name,ordinal,visibility,estimated_rows,estimated_cols FROM sheet WHERE document_version_id=? ORDER BY ordinal",
-                (version_id,),
+    raw = described.get("signature")
+    if not (isinstance(raw, dict) and isinstance(raw.get("sheets"), list)):
+        with service.db.connect() as conn:
+            sheets = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT sheet_id,name,ordinal,visibility,estimated_rows,estimated_cols FROM sheet WHERE document_version_id=? ORDER BY ordinal",
+                    (version_id,),
+                )
+            ]
+        try:
+            raw = service.read(
+                version["provider"],
+                principal,
+                "signature",
+                {
+                    "source_ref": version["source_ref"],
+                    "expected_token": version["provider_version_token"],
+                    "rows": SIGNATURE_ROWS,
+                    "cols": SIGNATURE_COLS,
+                },
+                checkpoint,
             )
-        ]
-    try:
-        raw = service.read(
-            version["provider"],
-            principal,
-            "signature",
-            {
-                "source_ref": version["source_ref"],
-                "expected_token": version["provider_version_token"],
-                "rows": SIGNATURE_ROWS,
-                "cols": SIGNATURE_COLS,
-            },
-            checkpoint,
-        )
-    except Problem as exc:
-        if exc.code != "READER_FAILED":
-            raise
-        raw = _fallback_signature(service, version, sheets, principal, checkpoint)
-    if not isinstance(raw, dict) or not isinstance(raw.get("sheets"), list):
-        raise Problem(
-            "INVALID_READER_CONTRACT", "제공자의 구조 서명 응답이 유효하지 않습니다."
-        )
-    if raw.get("token") != version["provider_version_token"]:
-        raise Problem(
-            "SOURCE_VERSION_CHANGED", "원본이 변경되었습니다. 새 버전을 등록하세요.", 409
-        )
-    signature = {
-        "algorithm": ALGORITHM,
-        "window": {"rows": SIGNATURE_ROWS, "cols": SIGNATURE_COLS},
-        "sheets": [
-            {
-                "name": str(s["name"]),
-                "name_norm": norm(s["name"]),
-                "ordinal": n,
-                "visibility": s.get("visibility") or "visible",
-                "dims": s.get("dims") or {},
-                "headers": sorted({str(t) for t in s.get("headers", [])})[
-                    :SIGNATURE_TERMS
-                ],
-                "merges": sorted({str(m) for m in s.get("merges", [])})[
-                    :SIGNATURE_TERMS
-                ],
-            }
-            for n, s in enumerate(raw["sheets"][:SIGNATURE_SHEETS])
-        ],
-    }
+        except Problem as exc:
+            if exc.code != "READER_FAILED":
+                raise
+            raw = _fallback_signature(service, version, sheets, principal, checkpoint)
+    signature = _normalize(raw, version)
     computed = now()
     sha = digest(signature)
     with service.db.connect(write=True) as conn:
@@ -180,13 +218,13 @@ def similarity(target, source):
             "only_target": _preview(t_names - s_names),
             "only_source": _preview(s_names - t_names),
         },
+        # 헤더·병합 성분은 개수만 돌려준다. 다른 문서의 셀 문자열은 응답에 싣지 않는다.
         "headers": {
             "score": scores["headers"],
             "weight": WEIGHTS["headers"],
             "shared_count": len(t_headers & s_headers),
             "target_count": len(t_headers),
             "source_count": len(s_headers),
-            "shared": _preview(t_headers & s_headers),
         },
         "merges": (
             {
@@ -195,7 +233,6 @@ def similarity(target, source):
                 "shared_count": len(t_merges & s_merges),
                 "target_count": len(t_merges),
                 "source_count": len(s_merges),
-                "shared": _preview(f"{n}!{m}" for n, m in t_merges & s_merges),
             }
             if scores["merges"] is not None
             else None
@@ -332,6 +369,7 @@ def list_suggestions(service, version_id, threshold, limit):
     return {
         **base,
         "items": items,
+        "has_more": len(scored) > limit,
         "signature_status": "ready",
         "candidates": len(candidates),
         "unsigned_candidates": unsigned,
@@ -414,8 +452,9 @@ def transplant(service, version_id, body, principal):
                 "SELECT mapping_revision_id FROM mapping_head WHERE application_id=? AND rule_key=?",
                 (source["application_id"], rule["rule_key"]),
             ).fetchone()
+            # head가 없으면 검수자가 거절하지 않은 최신 리비전을 쓴다. 거절된 명세는 후보로 되살리지 않는다.
             revision = conn.execute(
-                "SELECT * FROM mapping_revision WHERE application_id=? AND rule_key=? AND mapping_revision_id=coalesce(?,(SELECT x.mapping_revision_id FROM mapping_revision x WHERE x.application_id=? AND x.rule_key=? ORDER BY x.revision_no DESC LIMIT 1))",
+                "SELECT * FROM mapping_revision WHERE application_id=? AND rule_key=? AND mapping_revision_id=coalesce(?,(SELECT x.mapping_revision_id FROM mapping_revision x WHERE x.application_id=? AND x.rule_key=? AND x.status<>'rejected' ORDER BY x.revision_no DESC LIMIT 1))",
                 (
                     source["application_id"],
                     rule["rule_key"],
@@ -425,6 +464,15 @@ def transplant(service, version_id, body, principal):
                 ),
             ).fetchone()
             if revision is None:
+                if conn.execute(
+                    "SELECT 1 FROM mapping_revision WHERE application_id=? AND rule_key=?",
+                    (source["application_id"], rule["rule_key"]),
+                ).fetchone():
+                    raise Problem(
+                        "SOURCE_REJECTED",
+                        f"원본 적용 건의 규칙 {rule['rule_key']}은(는) 거절된 리비전만 있어 이식할 수 없습니다.",
+                        409,
+                    )
                 raise Problem(
                     "SOURCE_INCOMPLETE", "원본 적용 건에 모든 규칙의 매핑이 없습니다.", 409
                 )
@@ -515,11 +563,17 @@ def sign_versions(service, version_id, principal):
     if version_id:
         targets = [version_id]
     else:
+        # 현재 버전과, 제안 후보가 되는 템플릿 적용 버전(이전 버전 포함) 중 현재 알고리즘 서명이 없는 것을 모두 계산한다.
         with service.db.connect() as conn:
             targets = [
                 r[0]
                 for r in conn.execute(
-                    "SELECT d.current_version_id FROM document d WHERE d.current_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM version_signature s WHERE s.document_version_id=d.current_version_id) ORDER BY d.display_name"
+                    """SELECT v.document_version_id FROM document_version v JOIN document d USING(document_id)
+                       WHERE (d.current_version_id=v.document_version_id
+                              OR EXISTS (SELECT 1 FROM template_application a WHERE a.document_version_id=v.document_version_id))
+                         AND NOT EXISTS (SELECT 1 FROM version_signature s WHERE s.document_version_id=v.document_version_id AND s.algorithm=?)
+                       ORDER BY d.display_name,v.revision_no,v.document_version_id""",
+                    (ALGORITHM,),
                 )
             ]
     for vid in targets:

@@ -177,7 +177,9 @@ Factory는 `factory(root: Path, provider: str, principal: str)`로 Reader를 반
   허용한다는 계약이다. 권한을 획득하는 통로가 아니며 실제 DRM 권한을 매번 확인해야 한다.
 - `describe(source_ref)`: `token`, `filename`, 선택적 작성자/작성일/바이트 크기/Excel epoch,
   `sheets`를 반환한다. 시트명은 버전 내 유일해야 한다. 과거 버전의 보존된 제공자 참조가 있으면
-  `version_source_ref`를 함께 반환한다.
+  `version_source_ref`를 함께 반환한다. 선택적으로 `capabilities`(`authorize(source_ref,"extract")` 결과)와
+  `signature`(아래 구조 서명, `signature(...)`와 같은 형태)를 함께 돌려주면 등록이 이를 재사용해
+  Reader 프로세스를 다시 띄우지 않는다. 없으면 서비스가 `authorize`·`signature`를 따로 호출한다.
 - `viewport(source_ref,expected_token,sheet,r1,c1,rows,cols)`: `mode`, `layout_revision`(고정 원본 토큰),
   범위, 폭/높이, 행·열의 픽셀 위치, 병합을 포함하는 `cells`, 범위에 필요한 `images`를 반환한다.
   native는 승인된 원본 이미지와 같은 좌표계의 셀 hit map을 함께 반환해야 한다.
@@ -249,22 +251,35 @@ FastAPI `/docs`가 요청 파라미터의 기준이다. POST 작업은 `request_
 
 ## 문서군 제안·레시피 이식
 
-`kg/v2/suggest.py`는 등록한 문서 버전마다 **구조 서명**을 계산해 런타임 캐시 테이블 `version_signature`에 둔다.
-서명은 시트명(정규형), 앞 30행×30열 창의 문자열 라벨 정규형(숫자·날짜·숫자 문자열 제외, 시트당 200개),
-같은 창에 걸친 병합 범위(시트당 200개), 시트 크기 추정치이며 원본 바이트·데이터 값은 저장하지 않는다.
+`kg/v2/suggest.py`는 등록한 문서 버전마다 **구조 서명**(`structure-v2`)을 계산해 런타임 캐시 테이블 `version_signature`에 둔다.
+서명은 시트명(정규형), 앞 30행×30열 창에서 **라벨로 판정한 셀**의 문자열 정규형(시트당 200개, 정렬 뒤 절단),
+같은 창에 걸친 병합 범위(시트당 200개), 시트 크기 추정치다. 원본 바이트는 저장하지 않는다.
+라벨 판정은 `readers.signature_terms`의 설명 가능한 규칙이다: 빈 행 다음 첫 행(블록 머리)·병합 범위의 왼쪽 위 셀·
+문자열만 있는 행·오른쪽/아래 이웃이 숫자인 셀만 후보로 하고, 숫자·날짜·숫자 문자열, `lot-001`/`no.12` 같은 식별자 모양
+문자열, 4행 이상 문자열만 이어지는 표의 둘째 행부터, 같은 열에서 4칸 이상 연속되는 값 옆 문자열(이름·자유 텍스트 같은
+레코드 값)은 제외한다. 이는 휴리스틱이므로 데이터 셀이 라벨로 판정될 가능성을 0으로 보장하지는 않지만,
+같은 양식에 데이터만 다른 문서는 같은 서명 해시를 가진다(테스트로 확인). 알고리즘 이름이 바뀌면 이전 캐시는 재계산 대상이다.
 `version_signature`는 설계 DDL(`db/v2/schema_sqlite.sql`)에 속하지 않는 재계산 가능한 파생 캐시이며
 `runtime_job`처럼 `kg/v2/db.py`가 `CREATE TABLE IF NOT EXISTS`로 만든다(schema_meta 버전 변경 없음).
 
-- 계산 시점: `Service.register()` 끝(등록 트랜잭션 커밋 뒤). 제공자 `authorize(required="extract")`가 허용할 때만 저장하고,
-  실패해도 등록은 성공하며 결과에 `signature: "failed:<code>"`를 남긴다. 서명 연산이 없는 보안 Reader는 기존 `viewport` 계약으로 대체한다.
+- 계산 시점: `Service.register()` 끝(등록 트랜잭션 커밋 뒤). `describe`가 함께 돌려준 `capabilities`/`signature`를 재사용하므로
+  기본 Reader는 등록 한 건에 Reader 프로세스를 한 번만 띄운다(없으면 `authorize(required="extract")`·`signature`를 따로 호출).
+  어느 경로든 `can_view`·`can_extract`·만료 시각을 검사한 뒤에만 저장하며 권한 관찰(`access_observation`)을 남긴다.
+  서명 실패(권한, `INVALID_READER_CONTRACT`, 예상하지 못한 예외 `INTERNAL`)는 등록을 실패시키지 않고 결과에
+  `signature: "failed:<code>"`를 남긴다(취소만 전파). 서명 연산이 없는 보안 Reader는 기존 `viewport` 계약으로 대체한다.
 - 백필: `POST /versions/{id}/signature` 또는 `python -m kg.v2 sign --ws <workspace> [--version <id>]`.
+  `--version` 없이 실행하면 현재 버전과 템플릿을 연결한 모든 버전(이전 버전 포함) 중 현재 알고리즘 서명이 없는 것을 계산한다.
 - 유사도: `0.4·시트명 Jaccard + 0.4·헤더 토큰 Jaccard + 0.2·병합범위 Jaccard`. 양쪽 모두 비어 있는 성분은 제외하고 가중치를 재정규화한다.
-  `GET /versions/{id}/suggestions`는 템플릿을 연결한 다른 문서 버전(같은 문서의 이전 버전 포함, 최근 2,000건)을 캐시된 서명만으로 비교한다.
-  원본을 열지 않으며 기본 임계값 0.5, 최대 100건의 bounded 응답이다.
+  `GET /versions/{id}/suggestions`는 대상 버전의 원본 권한(`authorize`)을 확인한 뒤 템플릿을 연결한 다른 문서 버전
+  (같은 문서의 이전 버전 포함, 최근 2,000건)을 캐시된 서명만으로 비교한다. 후보 원본을 열지 않으며 기본 임계값 0.5,
+  최대 100건의 bounded 응답이고 `has_more`는 임계값을 넘는 후보가 `limit`보다 많은지 알린다.
+  `breakdown`은 시트명 성분만 이름(공통/대상만/원본만)을 싣고 헤더·병합 성분은 개수(`shared_count`/`target_count`/`source_count`)로만 설명한다.
+  다른 문서의 셀 문자열은 응답에 싣지 않는다.
 - 이식: `POST /versions/{id}/applications/from-suggestion`는 원본 적용 건과 같은 템플릿 버전으로 새 `template_application`을 만들고,
   시트 역할을 시트명 정규형 일치로 연결한다(불일치는 `SHEET_UNMATCHED`, `sheet_bindings`로 직접 지정 가능).
-  규칙별 원본 head(없으면 최신) 리비전을 `origin=candidate`, `status=proposed`의 새 `mapping_revision`으로 복사하며
-  `mapping_head`는 만들지 않는다(규칙 §4.10). 출처 적용 건·리비전은 `reason`과 `evidence_json.transplanted_from`에 남긴다.
+  규칙별 원본 head(없으면 거절되지 않은 최신) 리비전을 `origin=candidate`, `status=proposed`의 새 `mapping_revision`으로 복사하며
+  `mapping_head`는 만들지 않는다(규칙 §4.10). 거절된 리비전만 남은 규칙은 `SOURCE_REJECTED`(409)로 거부한다.
+  출처 적용 건·리비전은 `reason`과 `evidence_json.transplanted_from`에 남긴다.
   승인은 기존 `POST /applications/{id}/mappings/{id}/revisions`의 `expected_seq: 0` 경로로만 이루어진다.
 
 ## 검증과 다음 연동
