@@ -5,6 +5,12 @@
 #
 # 레거시 canonical 파이프라인(src.inspect → canonicalize)은 dvc.legacy.yaml로
 # 이동 — 유지보수 모드이며 새 기능은 받지 않는다 (docs/MIGRATION.md).
+vars:
+  # v2_export_build 스테이지의 인자. 승인된 빌드 ID와 출력 폴더를 지정한 뒤 `dvc repro v2_export_build`.
+  - v2_export:
+      ws: domains/financier
+      build_id: REPLACE_WITH_APPROVED_BUILD_ID
+      out: exports/v2/REPLACE_WITH_APPROVED_BUILD_ID
 stages:
   kg_ingest:
     # 원본/파서 코어/사전이 바뀌면 재실행. kg ingest는 파일 해시 기반
@@ -23,3 +29,13 @@ stages:
       - src/mapping
       - src/units
       - src/common
+  v2_export_build:
+    # 승인된 v2 빌드 1건을 불변 snapshot(사용자 SQLite + manifest.json)으로 내보낸다.
+    # 활성 data/kg/v2.db와 DRM 원본은 deps/outs에 두지 않는다(docs/design/db-schema-v2.md §10).
+    # 파이프라인 없이 쓰려면: python -m kg.v2 export ... --out exports/v2/<id> && dvc add exports/v2/<id>
+    cmd: python -m kg.v2 export --ws ${v2_export.ws} --build ${v2_export.build_id} --out ${v2_export.out}
+    deps:
+      - kg/v2
+      - db/v2/schema_sqlite.sql
+    outs:
+      - ${v2_export.out}

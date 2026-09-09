@@ -1,5 +1,8 @@
 import { defineConfig } from "@playwright/test";
 
+// v1 러너(helpers.mjs)와 같은 이름의 환경변수. 미설정 시 `npx playwright install`이 설치한 chromium을 쓴다.
+const executablePath = process.env.CHROMIUM_PATH;
+
 export default defineConfig({
   testDir: "./v2",
   testMatch: "**/*.spec.ts",
@@ -19,6 +22,7 @@ export default defineConfig({
     viewport: { width: 1600, height: 1100 },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
+    launchOptions: executablePath ? { executablePath } : {},
   },
   webServer: {
     command: `${process.env.KG_E2E_PYTHON || "python"} v2/serve.py`,

@@ -23,6 +23,9 @@ pip install -e ".[web,test]"
 python -m examples.schema_v2.runtime_demo --workspace /tmp/data-gathering-v2-demo
 python -m kg.v2 --ws /tmp/data-gathering-v2-demo --port 8010
 # http://localhost:8010/?v2=1
+# 완료된 빌드를 DVC 추적 폴더로 내보내기 / KG 리비전의 Apache AGE projection SQL 생성
+python -m kg.v2 export --ws /tmp/data-gathering-v2-demo --build <build_id> --out exports/v2/<build_id>
+python -m kg.v2 age-projection --ws /tmp/data-gathering-v2-demo --kg current --out age/kg.sql
 ```
 
 문서 → 원본 · 검수 → 승인/추출 → 도메인 개념별 소스 선택 → 사용자 DB 순서로 사용한다.
@@ -116,7 +119,9 @@ python -m kg.cli --ws domains/financier <command>
 
 DVC: `dvc add data/raw`(원본 버전닝) + `dvc.yaml`의 `kg_ingest` 스테이지가
 현행 재적재 흐름이다. 재현성(무엇이 어떤 원본·설정에서 나왔나)은 kg.db의
-문서 버전 해시·빌드 서명·lineage가 담당한다.
+문서 버전 해시·빌드 서명·lineage가 담당한다. v2는 `v2_export_build` 스테이지(또는
+`python -m kg.v2 export` + `dvc add`)로 승인된 빌드 snapshot만 DVC에 올린다 — 활성 `v2.db`와
+DRM 원본은 제외한다([상세](docs/design/db-schema-v2-postgres.md)).
 
 ## 테스트
 
