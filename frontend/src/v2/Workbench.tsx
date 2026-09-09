@@ -24,6 +24,7 @@ import ConceptEditor from "./ConceptEditor";
 import DomainGraph from "./DomainGraph";
 import type { Graph, GraphNode } from "./DomainGraph";
 import Recrawl from "./Recrawl";
+import Suggestions from "./Suggestions";
 import "./workbench.css";
 import "../product.css";
 import { PRODUCT_NAME, PRODUCT_DESCRIPTION, PRODUCT_STEPS } from "../product";
@@ -522,6 +523,7 @@ function DocumentDetail() {
           <Pager page={sheets} />
         </div>
       </div>
+      <Suggestions />
       <AssignTemplate />
     </section>
   );

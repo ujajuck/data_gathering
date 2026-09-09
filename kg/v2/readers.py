@@ -805,3 +805,65 @@ class XlsxReader:
             wb.close()
         self._check(source_ref, token)
         return result
+
+    def signature(self, source_ref, expected_token, rows=30, cols=30):
+        if not 1 <= rows <= 100 or not 1 <= cols <= 30:
+            raise Problem(
+                "VIEWPORT_LIMIT", "서명 범위는 100행·30열 이내여야 합니다.", 413
+            )
+        path, token = self._check(source_ref, expected_token)
+        # read_only 워크시트는 병합 범위를 제공하지 않으므로 viewport와 같은 방식으로 연다.
+        wb = load_workbook(path, data_only=True, keep_links=False)
+        try:
+            sheets = []
+            for n, ws in enumerate(wb.worksheets[:SIGNATURE_SHEETS]):
+                terms = set()
+                for row in ws.iter_rows(
+                    min_row=1,
+                    max_row=min(rows, ws.max_row or 1),
+                    min_col=1,
+                    max_col=min(cols, ws.max_column or 1),
+                    values_only=True,
+                ):
+                    for value in row:
+                        term = header_term(value)
+                        if term:
+                            terms.add(term)
+                merges = sorted(
+                    str(m)
+                    for m in ws.merged_cells.ranges
+                    if m.min_row <= rows and m.min_col <= cols
+                )[:SIGNATURE_TERMS]
+                sheets.append(
+                    {
+                        "name": ws.title,
+                        "ordinal": n,
+                        "visibility": {"veryHidden": "very_hidden"}.get(
+                            ws.sheet_state, ws.sheet_state
+                        ),
+                        "dims": {"rows": ws.max_row, "cols": ws.max_column},
+                        "headers": sorted(terms)[:SIGNATURE_TERMS],
+                        "merges": merges,
+                    }
+                )
+        finally:
+            wb.close()
+        self._check(source_ref, token)
+        return {"token": token, "sheets": sheets}
+
+
+SIGNATURE_ROWS, SIGNATURE_COLS, SIGNATURE_SHEETS, SIGNATURE_TERMS = 30, 30, 64, 200
+
+
+def header_term(value):
+    """문자열 라벨의 정규형만 반환한다. 숫자·날짜·숫자 문자열은 데이터로 보고 제외한다."""
+    if not isinstance(value, str):
+        return None
+    term = norm(value)
+    if not term or len(term) > 64:
+        return None
+    try:
+        decimal(term)
+    except Problem:
+        return term
+    return None

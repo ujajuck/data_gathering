@@ -187,6 +187,30 @@ class Service:
         document_id=None,
         checkpoint=lambda **kw: None,
     ):
+        result = self._register_version(
+            source_ref, provider, principal, document_id, checkpoint
+        )
+        from .suggest import store_signature
+
+        # 구조 서명은 등록 트랜잭션이 끝난 뒤 계산하며 실패해도 등록은 유지한다.
+        try:
+            result["signature"] = store_signature(
+                self, result["version_id"], principal, checkpoint
+            )["status"]
+        except Problem as exc:
+            if exc.code == "CANCELLED":
+                raise
+            result["signature"] = "failed:" + exc.code
+        return result
+
+    def _register_version(
+        self,
+        source_ref,
+        provider,
+        principal,
+        document_id=None,
+        checkpoint=lambda **kw: None,
+    ):
         if not isinstance(source_ref, str) or not source_ref or len(source_ref) > 2048:
             raise Problem("INVALID_SOURCE", "원본 참조가 유효하지 않습니다.")
         metadata = self.read(
