@@ -232,7 +232,7 @@ FastAPI `/docs`가 요청 파라미터의 기준이다. POST 작업은 `request_
 
 | 흐름 | 경로 (`/api/v2` 아래) |
 |---|---|
-| 원본 등록/버전 | `POST /documents/register`, `GET /documents`(문서마다 현재 버전의 `templates[]`·`template_count`·`review_pending`(미승인 규칙 헤드 수)·`roots[]`(발행 실행 기준 문서군 L1 뿌리, 최대 8개)·`root_count`를 같은 SQL로 계산; `sort=template|review` 추가; 원본은 열지 않음), `/documents/{id}/versions`, `/versions/{id}/sheets` |
+| 원본 등록/버전 | `POST /documents/register`, `GET /documents`(문서마다 현재 버전의 `templates[]`(적용 건마다 `application_id`·`scope_key`·`state`·`review_pending`)·`template_count`(적용 건 수: 같은 템플릿 버전을 scope를 달리해 여러 번 적용할 수 있다)·`review_pending`(미승인 규칙 헤드 수)·`roots[]`(발행 실행 기준 문서군 L1 뿌리, 최대 8개; 이름은 매핑이 고정된 KG 리비전의 것 = `GET /kg/{pinned}/graph`의 group, 문서가 여러 고정 리비전에 걸치면 가장 새 고정 리비전; 그래프의 2000 노드 절단은 적용하지 않음)·`root_count`. 정렬 키(`sort=template|review`)는 페이지 SQL이 인덱스로 계산하고 `templates[]`·`roots[]`는 같은 읽기 트랜잭션에서 페이지 문서에 대해서만 두 번째 메타데이터 SQL로 계산; `template=` 필터가 있으면 `sort=template`은 필터에 맞는 첫 템플릿 기준; 원본은 열지 않음), `/documents/{id}/versions`, `/versions/{id}/sheets` |
 | 권한/표시 | `GET /versions/{id}/access`, `POST /viewports` |
 | 작업 | `GET /jobs/{id}`, `POST /jobs/{id}/cancel` |
 | KG | `POST /kg/import`, `/kg/import-current`, `GET /kg/revisions`, `/kg/{id}/concepts`, `/kg/{id}/aliases`, `GET /kg/{id}/graph`(개념 트리 + 현재 문서 버전·발행 실행 기준 출처 수, 최대 2000 노드 초과 시 `truncated`) |

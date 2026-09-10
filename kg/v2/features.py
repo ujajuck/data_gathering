@@ -29,36 +29,55 @@ def selection_cte(kg, roots, excluded):
 
 
 # 목록의 문서군·템플릿 요약. 메타데이터만 읽고 원본 파일은 열지 않는다(db-schema-v2 §4/§6).
-# 문서군 = coverage_graph()와 같은 규칙: 현재 문서 버전의 현재 발행 실행에 추출된 개념을 parent_of 간선으로
-# L1까지 올린 뿌리(각 단계에서 level-1인 활성 부모 중 concept_id가 가장 작은 것; 폐기 개념은 사슬을 끊는다).
+# 페이지 SQL(document_query)은 정렬 키에 필요한 값(first_template, review_pending)만 인덱스로 계산하고,
+# templates[]·roots[]는 페이지 행에 대해서만 document_summary_query()가 같은 읽기 트랜잭션의 두 번째 SQL로 계산한다
+# (말뭉치 전체를 훑는 CTE를 매 요청에 붙이지 않는다).
+# 문서군 = coverage_graph()와 같은 뿌리 규칙: 현재 문서 버전의 현재 발행 실행에 추출된 개념을 매핑이 고정된 KG 리비전의
+# parent_of 간선으로 L1까지 올린 뿌리(각 단계에서 level-1인 활성 부모 중 concept_id가 가장 작은 것; 폐기 개념은 사슬을 끊는다).
+# 뿌리 이름도 고정된 KG 리비전의 이름이다(문서가 여러 고정 리비전에 걸치면 가장 새 고정 리비전) = GET /kg/{pinned}/graph의 group.
+# 그래프 화면의 NODE_CAP(2000) 절단은 적용하지 않는다 — 그래프가 `truncated`인 KG에서는 목록이 그래프가 떨어뜨린
+# 뿌리를 보여줄 수 있다(의도된 유일한 차이).
+# SQLite 3.44 전용 집계 ORDER BY는 쓰지 않는다: 순서 번호 rn을 JSON에 넣고 api.py가 정렬 후 제거한다.
 ROOT_CAP = 8
-DOCUMENT_CTES = """WITH RECURSIVE
+# 미승인 헤드 = (application_id, rule_key)별 max(revision_no)가 approved가 아닌 규칙(db-schema-v2 §6).
+# UNIQUE(application_id, rule_key, revision_no) 자동 인덱스를 타므로 mapping_revision 전체 스캔이 없다.
+PENDING_HEADS = """(SELECT count(*) FROM mapping_revision m WHERE m.application_id=a.application_id AND m.status<>'approved'
+   AND m.revision_no=(SELECT max(z.revision_no) FROM mapping_revision z WHERE z.application_id=m.application_id AND z.rule_key=m.rule_key))"""
+# 문서 단위: template_application(app_source 인덱스)을 거쳐 적용 건별 헤드를 센다. 복합 FK로 m.document_version_id=a.document_version_id.
+DOCUMENT_PENDING_HEADS = """(SELECT count(*) FROM template_application a JOIN mapping_revision m ON m.application_id=a.application_id
+   WHERE a.document_version_id=d.current_version_id AND m.status<>'approved'
+   AND m.revision_no=(SELECT max(z.revision_no) FROM mapping_revision z WHERE z.application_id=m.application_id AND z.rule_key=m.rule_key))"""
+SUMMARY_CTES = """WITH RECURSIVE
+page(document_id, version_id) AS (
+  SELECT document_id, current_version_id FROM document WHERE document_id IN ({ids})
+),
 apps AS (
-  SELECT a.application_id, a.document_version_id, tv.template_id, a.template_version_id, t.name, tv.revision_no,
-    CASE
-      WHEN EXISTS(SELECT 1 FROM extraction_run e WHERE e.application_id=a.application_id AND e.status='failed'
-                  AND e.created_at=(SELECT max(z.created_at) FROM extraction_run z WHERE z.application_id=a.application_id)) THEN 'failed'
-      WHEN a.published_run_id IS NOT NULL THEN 'published'
-      WHEN EXISTS(SELECT 1 FROM mapping_revision m WHERE m.application_id=a.application_id AND m.status<>'approved'
-                  AND m.revision_no=(SELECT max(z.revision_no) FROM mapping_revision z WHERE z.application_id=m.application_id AND z.rule_key=m.rule_key)) THEN 'review'
-      ELSE 'pending' END state,
-    row_number() OVER (PARTITION BY a.document_version_id ORDER BY t.name, tv.revision_no, a.application_id) rn
-  FROM template_application a
-  JOIN template_version tv ON tv.template_version_id=a.template_version_id
-  JOIN template t ON t.template_id=tv.template_id
+  SELECT application_id, document_version_id, scope_key, template_id, template_version_id, name, revision_no, review_pending,
+    CASE WHEN failed THEN 'failed' WHEN published THEN 'published' WHEN review_pending>0 THEN 'review' ELSE 'pending' END state,
+    row_number() OVER (PARTITION BY document_version_id ORDER BY name, revision_no, application_id) rn
+  FROM (
+    SELECT a.application_id, a.document_version_id, a.scope_key, tv.template_id, a.template_version_id, t.name, tv.revision_no,
+      EXISTS(SELECT 1 FROM extraction_run e WHERE e.application_id=a.application_id AND e.status='failed'
+             AND e.created_at=(SELECT max(z.created_at) FROM extraction_run z WHERE z.application_id=a.application_id)) failed,
+      a.published_run_id IS NOT NULL published,
+      """ + PENDING_HEADS + """ review_pending
+    FROM page p JOIN template_application a ON a.document_version_id=p.version_id
+    JOIN template_version tv ON tv.template_version_id=a.template_version_id
+    JOIN template t ON t.template_id=tv.template_id
+  )
 ),
 cov AS (
-  SELECT DISTINCT d.document_id, m.kg_revision_id kg, m.concept_id
-  FROM document d
-  JOIN template_application a ON a.document_version_id=d.current_version_id AND a.published_run_id IS NOT NULL
+  SELECT DISTINCT p.document_id, m.kg_revision_id kg, m.concept_id
+  FROM page p
+  JOIN template_application a ON a.document_version_id=p.version_id AND a.published_run_id IS NOT NULL
   JOIN extraction_run r ON r.run_id=a.published_run_id AND r.status='succeeded'
-  JOIN extracted_series s ON s.run_id=r.run_id AND s.document_version_id=d.current_version_id
+  JOIN extracted_series s ON s.run_id=r.run_id AND s.document_version_id=p.version_id
   JOIN mapping_revision m ON m.mapping_revision_id=s.mapping_revision_id AND m.application_id=a.application_id
   WHERE m.concept_id IS NOT NULL
 ),
 climb(kg, start, cid, lvl) AS (
-  SELECT c.kg_revision_id, c.concept_id, c.concept_id, c.level FROM domain_concept c
-  WHERE c.status='active' AND EXISTS(SELECT 1 FROM cov WHERE cov.kg=c.kg_revision_id AND cov.concept_id=c.concept_id)
+  SELECT cov.kg, cov.concept_id, cov.concept_id, c.level FROM cov
+  CROSS JOIN domain_concept c ON c.kg_revision_id=cov.kg AND c.concept_id=cov.concept_id AND c.status='active'
   UNION ALL
   SELECT u.kg, u.start,
     (SELECT min(e.from_concept_id) FROM domain_edge e
@@ -67,17 +86,46 @@ climb(kg, start, cid, lvl) AS (
     u.lvl-1
   FROM climb u WHERE u.lvl>1 AND u.cid IS NOT NULL
 ),
+-- CROSS JOIN은 SQLite의 조인 순서 힌트: 페이지 범위의 cov를 바깥 루프로 두고 domain_concept는 PK로만 찾는다.
+doc_root_kg AS (
+  SELECT document_id, root_id, kg,
+    row_number() OVER (PARTITION BY document_id, root_id ORDER BY revision_no DESC) k
+  FROM (
+    SELECT DISTINCT cov.document_id, u.cid root_id, u.kg, r.revision_no
+    FROM cov JOIN climb u ON u.kg=cov.kg AND u.start=cov.concept_id AND u.lvl=1 AND u.cid IS NOT NULL
+    JOIN kg_revision r ON r.kg_revision_id=u.kg
+  )
+),
 doc_root AS (
   SELECT document_id, root_id, name,
     row_number() OVER (PARTITION BY document_id ORDER BY name, root_id) rn
   FROM (
-    SELECT DISTINCT cov.document_id, u.cid root_id,
-      (SELECT c.name FROM domain_concept c JOIN kg_revision k ON k.kg_revision_id=c.kg_revision_id
-         WHERE c.concept_id=u.cid ORDER BY k.revision_no DESC LIMIT 1) name
-    FROM cov JOIN climb u ON u.kg=cov.kg AND u.start=cov.concept_id AND u.lvl=1 AND u.cid IS NOT NULL
+    SELECT x.document_id, x.root_id,
+      (SELECT c.name FROM domain_concept c WHERE c.kg_revision_id=x.kg AND c.concept_id=x.root_id) name
+    FROM doc_root_kg x WHERE x.k=1
   )
 )
 """
+
+
+def document_summary_query(document_ids):
+    """페이지 문서들의 templates[]·template_count·roots[]·root_count. 페이지 행(≤100)에만 바인딩된다."""
+    ids = ",".join("?" for _ in document_ids)
+    sql = (
+        SUMMARY_CTES.replace("{ids}", ids)
+        + """SELECT p.document_id,
+      (SELECT json_group_array(json_object('application_id',application_id,'scope_key',scope_key,'template_id',template_id,
+         'template_version_id',template_version_id,'name',name,'revision_no',revision_no,'state',state,'review_pending',review_pending,'rn',rn))
+         FROM apps WHERE apps.document_version_id=p.version_id) templates_json,
+      (SELECT count(*) FROM apps WHERE apps.document_version_id=p.version_id) template_count,
+      (SELECT json_group_array(json_object('concept_id',root_id,'name',name,'rn',rn)) FROM doc_root g
+         WHERE g.document_id=p.document_id AND g.rn<="""
+        + str(ROOT_CAP)
+        + """) roots_json,
+      (SELECT count(*) FROM doc_root g WHERE g.document_id=p.document_id) root_count
+    FROM page p"""
+    )
+    return sql, tuple(document_ids)
 
 
 def document_query(
@@ -102,9 +150,9 @@ def document_query(
         "template": "CASE WHEN first_template IS NULL THEN '1' ELSE '0'||first_template END",
         "review": "review_pending",
     }[sort]
+    # template= 필터가 있으면 정렬 키도 필터에 맞는 첫 템플릿(apps.rn과 같은 순서)이다. templates[]는 이름순 그대로다.
     sql = (
-        DOCUMENT_CTES
-        + """SELECT x.*,"""
+        """SELECT x.*,"""
         + sort_sql
         + """ sort_value FROM (
       SELECT d.document_id,d.display_name,d.provider,d.file_type,d.current_version_id,d.registered_at,
@@ -115,25 +163,28 @@ def document_query(
           WHEN NOT EXISTS(SELECT 1 FROM template_application a WHERE a.document_version_id=d.current_version_id) THEN 'unassigned'
           WHEN EXISTS(SELECT 1 FROM template_application a JOIN extraction_run e USING(application_id) WHERE a.document_version_id=d.current_version_id AND e.status='failed' AND e.created_at=(SELECT max(z.created_at) FROM extraction_run z WHERE z.application_id=a.application_id)) THEN 'failed'
           WHEN NOT EXISTS(SELECT 1 FROM template_application a WHERE a.document_version_id=d.current_version_id AND a.published_run_id IS NULL) THEN 'published'
-          WHEN EXISTS(SELECT 1 FROM mapping_revision m WHERE m.document_version_id=d.current_version_id AND m.status<>'approved' AND m.revision_no=(SELECT max(z.revision_no) FROM mapping_revision z WHERE z.application_id=m.application_id AND z.rule_key=m.rule_key)) THEN 'review'
+          WHEN """
+        + DOCUMENT_PENDING_HEADS
+        + """>0 THEN 'review'
           ELSE 'pending' END extraction_status,
-        (SELECT json_group_array(json_object('application_id',application_id,'template_id',template_id,'template_version_id',template_version_id,'name',name,'revision_no',revision_no,'state',state) ORDER BY rn)
-           FROM apps WHERE apps.document_version_id=d.current_version_id) templates_json,
-        (SELECT count(*) FROM apps WHERE apps.document_version_id=d.current_version_id) template_count,
-        (SELECT name FROM apps WHERE apps.document_version_id=d.current_version_id AND rn=1) first_template,
-        (SELECT count(*) FROM mapping_revision m WHERE m.document_version_id=d.current_version_id AND m.status<>'approved'
-           AND m.revision_no=(SELECT max(z.revision_no) FROM mapping_revision z WHERE z.application_id=m.application_id AND z.rule_key=m.rule_key)) review_pending,
-        (SELECT json_group_array(json_object('concept_id',root_id,'name',name) ORDER BY rn) FROM doc_root g WHERE g.document_id=d.document_id AND g.rn<="""
-        + str(ROOT_CAP)
-        + """) roots_json,
-        (SELECT count(*) FROM doc_root g WHERE g.document_id=d.document_id) root_count
+        (SELECT t.name FROM template_application a JOIN template_version tv ON tv.template_version_id=a.template_version_id
+           JOIN template t ON t.template_id=tv.template_id WHERE a.document_version_id=d.current_version_id"""
+        + (" AND t.name LIKE ?" if template else "")
+        + """ ORDER BY t.name, tv.revision_no, a.application_id LIMIT 1) first_template,
+        """
+        + DOCUMENT_PENDING_HEADS
+        + """ review_pending
       FROM document d LEFT JOIN document_version v ON v.document_version_id=d.current_version_id
       LEFT JOIN access_observation o ON o.access_id=(SELECT z.access_id FROM access_observation z
         WHERE z.document_version_id=d.current_version_id AND z.principal_ref=? ORDER BY z.checked_at DESC,z.access_id DESC LIMIT 1)
       WHERE d.display_name LIKE ? AND coalesce(v.author,'') LIKE ?
     """
     )
-    params = [now(), user, "%" + q + "%", "%" + author + "%"]
+    # 바인딩 순서 = SQL 등장 순서: now, [first_template LIKE], user, q, author, ...
+    params = [now()]
+    if template:
+        params.append("%" + template + "%")
+    params += [user, "%" + q + "%", "%" + author + "%"]
     if date_from:
         sql += " AND substr(v.authored_at,1,10)>=?"
         params.append(str(date_from))

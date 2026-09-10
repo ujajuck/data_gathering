@@ -36,7 +36,13 @@ from .contracts import (
 )
 from .build import authorize_build, create_integration, output_path, prepare_build
 from .db import Problem, decode_cursor, dump, norm, one, page
-from .features import document_query, selection_cte, rollback, edit_concept
+from .features import (
+    document_query,
+    document_summary_query,
+    selection_cte,
+    rollback,
+    edit_concept,
+)
 from .graph import coverage_graph
 from .recrawl import recrawl, require_template_version, status_query, status_summary
 from .service import Service
@@ -113,7 +119,8 @@ def install(app: FastAPI, root, start_worker=True):
         # 클라이언트가 임의 사용자 이름을 전달해 권한을 바꾸지 못하게 한다.
         return os.environ.get("KG_V2_PRINCIPAL", "local-user")
 
-    def listing(sql, params, scope, keys, cursor, limit, descending=False):
+    def listing(sql, params, scope, keys, cursor, limit, descending=False, enrich=None):
+        # enrich(conn, items)는 페이지 행을 가져온 뒤 같은 읽기 트랜잭션에서 호출된다(요약이 같은 스냅숏을 본다).
         values = decode_cursor(cursor, scope, len(keys))
         if values:
             sql += (
@@ -132,12 +139,17 @@ def install(app: FastAPI, root, start_worker=True):
             + " LIMIT ?"
         )
         with service.db.connect() as conn:
-            return page(
+            if enrich:
+                conn.execute("BEGIN")
+            result = page(
                 conn.execute(sql, (*params, limit + 1)),
                 limit,
                 [k.split(".")[-1] for k in keys],
                 scope,
             )
+            if enrich:
+                enrich(conn, result["items"])
+            return result
 
     def submit(kind, body, user, prepare=None):
         payload = dict(body)
@@ -266,7 +278,29 @@ def install(app: FastAPI, root, start_worker=True):
             template,
             sort,
         )
-        result = listing(
+
+        def ordered(raw):
+            # 집계 안 ORDER BY(SQLite 3.44 전용) 대신 rn으로 정렬하고 응답에서는 뺀다.
+            items = sorted(json.loads(raw or "[]"), key=lambda e: e["rn"])
+            for e in items:
+                e.pop("rn")
+            return items
+
+        def enrich(conn, items):
+            # 목록은 메타데이터만 읽는다. 문서군·템플릿 요약은 페이지 문서에 대해서만 두 번째 SQL로 계산하며 원본은 열지 않는다.
+            summaries = {}
+            if items:
+                summary_sql, ids = document_summary_query([i["document_id"] for i in items])
+                summaries = {r["document_id"]: r for r in conn.execute(summary_sql, ids)}
+            for item in items:
+                found = summaries.get(item["document_id"])
+                item["templates"] = ordered(found["templates_json"] if found else None)
+                item["template_count"] = found["template_count"] if found else 0
+                item["roots"] = ordered(found["roots_json"] if found else None)
+                item["root_count"] = found["root_count"] if found else 0
+                item.pop("first_template", None)
+
+        return listing(
             sql,
             params,
             [
@@ -286,13 +320,8 @@ def install(app: FastAPI, root, start_worker=True):
             cursor,
             limit,
             direction == "desc",
+            enrich,
         )
-        # 목록은 메타데이터만 읽는다. 문서군·템플릿 요약은 같은 SQL에서 계산되며 원본은 열지 않는다.
-        for item in result["items"]:
-            item["templates"] = json.loads(item.pop("templates_json"))
-            item["roots"] = json.loads(item.pop("roots_json"))
-            item.pop("first_template", None)
-        return result
 
     @router.get("/documents/{doc_id}/versions")
     def versions(

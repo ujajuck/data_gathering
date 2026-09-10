@@ -84,14 +84,19 @@ def test_documents_rows_reflect_assignment_publish_and_review_transitions(setup)
     assert row["templates"] == [
         {
             "application_id": s["application"]["application_id"],
+            # scope_key 기본값은 적용 건 ID(service.apply). 같은 템플릿 버전을 범위를 달리해 두 번 적용할 수 있으므로
+            # template_count는 적용 건 수이며 배지는 scope_key로 구분한다.
+            "scope_key": s["application"]["application_id"],
             "template_id": template_id,
             "template_version_id": s["template"]["template_version_id"],
             "name": "공정온도",
             "revision_no": 1,
             "state": "pending",
+            "review_pending": 0,
         }
     ]
     assert (row["template_count"], row["review_pending"]) == (1, 0)
+    assert "rn" not in row["templates"][0]
     assert (row["roots"], row["root_count"]) == ([], 0)
     assert row["extraction_status"] == "pending"
     assert "templates_json" not in row and "first_template" not in row
@@ -105,6 +110,7 @@ def test_documents_rows_reflect_assignment_publish_and_review_transitions(setup)
     rev = propose(s)
     row = rows(s)[0]
     assert row["review_pending"] == 1
+    assert row["templates"][0]["review_pending"] == 1
     # 헤드가 바뀌면 mapping_head_invalidates_* 트리거가 published_run_id를 비운다(schema_sqlite.sql).
     # 따라서 적용 건 state와 extraction_status는 함께 'review'가 되고 문서군도 비워진다.
     assert row["templates"][0]["state"] == "review"
@@ -263,6 +269,94 @@ def test_documents_roots_follow_coverage_graph_root_rule(tmp_path):
         s["client"].__exit__(None, None, None)
 
 
+PLANT_TREE = [
+    {"concept_id": "plant", "name": "공정", "level": 1},
+    {
+        "concept_id": "temperature",
+        "name": "공정온도",
+        "level": 2,
+        "canonical_unit": "°C",
+    },
+]
+PLANT_EDGES = [["plant", "temperature", "parent_of"]]
+
+
+def graph_groups(s, kg):
+    return {
+        g["root_concept_id"]: g["name"]
+        for g in s["api"]("GET", "/kg/" + kg + "/graph")["groups"]
+    }
+
+
+def test_documents_root_names_come_from_the_pinned_kg_revision(tmp_path):
+    s = workspace(tmp_path, PLANT_TREE, PLANT_EDGES)
+    try:
+        extracted(s)
+        assert rows(s)[0]["roots"] == [{"concept_id": "plant", "name": "공정"}]
+        # 새 KG 리비전에서 뿌리를 개명·폐기해도 매핑은 rev1에 고정되어 있다.
+        rev2 = s["api"](
+            "POST",
+            "/kg/import",
+            {
+                "concepts": [
+                    {
+                        "concept_id": "plant",
+                        "name": "공장(폐기)",
+                        "level": 1,
+                        "status": "deprecated",
+                    },
+                    PLANT_TREE[1],
+                ],
+                "relations": PLANT_EDGES,
+            },
+        )["kg_revision_id"]
+        row = rows(s)[0]
+        assert row["roots"] == [{"concept_id": "plant", "name": "공정"}]
+        assert row["root_count"] == 1
+        assert row["roots"][0]["name"] == graph_groups(s, s["kg"])["plant"]
+        assert "plant" not in graph_groups(s, rev2)
+    finally:
+        s["client"].__exit__(None, None, None)
+
+
+def test_documents_root_spanning_two_pinned_revisions_is_one_row(tmp_path):
+    s = workspace(tmp_path, PLANT_TREE, PLANT_EDGES)
+    try:
+        extracted(s)
+        rev2 = s["api"](
+            "POST",
+            "/kg/import",
+            {
+                "concepts": [
+                    {"concept_id": "plant", "name": "공정설비", "level": 1},
+                    PLANT_TREE[1],
+                ],
+                "relations": PLANT_EDGES,
+            },
+        )["kg_revision_id"]
+        definition = s["api"](
+            "GET", "/template-versions/" + s["template"]["template_version_id"]
+        )["definition"]
+        second = s["api"](
+            "POST",
+            "/templates",
+            {"name": "설비온도", "definition": {**definition, "kg_revision_id": rev2}},
+        )
+        application = apply_template(s, s["doc"], second, approved=True)
+        job = s["work"]("/applications/" + application["application_id"] + "/extract", {})
+        assert job["state"] == "succeeded", job
+        row = rows(s)[0]
+        # 두 발행 적용 건이 서로 다른 KG 리비전에 고정되어도 같은 뿌리는 한 행이며,
+        # 이름은 가장 새 고정 리비전(rev2)의 것이다.
+        assert row["roots"] == [{"concept_id": "plant", "name": "공정설비"}]
+        assert row["root_count"] == 1
+        assert row["roots"][0]["name"] == graph_groups(s, rev2)["plant"]
+        assert [t["name"] for t in row["templates"]] == ["공정온도", "설비온도"]
+        assert row["template_count"] == 2
+    finally:
+        s["client"].__exit__(None, None, None)
+
+
 def test_documents_roots_capped_at_eight(tmp_path):
     names = [f"군{i}" for i in range(1, 10)]
     s = workspace(
@@ -365,3 +459,86 @@ def test_documents_listing_never_opens_source_with_new_sorts(setup):
             s["api"]("GET", "/documents" + query)
     finally:
         s["service"].read = original
+
+
+def test_documents_sort_by_template_follows_the_template_filter(setup):
+    s = setup
+    b = register(s, "b.xlsx")
+    a_id, b_id = s["doc"]["document_id"], b["document_id"]
+    late = s["api"]("POST", "/templates", {"name": "하나", "definition": s["definition"]})
+    mid = s["api"]("POST", "/templates", {"name": "나비", "definition": s["definition"]})
+    apply_template(s, s["doc"], late, approved=False)
+    apply_template(s, b, mid, approved=False)
+
+    asc = rows(s, "?sort=template&limit=10")
+    assert [(r["document_id"], r["sort_value"]) for r in asc] == [
+        (a_id, "0공정온도"),
+        (b_id, "0나비"),
+    ]
+    # template= 필터가 있으면 정렬 키는 필터에 맞는 첫 템플릿이다(a: 하나, b: 나비). templates[]는 이름순 그대로.
+    filtered = rows(s, "?sort=template&template=나&limit=10")
+    assert [(r["document_id"], r["sort_value"]) for r in filtered] == [
+        (b_id, "0나비"),
+        (a_id, "0하나"),
+    ]
+    assert [t["name"] for t in filtered[1]["templates"]] == ["공정온도", "하나"]
+    desc = rows(s, "?sort=template&template=나&direction=desc&limit=10")
+    assert [r["document_id"] for r in desc] == [a_id, b_id]
+
+    walked, cursor = [], None
+    while True:
+        page = s["api"](
+            "GET",
+            "/documents?sort=template&template=나&limit=1"
+            + (f"&cursor={cursor}" if cursor else ""),
+        )
+        walked += page["items"]
+        if not page["has_more"]:
+            break
+        cursor = page["next_cursor"]
+    assert [r["document_id"] for r in walked] == [b_id, a_id]
+    # 날짜·상태 필터와 함께 써도 바인딩 순서가 맞는다.
+    assert [
+        r["document_id"]
+        for r in rows(
+            s,
+            "?sort=template&template=나&date_from=2026-09-08&extraction_status=review&limit=10",
+        )
+    ] == [b_id, a_id]
+
+
+def test_documents_listing_plan_is_index_backed_and_page_scoped(setup):
+    s = setup
+    from kg.v2.features import document_query, document_summary_query
+
+    with s["service"].db.connect() as conn:
+        for sort, template in (("name", ""), ("template", "공정"), ("review", "")):
+            sql, params = document_query(
+                "local-user", "", "", None, None, "", "", template, sort
+            )
+            plan = [
+                r["detail"]
+                for r in conn.execute(
+                    "EXPLAIN QUERY PLAN "
+                    + sql
+                    + " ORDER BY sort_value ASC, document_id ASC LIMIT ?",
+                    (*params, 31),
+                )
+            ]
+            # 문서 테이블(d)만 훑고 mapping_revision·template_application 등은 인덱스로만 닿는다.
+            # 말뭉치 전체 CTE(MATERIALIZE)는 페이지 SQL에 없다.
+            assert not [d for d in plan if d.startswith("SCAN") and not d.startswith("SCAN d")], plan
+            assert not [d for d in plan if d.startswith("MATERIALIZE")], plan
+        sql, params = document_summary_query([s["doc"]["document_id"]])
+        plan = [r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + sql, params)]
+        # 요약 SQL은 페이지 문서에서 출발하며 기본 테이블 전체 스캔이 없다: 페이지 범위 CTE(apps/cov/x/g)와
+        # 재귀 CTE 자신(u), 파생 테이블만 훑는다.
+        page_scoped = {"SCAN u", "SCAN apps", "SCAN cov", "SCAN x", "SCAN g"}
+        scans = [
+            d
+            for d in plan
+            if d.startswith("SCAN")
+            and d not in page_scoped
+            and not d.startswith("SCAN (subquery")
+        ]
+        assert not scans, plan
