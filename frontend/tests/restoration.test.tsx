@@ -76,9 +76,12 @@ describe("기존 기능과 디자인 복원", () => {
       "4. 통합 DB",
       "5. 템플릿 관리",
     ]);
-    await user.click(await screen.findByText("문서 필터 · 정렬"));
-    await user.type(screen.getByLabelText("작성자", { exact: true }), "홍길동");
-    await user.selectOptions(screen.getByLabelText("정렬 방향"), "desc");
+    await user.type(
+      await screen.findByLabelText("작성자", { exact: true }),
+      "홍길동",
+    );
+    // 파일 열이 기본 정렬이므로 헤더를 다시 누르면 내림차순으로 바뀐다.
+    await user.click(await screen.findByRole("button", { name: "파일" }));
     await waitFor(() =>
       expect(
         f.calls.some(

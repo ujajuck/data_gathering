@@ -28,13 +28,25 @@ test("문서 → 검수 → 오버레이 → 추출 → DB·다운로드 → 원
   const documents = page.locator("section").filter({
     has: page.getByRole("heading", { name: "등록 문서", exact: true }),
   });
-  await page.getByText("문서 필터 · 정렬", { exact: true }).click();
-  await page.getByLabel("추출 상태").selectOption("review");
   await expect(
-    documents.getByRole("button", { name: /공정운전_샘플.xlsx/ }),
-  ).toBeVisible();
-  await documents.getByRole("button", { name: /공정운전_샘플.xlsx/ }).click();
-  await page.getByRole("button", { name: /^공정 기록 ·/ }).click();
+    page.getByRole("columnheader", { name: "파일" }),
+  ).toHaveAttribute("aria-sort", "ascending");
+  await page.getByRole("button", { name: "작성일" }).click();
+  await expect(
+    page.getByRole("columnheader", { name: "작성일" }),
+  ).toHaveAttribute("aria-sort", "descending");
+  await page.getByLabel("추출 상태").selectOption("review");
+  const row = documents
+    .getByRole("row")
+    .filter({ hasText: "공정운전_샘플.xlsx" });
+  await expect(row).toBeVisible();
+  await expect(row.getByRole("button", { name: "1건 검수" })).toBeVisible();
+  await expect(row.getByText("공정 운전 기록 v1")).toBeVisible();
+  await row.getByRole("button", { name: "열어보기" }).click();
+  const drawer = page.getByRole("dialog", { name: "문서 상세" });
+  await expect(drawer).toBeVisible();
+  await expect(page).toHaveURL(/document=/);
+  await drawer.getByRole("button", { name: /^공정 기록 ·/ }).click();
   const firstCell = page.getByRole("button", { name: /^B3:C3 공정$/ });
   await firstCell.focus();
   await firstCell.press("Enter");
@@ -217,12 +229,20 @@ test("개념 그래프 · 문서군 제안 · 재크롤링 화면", async ({ pag
   const documents = page.locator("section").filter({
     has: page.getByRole("heading", { name: "등록 문서", exact: true }),
   });
-  await documents.getByRole("button", { name: /공정운전_샘플.xlsx/ }).click();
-  await expect(page.locator(".v2-suggestions")).toBeVisible();
-  await expect(page.locator(".v2-suggestions")).toContainText(/양식/);
+  await documents
+    .getByRole("row")
+    .filter({ hasText: "공정운전_샘플.xlsx" })
+    .getByRole("button", { name: "열어보기" })
+    .click();
+  const drawer = page.getByRole("dialog", { name: "문서 상세" });
+  await expect(drawer.locator(".v2-suggestions")).toBeVisible();
+  await expect(drawer.locator(".v2-suggestions")).toContainText(/양식/);
   await expect(
-    page.getByRole("button", { name: /선택한 문서군으로 등록/ }),
+    drawer.getByRole("button", { name: /선택한 문서군으로 등록/ }),
   ).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page).not.toHaveURL(/document=/);
 
   // 템플릿 관리: 재크롤링은 검수 미완/발행됨 건을 건너뛴 결과를 보여준다.
   await page.getByRole("button", { name: "5. 템플릿 관리" }).click();

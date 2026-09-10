@@ -28,6 +28,10 @@ export function workbenchFixture() {
       "build",
     ].map((key) => [key, `${key}-${tag}`]),
   );
+  // 두 번째 문서는 목록 표에서만 쓰는 검수 대기 행이다(open() URL 파라미터는 바꾸지 않는다).
+  const second = `${ids.document}-b`;
+  const secondVersion = `${ids.version}-b`;
+  const reviewApp = `app-${tag}-review`;
   const spec = {
     selector: {
       key: {
@@ -234,6 +238,56 @@ export function workbenchFixture() {
           display_name: "가상 공정.xlsx",
           provider: "local-xlsx",
           file_type: "xlsx",
+          registered_at: "2026-09-09T09:00:00+00:00",
+          author: "홍길동",
+          authored_at: "2026-09-08T10:00:00",
+          access_status: "allowed",
+          extraction_status: "published",
+          templates: [
+            {
+              application_id: ids.application,
+              template_id: `template-${tag}`,
+              template_version_id: `template-version-${tag}`,
+              name: "공정 운전 기록",
+              revision_no: 1,
+              state: "published",
+            },
+          ],
+          template_count: 1,
+          review_pending: 0,
+          roots: [
+            { concept_id: "plant", name: "공정" },
+            { concept_id: "quality", name: "품질" },
+          ],
+          root_count: 2,
+          sort_value: "가상 공정.xlsx",
+        },
+        {
+          document_id: second,
+          current_version_id: secondVersion,
+          display_name: "가상 검수.xlsx",
+          provider: "protected-reader",
+          file_type: "xlsx",
+          registered_at: "2026-09-09T09:05:00+00:00",
+          author: null,
+          authored_at: null,
+          access_status: "unknown",
+          extraction_status: "review",
+          templates: [
+            {
+              application_id: reviewApp,
+              template_id: `template-${tag}`,
+              template_version_id: `template-version-${tag}`,
+              name: "공정 운전 기록",
+              revision_no: 1,
+              state: "review",
+            },
+          ],
+          template_count: 1,
+          review_pending: 1,
+          roots: [],
+          root_count: 0,
+          sort_value: "가상 검수.xlsx",
         },
       ]);
     if (path === "/sources" || path === "/templates") return page([]);
