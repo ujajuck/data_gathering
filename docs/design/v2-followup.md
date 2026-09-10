@@ -33,6 +33,17 @@ CLI는 `python -m kg.v2 <serve|watch|migrate|sign|export|age-projection>`이며,
 - 문서군 제안: 구조 서명에 업무키·이름 같은 데이터 값이 섞이던 문제(라벨 규칙으로 제한, `structure-v2`), 등록 후 서명 단계의 비-Problem 예외·취소가 이미 커밋된 등록을 실패시키던 문제(best-effort로 기록만), 등록마다 리더 서브프로세스 3회 → 1회(describe가 권한·서명을 함께 반환), `has_more` 고정값, 반려된 리비전을 후보로 이식하던 문제(`SOURCE_REJECTED`), `sign` 범위, 제안 목록의 권한 확인·헤더 문자열 노출 → 모두 수정.
 - AGE 엣지 라벨이 정점 라벨과 충돌하거나 63바이트를 넘던 문제, `export --out`이 파일이면 traceback, DVC deps에 `__pycache__` 포함 → 수정.
 
+## 파일 분석 화면: v1 목록 표로 복귀
+
+제품 책임자 지적(v2 화면이 단일 문서 상세에 가까움)에 따라 파일 분석을 v1의 목록 표로 되돌렸다.
+상단은 정렬 가능한 표(파일·작성자·작성일·문서군·템플릿·검수·접근·상태·열어보기, 필터 툴바 인라인),
+행의 `열어보기`는 우측 모달 드로어(등록 버전·시트·같은 양식 문서군 제안·템플릿 연결·원본 검수 열기),
+`원본 등록`은 접힘 블록, 검수 큐는 하단 유지. `GET /documents`는 페이지 범위에서만 요약을 계산해
+`templates[]`(적용 건별 상태·검수 건수·scope)·`review_pending`·`roots[]`(매핑이 고정된 KG 리비전의 L1 이름)를 돌려주고
+`sort=template|review`를 받는다. 적대적 리뷰에서 확정된 15건(루트 이름의 리비전 고정, SQLite 3.44 전용 문법 제거,
+전체 스캔 제거 — 200문서 기준 370ms→8ms, 드로어 모달 접근성·포커스 트랩·Esc 범위, 배지 상태 클래스, 검수 버튼 대상 등)을 수정했다.
+검증: `tests/test_v2_documents.py`, `frontend/tests/documents-table.test.tsx`, e2e 2건, 실제 브라우저 확인.
+
 ## 남은 범위
 
 - 실제 DRM SDK 연동과 네이티브 렌더(원본 충실 보기) — `python -m kg.v2.reader_probe` 계약 점검만 가능.
