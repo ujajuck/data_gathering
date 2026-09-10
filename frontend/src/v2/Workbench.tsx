@@ -141,119 +141,129 @@ export function Documents() {
   const [refs, setRefs] = useState("");
   const [provider, setProvider] = useState("local-xlsx");
   const [error, setError] = useState("");
+  // 필터 없이 조회한 목록이 비어 있으면(첫 사용) 원본 등록을 펼친다. 비어 있지 않으면 속성을 건드리지 않아
+  // 사용자가 직접 펼친 상태가 새로고침마다 접히지 않는다.
+  const [noDocuments, setNoDocuments] = useState(false);
+  const drawerOpen = !!route.document;
   return (
     <>
-      <Heading
-        eyebrow="01 / DOCUMENTS"
-        title="원본에서 시작하세요"
-        description="원본을 등록하고 문서 버전과 시트를 선택합니다. 등록은 문서 내용을 변경하지 않습니다."
-      />
-      <DocumentsTable />
-      <details className="v2-card v2-space v2-register">
-        <summary>
-          <h2>원본 등록</h2>
-        </summary>
-        <p className="v2-muted">
-          서버의 원본 폴더에서 선택하거나 보안 제공자의 원본 참조를
-          입력하세요.
-        </p>
-        <div className="v2-inline">
-          <code>/{directory}</code>
-          {directory && (
-            <button
-              onClick={() =>
-                setDirectory(directory.split("/").slice(0, -1).join("/"))
-              }
-            >
-              상위 폴더
-            </button>
-          )}
-        </div>
-        <div className="v2-source-files">
-          <State
-            resource={sources}
-            empty="폴더에 XLSX가 없습니다. 원본 참조를 직접 입력할 수 있습니다."
-          />
-          {sources.data?.items.map((file) => (
-            <button
-              key={file.name}
-              onClick={() =>
-                file.directory
-                  ? setDirectory(file.source_ref)
-                  : setRefs((previous) =>
-                      [
-                        ...new Set([
-                          ...previous.split("\n").filter(Boolean),
-                          file.source_ref,
-                        ]),
-                      ].join("\n"),
-                    )
-              }
-            >
-              {file.directory ? "▸" : "+"} {file.name}
-            </button>
-          ))}
-        </div>
-        <Pager page={sources} />
-        <label>
-          읽기 제공자
-          <select
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-          >
-            <option value="local-xlsx">일반 XLSX (간략 보기)</option>
-            <option value="protected-reader">보안 원본 어댑터</option>
-          </select>
-        </label>
-        {provider !== "local-xlsx" && (
-          <p className="v2-note">
-            서버에 승인된 DRM 읽기·렌더 어댑터가 연결되어 있어야 합니다.
-          </p>
-        )}
-        <label>
-          원본 참조 · 한 줄에 하나, 최대 100개
-          <textarea
-            rows={3}
-            value={refs}
-            onChange={(e) => setRefs(e.target.value)}
-            placeholder="sample.xlsx"
-          />
-        </label>
-        <p className="v2-error">{error}</p>
-        <button
-          className="primary"
-          disabled={tasks.busy || !refs.trim()}
-          onClick={() => {
-            setError("");
-            tasks.run(
-              "/documents/register",
-              {
-                source_refs: refs
-                  .split("\n")
-                  .map((v) => v.trim())
-                  .filter(Boolean),
-                provider,
-              },
-              (result) => {
-                changed();
-                const doc = result.documents?.[0];
-                if (doc)
-                  go({
-                    document: doc.document_id,
-                    version: doc.version_id,
-                    sheet: "",
-                    application: "",
-                    mapping: "",
-                  });
-              },
-            );
-          }}
+      {/* 문서 상세 드로어는 모달이다: 열린 동안 표·원본 등록·검수 큐는 inert로 조작·초점을 막는다. */}
+      <div inert={drawerOpen || undefined}>
+        <Heading
+          eyebrow="01 / DOCUMENTS"
+          title="원본에서 시작하세요"
+          description="원본을 등록하고 문서 버전과 시트를 선택합니다. 등록은 문서 내용을 변경하지 않습니다."
+        />
+        <DocumentsTable onEmpty={setNoDocuments} />
+        <details
+          className="v2-card v2-space v2-register"
+          open={noDocuments || undefined}
         >
-          문서 등록
-        </button>
-      </details>
+          <summary>
+            <span className="v2-register-title">원본 등록</span>
+          </summary>
+          <p className="v2-muted">
+            서버의 원본 폴더에서 선택하거나 보안 제공자의 원본 참조를
+            입력하세요.
+          </p>
+          <div className="v2-inline">
+            <code>/{directory}</code>
+            {directory && (
+              <button
+                onClick={() =>
+                  setDirectory(directory.split("/").slice(0, -1).join("/"))
+                }
+              >
+                상위 폴더
+              </button>
+            )}
+          </div>
+          <div className="v2-source-files">
+            <State
+              resource={sources}
+              empty="폴더에 XLSX가 없습니다. 원본 참조를 직접 입력할 수 있습니다."
+            />
+            {sources.data?.items.map((file) => (
+              <button
+                key={file.name}
+                onClick={() =>
+                  file.directory
+                    ? setDirectory(file.source_ref)
+                    : setRefs((previous) =>
+                        [
+                          ...new Set([
+                            ...previous.split("\n").filter(Boolean),
+                            file.source_ref,
+                          ]),
+                        ].join("\n"),
+                      )
+                }
+              >
+                {file.directory ? "▸" : "+"} {file.name}
+              </button>
+            ))}
+          </div>
+          <Pager page={sources} />
+          <label>
+            읽기 제공자
+            <select
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+            >
+              <option value="local-xlsx">일반 XLSX (간략 보기)</option>
+              <option value="protected-reader">보안 원본 어댑터</option>
+            </select>
+          </label>
+          {provider !== "local-xlsx" && (
+            <p className="v2-note">
+              서버에 승인된 DRM 읽기·렌더 어댑터가 연결되어 있어야 합니다.
+            </p>
+          )}
+          <label>
+            원본 참조 · 한 줄에 하나, 최대 100개
+            <textarea
+              rows={3}
+              value={refs}
+              onChange={(e) => setRefs(e.target.value)}
+              placeholder="sample.xlsx"
+            />
+          </label>
+          <p className="v2-error">{error}</p>
+          <button
+            className="primary"
+            disabled={tasks.busy || !refs.trim()}
+            onClick={() => {
+              setError("");
+              tasks.run(
+                "/documents/register",
+                {
+                  source_refs: refs
+                    .split("\n")
+                    .map((v) => v.trim())
+                    .filter(Boolean),
+                  provider,
+                },
+                (result) => {
+                  changed();
+                  const doc = result.documents?.[0];
+                  if (doc)
+                    go({
+                      document: doc.document_id,
+                      version: doc.version_id,
+                      sheet: "",
+                      application: "",
+                      mapping: "",
+                    });
+                },
+              );
+            }}
+          >
+            문서 등록
+          </button>
+        </details>
+        <ReviewQueue />
+      </div>
       <DocumentDrawer key={route.document + refresh} />
-      <ReviewQueue />
     </>
   );
 }

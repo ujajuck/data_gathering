@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import Workbench from "../src/v2/Workbench";
@@ -50,7 +56,7 @@ describe("파일 분석 목록 표", () => {
     ]);
     expect(first.getByTitle("문서군 · 공정").className).toContain("outline");
     expect(first.getByTitle("파싱 템플릿 · 발행됨").className).toContain(
-      "blue",
+      "green",
     );
     expect(first.getByText("접근 가능").className).toContain("green");
     expect(first.getByText("발행됨").className).toContain("green");
@@ -69,7 +75,9 @@ describe("파일 분석 목록 표", () => {
       "검수 필요",
       "열어보기",
     ]);
-    expect(second.getByTitle("파싱 템플릿 · 검수 필요")).toBeTruthy();
+    expect(second.getByTitle("파싱 템플릿 · 검수 필요").className).toContain(
+      "amber",
+    );
     expect(second.getByRole("button", { name: "1건 검수" })).toBeTruthy();
     expect(second.getByText("미확인").className).toContain("amber");
     expect(second.getByText("검수 필요").className).toContain("amber");
@@ -222,9 +230,8 @@ describe("파일 분석 목록 표", () => {
         { name: "열어보기" },
       ),
     );
-    const drawer = within(
-      await screen.findByRole("dialog", { name: "문서 상세" }),
-    );
+    const dialog = await screen.findByRole("dialog", { name: "문서 상세" });
+    const drawer = within(dialog);
     expect(params().get("document")).toBe(f.ids.document);
     expect(params().get("version")).toBe(f.ids.version);
     expect(drawer.getByRole("heading", { name: "등록 버전" })).toBeTruthy();
@@ -243,12 +250,42 @@ describe("파일 분석 목록 표", () => {
         .getByRole("row", { name: /가상 공정.xlsx/ })
         .getAttribute("aria-selected"),
     ).toBe("true");
-    // 드로어가 열려 있어도 검수 큐는 접근성 트리에 남는다(aria-modal·inert 없음).
-    expect(screen.getByRole("region", { name: "검수 큐" })).toBeTruthy();
+    // 드로어는 모달이다: 열린 동안 표·원본 등록·검수 큐는 inert이고 초점은 패널 안에서만 돈다.
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(dialog.closest("[inert]")).toBeNull();
+    for (const behind of [
+      screen.getByRole("table", { name: "등록 문서 목록" }),
+      screen.getByText("원본 등록").closest("details")!,
+      screen.getByRole("region", { name: "검수 큐" }),
+    ])
+      expect(behind.closest("[inert]")).not.toBeNull();
+    expect(document.activeElement).toBe(dialog);
+    // Shift+Tab은 패널에서 마지막 컨트롤(템플릿 연결 summary)로, 거기서 Tab은 첫 컨트롤로 돈다.
+    // (jsdom은 inert를 구현하지 않으므로 순환은 드로어의 키 처리기가 맡는다.)
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(
+      drawer.getByText("+ 이 문서 버전에 템플릿 연결"),
+    );
+    await user.tab();
+    expect(document.activeElement).toBe(
+      drawer.getByRole("button", { name: "원본 · 검수 열기 →" }),
+    );
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(
+      drawer.getByText("+ 이 문서 버전에 템플릿 연결"),
+    );
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(params().get("document")).toBeNull();
     expect(params().get("version")).toBeNull();
+    // 닫히면 inert가 풀리고 초점은 드로어를 연 버튼으로 돌아간다.
+    expect(document.querySelector("[inert]")).toBeNull();
+    expect(document.activeElement).toBe(
+      within(screen.getByRole("row", { name: /가상 공정.xlsx/ })).getByRole(
+        "button",
+        { name: "열어보기" },
+      ),
+    );
 
     await user.click(screen.getByText("가상 공정.xlsx"));
     expect(
@@ -305,5 +342,211 @@ describe("파일 분석 목록 표", () => {
     expect(screen.queryByLabelText("정렬 방향")).toBeNull();
     expect(screen.getByRole("search", { name: "문서 필터" })).toBeTruthy();
     expect(f.calls.some((c) => c.path === "/documents")).toBe(true);
+  });
+  it("Escape는 대화상자 안에서 눌렀을 때만 드로어를 닫는다", async () => {
+    const f = workbenchFixture();
+    f.open("documents", { document: "", version: "" });
+    const user = userEvent.setup();
+    render(<Workbench />);
+    const t = await table();
+    await user.click(
+      within(t.getByRole("row", { name: /가상 공정.xlsx/ })).getByRole(
+        "button",
+        { name: "열어보기" },
+      ),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "문서 상세" });
+    // jsdom은 inert를 구현하지 않으므로 대화상자 밖(필터 도구 모음·검수 큐·body)에 직접 키 이벤트를
+    // 보내, 처리기가 문서 전체가 아니라 대화상자에만 걸려 있는지 확인한다.
+    const search = screen.getByLabelText("문서 검색");
+    expect(dialog.contains(search)).toBe(false);
+    fireEvent.keyDown(search, { key: "Escape" });
+    fireEvent.keyDown(screen.getByLabelText("검수 문서·규칙 검색"), {
+      key: "Escape",
+    });
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "문서 상세" })).toBeTruthy();
+    expect(params().get("document")).toBe(f.ids.document);
+    // 드로어 안의 컨트롤(템플릿 연결 summary)에 초점을 두고 누른 Escape는 닫는다.
+    await user.click(within(dialog).getByText("+ 이 문서 버전에 템플릿 연결"));
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(params().get("document")).toBeNull();
+  });
+
+  it("템플릿 배지는 상태별 색을 쓰고, 검수 버튼은 검수 대기 헤드가 있는 적용 건으로 이동한다", async () => {
+    const f = workbenchFixture();
+    f.open("documents", { document: "", version: "" });
+    const user = userEvent.setup();
+    const template = (
+      application_id: string,
+      name: string,
+      state: string,
+      extra: Record<string, unknown> = {},
+    ) => ({
+      application_id,
+      template_id: `template-${name}`,
+      template_version_id: `template-version-${name}`,
+      name,
+      revision_no: 1,
+      state,
+      ...extra,
+    });
+    f.overrides.set("GET /documents", () =>
+      page([
+        {
+          document_id: "mixed",
+          current_version_id: "mixed-v",
+          display_name: "혼합 상태.xlsx",
+          provider: "local-xlsx",
+          file_type: "xlsx",
+          author: null,
+          authored_at: null,
+          access_status: "allowed",
+          extraction_status: "failed",
+          templates: [
+            // 이름순으로 먼저 오는 적용 건에는 검수 대기 헤드가 없다.
+            template("app-pending", "가나다", "pending", {
+              review_pending: 0,
+              scope_key: "2차",
+            }),
+            // 실패한 실행 뒤 다시 제안된 헤드: state는 failed지만 검수 대상이다.
+            template("app-failed", "공정온도", "failed", { review_pending: 1 }),
+            // 이전 서버 응답(review_pending 없음)은 0으로 본다.
+            template("app-legacy", "이전 서버", "review"),
+          ],
+          template_count: 3,
+          review_pending: 1,
+          roots: [],
+          root_count: 0,
+        },
+      ]),
+    );
+    render(<Workbench />);
+    const t = await table();
+    const row = within(t.getByRole("row", { name: /혼합 상태.xlsx/ }));
+    const failed = row.getByTitle("파싱 템플릿 · 실패");
+    expect(failed.textContent).toBe("공정온도 v1");
+    expect(failed.className).toContain("red");
+    expect(failed.className).not.toContain("blue");
+    // scope_key가 적용 건 id와 다르면 제목에 덧붙여 같은 템플릿의 중복 적용을 구분한다.
+    expect(row.getByTitle("파싱 템플릿 · 추출 필요 · 2차").className).toContain(
+      "blue",
+    );
+    expect(row.getByTitle("파싱 템플릿 · 검수 필요").className).toContain(
+      "amber",
+    );
+    await user.click(row.getByRole("button", { name: "1건 검수" }));
+    await waitFor(() => expect(params().get("tab")).toBe("source"));
+    expect(params().get("document")).toBe("mixed");
+    expect(params().get("version")).toBe("mixed-v");
+    expect(params().get("application")).toBe("app-failed");
+  });
+
+  it("정렬을 바꿔 다시 불러오는 동안 직전 행은 남기고 건수는 비운다", async () => {
+    const f = workbenchFixture();
+    f.open("documents", { document: "", version: "" });
+    const user = userEvent.setup();
+    const row = (id: string, name: string) => ({
+      document_id: id,
+      current_version_id: `${id}-v`,
+      display_name: name,
+      provider: "local-xlsx",
+      file_type: "xlsx",
+    });
+    let release: ((rows: Record<string, unknown>[]) => void) | undefined;
+    f.overrides.set("GET /documents", (call) =>
+      call.url.searchParams.get("sort") === "template"
+        ? new Promise((resolve) => {
+            release = (rows) => resolve(page(rows));
+          })
+        : page([row("a", "가.xlsx"), row("b", "나.xlsx")]),
+    );
+    render(<Workbench />);
+    const t = await table();
+    const count = document.querySelector(".v2-doc-count")!;
+    expect(count.textContent).toBe("2건 표시 · 1 페이지");
+    await user.click(t.getByRole("button", { name: "템플릿" }));
+    await waitFor(() => expect(release).toBeDefined());
+    const busy = screen.getByRole("table", { name: "등록 문서 목록" });
+    expect(busy.getAttribute("aria-busy")).toBe("true");
+    expect(within(busy).getByRole("row", { name: /가.xlsx/ })).toBeTruthy();
+    expect(within(busy).getByRole("row", { name: /나.xlsx/ })).toBeTruthy();
+    // 직전 건수와 새 요청의 페이지 번호를 짝짓지 않는다: 건수는 비우고 라이브 영역만 남긴다.
+    expect(count.textContent).toBe("");
+    expect(
+      screen
+        .getAllByRole("status")
+        .map((s) => s.textContent)
+        .filter(Boolean),
+    ).toEqual(["불러오는 중…"]);
+    release!([row("c", "다.xlsx")]);
+    expect(await screen.findByRole("row", { name: /다.xlsx/ })).toBeTruthy();
+    expect(screen.queryByRole("row", { name: /가.xlsx/ })).toBeNull();
+    expect(count.textContent).toBe("1건 표시 · 1 페이지");
+    expect(
+      screen
+        .getByRole("table", { name: "등록 문서 목록" })
+        .getAttribute("aria-busy"),
+    ).toBeNull();
+  });
+
+  it("문서가 하나도 없으면 원본 등록을 펼치고 등록 안내를 보여준다", async () => {
+    const f = workbenchFixture();
+    f.open("documents", { document: "", version: "" });
+    f.overrides.set("GET /documents", () => page([]));
+    render(<Workbench />);
+    expect(
+      await screen.findByText(
+        "아직 등록된 문서가 없습니다. 아래 '원본 등록'에서 첫 문서를 등록하세요.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "등록 문서 목록" })).toBeNull();
+    const title = screen.getByText("원본 등록");
+    // summary는 disclosure 버튼으로 노출되므로 그 안의 제목은 heading이 아닌 span이다.
+    expect(title.tagName).toBe("SPAN");
+    expect(title.closest("summary")).not.toBeNull();
+    expect(screen.queryByRole("heading", { name: "원본 등록" })).toBeNull();
+    await waitFor(() => expect(title.closest("details")!.open).toBe(true));
+    expect(screen.getByRole("button", { name: "문서 등록" })).toBeTruthy();
+  });
+
+  it("조건에 맞는 문서가 없을 때는 안내만 바꾸고 원본 등록은 펼치지 않는다", async () => {
+    const f = workbenchFixture();
+    f.open("documents", { document: "", version: "" });
+    const user = userEvent.setup();
+    f.overrides.set("GET /documents", (call) =>
+      page(
+        call.url.searchParams.get("q")
+          ? []
+          : [
+              {
+                document_id: "only",
+                current_version_id: "only-v",
+                display_name: "유일.xlsx",
+                provider: "local-xlsx",
+                file_type: "xlsx",
+              },
+            ],
+      ),
+    );
+    render(<Workbench />);
+    await table();
+    const register = screen.getByText("원본 등록").closest("details")!;
+    expect(register.open).toBe(false);
+    await user.type(screen.getByLabelText("문서 검색"), "없음");
+    await user.click(
+      within(screen.getByRole("search", { name: "문서 필터" })).getByRole(
+        "button",
+        { name: "검색" },
+      ),
+    );
+    expect(await screen.findByText("조건에 맞는 문서가 없습니다.")).toBeTruthy();
+    expect(screen.queryByText(/첫 문서를 등록하세요/)).toBeNull();
+    expect(register.open).toBe(false);
+    await user.click(screen.getByRole("button", { name: "초기화" }));
+    await table();
+    expect(register.open).toBe(false);
   });
 });
