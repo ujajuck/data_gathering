@@ -289,6 +289,7 @@ SQLite PoC는 로컬 디스크의 DB 하나와 짧은 쓰기 트랜잭션을 사
 WAL이어도 writer는 한 번에 하나이므로 쓰기 큐를 두고 checkpoint를 관리한다.
 네트워크 공유 폴더에 활성 WAL DB를 두지 않는다.
 근거: [SQLite WAL](https://www.sqlite.org/wal.html), [외래키 활성화](https://www.sqlite.org/foreignkeys.html).
+SQLite 하한은 3.38(내장 JSON 함수·창 함수·재귀 CTE)이다. 3.44 전용 문법(집계 함수 안의 ORDER BY)은 쓰지 않는다 — Ubuntu 22.04(3.37)·Debian 12(3.40)를 함께 지원하려면 정렬은 SQL 밖(Python)에서 한다.
 
 | 항목 | SQLite PoC | PostgreSQL 확장 |
 |---|---|---|
