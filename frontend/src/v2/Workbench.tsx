@@ -4,11 +4,11 @@ import {
   downloadFile,
   JobBar,
   NavigationContext,
-  useDraft,
   Pager,
   setToken,
   State,
   TaskProvider,
+  useDraft,
   useData,
   useNavigation,
   usePage,
@@ -24,7 +24,9 @@ import ConceptEditor from "./ConceptEditor";
 import DomainGraph from "./DomainGraph";
 import type { Graph, GraphNode } from "./DomainGraph";
 import Recrawl from "./Recrawl";
-import Suggestions from "./Suggestions";
+import DocumentsTable from "./DocumentsTable";
+import DocumentDrawer from "./DocumentDrawer";
+export { AssignTemplate } from "./DocumentDrawer";
 import "./workbench.css";
 import "../product.css";
 import { PRODUCT_NAME, PRODUCT_DESCRIPTION, PRODUCT_STEPS } from "../product";
@@ -132,31 +134,6 @@ export function Heading({
 export function Documents() {
   const { route, go, refresh, changed } = useNavigation();
   const tasks = useTasks();
-  const [query, setQuery] = useState("");
-  const [search, setSearch] = useState("");
-  const [filters, setFilters] = useDraft<Record<string, string>>(
-    "document-filters",
-    {
-      author: "",
-      date_from: "",
-      date_to: "",
-      access_status: "",
-      extraction_status: "",
-      template: "",
-      sort: "name",
-      direction: "asc",
-    },
-  );
-  const documents = usePage(
-    "/documents?q=" +
-      encodeURIComponent(search) +
-      "&r=" +
-      refresh +
-      "&" +
-      new URLSearchParams(
-        Object.fromEntries(Object.entries(filters).filter(([, v]) => v)),
-      ),
-  );
   const [directory, setDirectory] = useState("");
   const sources = usePage(
     "/sources?directory=" + encodeURIComponent(directory),
@@ -171,500 +148,113 @@ export function Documents() {
         title="원본에서 시작하세요"
         description="원본을 등록하고 문서 버전과 시트를 선택합니다. 등록은 문서 내용을 변경하지 않습니다."
       />
-      <div className="v2-grid two">
-        <section className="v2-card">
-          <div className="v2-card-head">
-            <h2>등록 문서</h2>
-            <span className="v2-badge">현재 버전</span>
-          </div>
-          <form
-            className="v2-inline"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setSearch(query);
-            }}
-          >
-            <input
-              aria-label="문서 검색"
-              placeholder="문서명 검색"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <button>검색</button>
-          </form>
-          <details className="v2-details">
-            <summary>문서 필터 · 정렬</summary>
-            <div className="v2-grid two">
-              {[
-                ["author", "작성자"],
-                ["template", "적용 템플릿"],
-              ].map(([key, label]) => (
-                <label key={key}>
-                  {label}
-                  <input
-                    value={filters[key]}
-                    onChange={(e) =>
-                      setFilters((f) => ({ ...f, [key]: e.target.value }))
-                    }
-                  />
-                </label>
-              ))}
-              {[
-                ["date_from", "작성일 시작"],
-                ["date_to", "작성일 종료"],
-              ].map(([key, label]) => (
-                <label key={key}>
-                  {label}
-                  <input
-                    type="date"
-                    value={filters[key]}
-                    onChange={(e) =>
-                      setFilters((f) => ({ ...f, [key]: e.target.value }))
-                    }
-                  />
-                </label>
-              ))}
-              <label>
-                접근 상태
-                <select
-                  value={filters.access_status}
-                  onChange={(e) =>
-                    setFilters((f) => ({ ...f, access_status: e.target.value }))
-                  }
-                >
-                  <option value="">전체</option>
-                  <option value="allowed">접근 가능</option>
-                  <option value="denied">접근 불가</option>
-                  <option value="expired">확인 만료</option>
-                  <option value="unknown">미확인</option>
-                </select>
-              </label>
-              <label>
-                추출 상태
-                <select
-                  value={filters.extraction_status}
-                  onChange={(e) =>
-                    setFilters((f) => ({
-                      ...f,
-                      extraction_status: e.target.value,
-                    }))
-                  }
-                >
-                  <option value="">전체</option>
-                  <option value="unassigned">미배정</option>
-                  <option value="review">검수 필요</option>
-                  <option value="pending">추출 필요</option>
-                  <option value="published">발행됨</option>
-                  <option value="failed">실패</option>
-                </select>
-              </label>
-              <label>
-                정렬 기준
-                <select
-                  value={filters.sort}
-                  onChange={(e) =>
-                    setFilters((f) => ({ ...f, sort: e.target.value }))
-                  }
-                >
-                  <option value="name">문서명</option>
-                  <option value="author">작성자</option>
-                  <option value="authored_at">작성일</option>
-                  <option value="registered_at">등록일</option>
-                </select>
-              </label>
-              <label>
-                정렬 방향
-                <select
-                  value={filters.direction}
-                  onChange={(e) =>
-                    setFilters((f) => ({ ...f, direction: e.target.value }))
-                  }
-                >
-                  <option value="asc">오름차순</option>
-                  <option value="desc">내림차순</option>
-                </select>
-              </label>
-            </div>
-            <p className="v2-muted">
-              접근 상태는 최근 확인 결과입니다. 원본을 열거나 추출할 때 권한을
-              다시 확인합니다.
-            </p>
-          </details>
-          <State
-            resource={documents}
-            empty="원본 폴더의 파일을 선택해 첫 문서를 등록하세요."
-          />
-          <div className="v2-list">
-            {documents.data?.items.map((doc) => (
-              <button
-                className={
-                  "v2-list-item " +
-                  (route.document === doc.document_id ? "selected" : "")
-                }
-                key={doc.document_id}
-                onClick={() =>
-                  go({
-                    document: doc.document_id,
-                    version: doc.current_version_id,
-                    sheet: "",
-                    application: "",
-                    mapping: "",
-                    series: "",
-                    item: "",
-                  })
-                }
-              >
-                <span className="v2-file-icon">X</span>
-                <span>
-                  <strong>{doc.display_name}</strong>
-                  <small>
-                    {doc.provider} · {doc.file_type.toUpperCase()}
-                  </small>
-                  <small>
-                    {doc.author || "작성자 미상"} ·{" "}
-                    {doc.authored_at?.slice(0, 10) || "작성일 미상"} ·{" "}
-                    {
-                      {
-                        allowed: "접근 가능",
-                        denied: "접근 불가",
-                        expired: "확인 만료",
-                        unknown: "접근 미확인",
-                      }[doc.access_status as string]
-                    }{" "}
-                    ·{" "}
-                    {
-                      {
-                        unassigned: "미배정",
-                        review: "검수 필요",
-                        pending: "추출 필요",
-                        published: "발행됨",
-                        failed: "실패",
-                      }[doc.extraction_status as string]
-                    }
-                  </small>
-                </span>
-                <span>→</span>
-              </button>
-            ))}
-          </div>
-          <Pager page={documents} />
-        </section>
-        <section className="v2-card">
+      <DocumentsTable />
+      <details className="v2-card v2-space v2-register">
+        <summary>
           <h2>원본 등록</h2>
-          <p className="v2-muted">
-            서버의 원본 폴더에서 선택하거나 보안 제공자의 원본 참조를
-            입력하세요.
-          </p>
-          <div className="v2-inline">
-            <code>/{directory}</code>
-            {directory && (
-              <button
-                onClick={() =>
-                  setDirectory(directory.split("/").slice(0, -1).join("/"))
-                }
-              >
-                상위 폴더
-              </button>
-            )}
-          </div>
-          <div className="v2-source-files">
-            <State
-              resource={sources}
-              empty="폴더에 XLSX가 없습니다. 원본 참조를 직접 입력할 수 있습니다."
-            />
-            {sources.data?.items.map((file) => (
-              <button
-                key={file.name}
-                onClick={() =>
-                  file.directory
-                    ? setDirectory(file.source_ref)
-                    : setRefs((previous) =>
-                        [
-                          ...new Set([
-                            ...previous.split("\n").filter(Boolean),
-                            file.source_ref,
-                          ]),
-                        ].join("\n"),
-                      )
-                }
-              >
-                {file.directory ? "▸" : "+"} {file.name}
-              </button>
-            ))}
-          </div>
-          <Pager page={sources} />
-          <label>
-            읽기 제공자
-            <select
-              value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-            >
-              <option value="local-xlsx">일반 XLSX (간략 보기)</option>
-              <option value="protected-reader">보안 원본 어댑터</option>
-            </select>
-          </label>
-          {provider !== "local-xlsx" && (
-            <p className="v2-note">
-              서버에 승인된 DRM 읽기·렌더 어댑터가 연결되어 있어야 합니다.
-            </p>
-          )}
-          <label>
-            원본 참조 · 한 줄에 하나, 최대 100개
-            <textarea
-              rows={3}
-              value={refs}
-              onChange={(e) => setRefs(e.target.value)}
-              placeholder="sample.xlsx"
-            />
-          </label>
-          <p className="v2-error">{error}</p>
-          <button
-            className="primary"
-            disabled={tasks.busy || !refs.trim()}
-            onClick={() => {
-              setError("");
-              tasks.run(
-                "/documents/register",
-                {
-                  source_refs: refs
-                    .split("\n")
-                    .map((v) => v.trim())
-                    .filter(Boolean),
-                  provider,
-                },
-                (result) => {
-                  changed();
-                  const doc = result.documents?.[0];
-                  if (doc)
-                    go({
-                      document: doc.document_id,
-                      version: doc.version_id,
-                      sheet: "",
-                      application: "",
-                      mapping: "",
-                    });
-                },
-              );
-            }}
-          >
-            문서 등록
-          </button>
-        </section>
-      </div>
-      {route.document && <DocumentDetail key={route.document + refresh} />}
-      <ReviewQueue />
-    </>
-  );
-}
-function DocumentDetail() {
-  const { route, go } = useNavigation();
-  const versions = usePage("/documents/" + route.document + "/versions");
-  const sheets = usePage(
-    route.version ? "/versions/" + route.version + "/sheets" : null,
-  );
-  return (
-    <section className="v2-card v2-space">
-      <div className="v2-card-head">
-        <h2>문서 버전 · 시트</h2>
-        {route.version && (
-          <button onClick={() => go({ tab: "source" })}>
-            원본 · 검수 열기 →
-          </button>
-        )}
-      </div>
-      <div className="v2-grid two">
-        <div>
-          <h3>등록 버전</h3>
-          <State resource={versions} />
-          <div className="v2-list">
-            {versions.data?.items.map((v) => (
-              <button
-                className={
-                  "v2-list-item " +
-                  (v.document_version_id === route.version ? "selected" : "")
-                }
-                key={v.document_version_id}
-                onClick={() =>
-                  go({
-                    version: v.document_version_id,
-                    sheet: "",
-                    application: "",
-                    mapping: "",
-                    series: "",
-                    item: "",
-                  })
-                }
-              >
-                <span>
-                  <strong>
-                    {v.filename} · v{v.revision_no}
-                  </strong>
-                  <small>
-                    {v.captured_at} · {v.author || "작성자 미상"}
-                  </small>
-                </span>
-              </button>
-            ))}
-          </div>
-          <Pager page={versions} />
-        </div>
-        <div>
-          <h3>시트 선택</h3>
-          <State resource={sheets} />
-          {sheets.data?.items.map((s) => (
+        </summary>
+        <p className="v2-muted">
+          서버의 원본 폴더에서 선택하거나 보안 제공자의 원본 참조를
+          입력하세요.
+        </p>
+        <div className="v2-inline">
+          <code>/{directory}</code>
+          {directory && (
             <button
-              className="v2-chip"
-              key={s.sheet_id}
-              onClick={() => go({ tab: "source", sheet: s.sheet_id })}
+              onClick={() =>
+                setDirectory(directory.split("/").slice(0, -1).join("/"))
+              }
             >
-              {s.name} · {s.estimated_rows || "?"}행
+              상위 폴더
+            </button>
+          )}
+        </div>
+        <div className="v2-source-files">
+          <State
+            resource={sources}
+            empty="폴더에 XLSX가 없습니다. 원본 참조를 직접 입력할 수 있습니다."
+          />
+          {sources.data?.items.map((file) => (
+            <button
+              key={file.name}
+              onClick={() =>
+                file.directory
+                  ? setDirectory(file.source_ref)
+                  : setRefs((previous) =>
+                      [
+                        ...new Set([
+                          ...previous.split("\n").filter(Boolean),
+                          file.source_ref,
+                        ]),
+                      ].join("\n"),
+                    )
+              }
+            >
+              {file.directory ? "▸" : "+"} {file.name}
             </button>
           ))}
-          <Pager page={sheets} />
         </div>
-      </div>
-      <Suggestions />
-      <AssignTemplate />
-    </section>
-  );
-}
-export function AssignTemplate() {
-  const { route, go, changed } = useNavigation();
-  const templates = usePage("/templates");
-  const sheets = usePage(
-    route.version ? "/versions/" + route.version + "/sheets" : null,
-  );
-  const [selected, setSelected] = useState("");
-  const detail = useData(selected ? "/template-versions/" + selected : null);
-  const [bindings, setBindings] = useState<Record<string, string[]>>({});
-  const [approved, setApproved] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  async function assign() {
-    setBusy(true);
-    setError("");
-    try {
-      const result = await api("/applications", {
-        version_id: route.version,
-        template_version_id: selected,
-        bindings,
-        approved,
-      });
-      changed();
-      go({
-        tab: "source",
-        application: result.application_id,
-        mapping: "",
-        series: "",
-        item: "",
-      });
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <details className="v2-details">
-      <summary>+ 이 문서 버전에 템플릿 연결</summary>
-      <p>
-        같은 시트·위치에도 여러 템플릿을 연결할 수 있습니다. 시트 역할마다 실제
-        시트를 선택하세요.
-      </p>
-      <label>
-        템플릿
-        <select
-          value={selected}
-          onChange={(e) => {
-            setSelected(e.target.value);
-            setBindings({});
-            setApproved(false);
+        <Pager page={sources} />
+        <label>
+          읽기 제공자
+          <select
+            value={provider}
+            onChange={(e) => setProvider(e.target.value)}
+          >
+            <option value="local-xlsx">일반 XLSX (간략 보기)</option>
+            <option value="protected-reader">보안 원본 어댑터</option>
+          </select>
+        </label>
+        {provider !== "local-xlsx" && (
+          <p className="v2-note">
+            서버에 승인된 DRM 읽기·렌더 어댑터가 연결되어 있어야 합니다.
+          </p>
+        )}
+        <label>
+          원본 참조 · 한 줄에 하나, 최대 100개
+          <textarea
+            rows={3}
+            value={refs}
+            onChange={(e) => setRefs(e.target.value)}
+            placeholder="sample.xlsx"
+          />
+        </label>
+        <p className="v2-error">{error}</p>
+        <button
+          className="primary"
+          disabled={tasks.busy || !refs.trim()}
+          onClick={() => {
+            setError("");
+            tasks.run(
+              "/documents/register",
+              {
+                source_refs: refs
+                  .split("\n")
+                  .map((v) => v.trim())
+                  .filter(Boolean),
+                provider,
+              },
+              (result) => {
+                changed();
+                const doc = result.documents?.[0];
+                if (doc)
+                  go({
+                    document: doc.document_id,
+                    version: doc.version_id,
+                    sheet: "",
+                    application: "",
+                    mapping: "",
+                  });
+              },
+            );
           }}
         >
-          <option value="">템플릿 선택</option>
-          {templates.data?.items.map((t) => (
-            <option value={t.template_version_id} key={t.template_id}>
-              {t.name} · v{t.revision_no}
-            </option>
-          ))}
-        </select>
-      </label>
-      <State
-        resource={templates}
-        empty="템플릿 탭에서 먼저 템플릿을 만드세요."
-      />
-      <Pager page={templates} />
-      <State resource={detail} />
-      {detail.data &&
-        Object.entries(detail.data.definition.sheet_roles).map(
-          ([role, value]) => (
-            <div className="v2-binding" key={role}>
-              <label>
-                {role} · {(value as Row).cardinality || "one"}
-                <select
-                  value=""
-                  onChange={(e) => {
-                    if (e.target.value)
-                      setBindings((b) => ({
-                        ...b,
-                        [role]:
-                          (value as Row).cardinality === "many"
-                            ? [...new Set([...(b[role] || []), e.target.value])]
-                            : [e.target.value],
-                      }));
-                  }}
-                >
-                  <option value="">시트 연결</option>
-                  {sheets.data?.items.map((s) => (
-                    <option value={s.sheet_id} key={s.sheet_id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {(bindings[role] || []).map((id) => (
-                <button
-                  className="v2-chip"
-                  key={id}
-                  onClick={() =>
-                    setBindings((b) => ({
-                      ...b,
-                      [role]: b[role].filter((x) => x !== id),
-                    }))
-                  }
-                >
-                  {sheets.data?.items.find((s) => s.sheet_id === id)?.name ||
-                    id.slice(0, 8)}{" "}
-                  ×
-                </button>
-              ))}
-            </div>
-          ),
-        )}
-      {selected && (
-        <>
-          <Pager page={sheets} />
-          <label className="v2-check">
-            <input
-              type="checkbox"
-              checked={approved}
-              onChange={(e) => setApproved(e.target.checked)}
-            />
-            선택한 시트에서 키·값 영역과 연결 개념을 확인했습니다
-          </label>
-          <button
-            className="primary"
-            disabled={busy || !route.version}
-            onClick={assign}
-          >
-            {approved ? "승인하여 연결" : "검수 대기로 연결"}
-          </button>
-        </>
-      )}
-      <p className="v2-error" role="alert">
-        {error}
-      </p>
-    </details>
+          문서 등록
+        </button>
+      </details>
+      <DocumentDrawer key={route.document + refresh} />
+      <ReviewQueue />
+    </>
   );
 }
 export function Knowledge() {
