@@ -28,6 +28,58 @@ def selection_cte(kg, roots, excluded):
     return sql, (kg, *roots, kg, kg, *excluded, *roots, kg, *roots)
 
 
+# 목록의 문서군·템플릿 요약. 메타데이터만 읽고 원본 파일은 열지 않는다(db-schema-v2 §4/§6).
+# 문서군 = coverage_graph()와 같은 규칙: 현재 문서 버전의 현재 발행 실행에 추출된 개념을 parent_of 간선으로
+# L1까지 올린 뿌리(각 단계에서 level-1인 활성 부모 중 concept_id가 가장 작은 것; 폐기 개념은 사슬을 끊는다).
+ROOT_CAP = 8
+DOCUMENT_CTES = """WITH RECURSIVE
+apps AS (
+  SELECT a.application_id, a.document_version_id, tv.template_id, a.template_version_id, t.name, tv.revision_no,
+    CASE
+      WHEN EXISTS(SELECT 1 FROM extraction_run e WHERE e.application_id=a.application_id AND e.status='failed'
+                  AND e.created_at=(SELECT max(z.created_at) FROM extraction_run z WHERE z.application_id=a.application_id)) THEN 'failed'
+      WHEN a.published_run_id IS NOT NULL THEN 'published'
+      WHEN EXISTS(SELECT 1 FROM mapping_revision m WHERE m.application_id=a.application_id AND m.status<>'approved'
+                  AND m.revision_no=(SELECT max(z.revision_no) FROM mapping_revision z WHERE z.application_id=m.application_id AND z.rule_key=m.rule_key)) THEN 'review'
+      ELSE 'pending' END state,
+    row_number() OVER (PARTITION BY a.document_version_id ORDER BY t.name, tv.revision_no, a.application_id) rn
+  FROM template_application a
+  JOIN template_version tv ON tv.template_version_id=a.template_version_id
+  JOIN template t ON t.template_id=tv.template_id
+),
+cov AS (
+  SELECT DISTINCT d.document_id, m.kg_revision_id kg, m.concept_id
+  FROM document d
+  JOIN template_application a ON a.document_version_id=d.current_version_id AND a.published_run_id IS NOT NULL
+  JOIN extraction_run r ON r.run_id=a.published_run_id AND r.status='succeeded'
+  JOIN extracted_series s ON s.run_id=r.run_id AND s.document_version_id=d.current_version_id
+  JOIN mapping_revision m ON m.mapping_revision_id=s.mapping_revision_id AND m.application_id=a.application_id
+  WHERE m.concept_id IS NOT NULL
+),
+climb(kg, start, cid, lvl) AS (
+  SELECT c.kg_revision_id, c.concept_id, c.concept_id, c.level FROM domain_concept c
+  WHERE c.status='active' AND EXISTS(SELECT 1 FROM cov WHERE cov.kg=c.kg_revision_id AND cov.concept_id=c.concept_id)
+  UNION ALL
+  SELECT u.kg, u.start,
+    (SELECT min(e.from_concept_id) FROM domain_edge e
+       JOIN domain_concept p ON p.kg_revision_id=e.kg_revision_id AND p.concept_id=e.from_concept_id AND p.status='active' AND p.level=u.lvl-1
+     WHERE e.kg_revision_id=u.kg AND e.to_concept_id=u.cid AND e.relation_type='parent_of'),
+    u.lvl-1
+  FROM climb u WHERE u.lvl>1 AND u.cid IS NOT NULL
+),
+doc_root AS (
+  SELECT document_id, root_id, name,
+    row_number() OVER (PARTITION BY document_id ORDER BY name, root_id) rn
+  FROM (
+    SELECT DISTINCT cov.document_id, u.cid root_id,
+      (SELECT c.name FROM domain_concept c JOIN kg_revision k ON k.kg_revision_id=c.kg_revision_id
+         WHERE c.concept_id=u.cid ORDER BY k.revision_no DESC LIMIT 1) name
+    FROM cov JOIN climb u ON u.kg=cov.kg AND u.start=cov.concept_id AND u.lvl=1 AND u.cid IS NOT NULL
+  )
+)
+"""
+
+
 def document_query(
     user,
     q,
@@ -40,13 +92,21 @@ def document_query(
     sort,
 ):
     # 접근 필터는 마지막 권한 관찰을 사용한다. 목록에서 원본 전체를 다시 열지 않는다.
+    # 정렬 값은 커서 키이므로 NULL이 나오면 안 된다(str|int만 커서로 복원된다).
     sort_sql = {
         "name": "display_name",
         "author": "coalesce(author,'')",
         "authored_at": "coalesce(authored_at,'')",
         "registered_at": "registered_at",
+        # 미배정 문서는 '1' 표지로 오름차순 마지막(내림차순 첫째)에 온다. 단일 키 keyset이라 방향별 nulls-last는 없다.
+        "template": "CASE WHEN first_template IS NULL THEN '1' ELSE '0'||first_template END",
+        "review": "review_pending",
     }[sort]
-    sql = """SELECT x.*,""" + sort_sql + """ sort_value FROM (
+    sql = (
+        DOCUMENT_CTES
+        + """SELECT x.*,"""
+        + sort_sql
+        + """ sort_value FROM (
       SELECT d.document_id,d.display_name,d.provider,d.file_type,d.current_version_id,d.registered_at,
         v.author,v.authored_at,
         CASE WHEN o.access_id IS NULL THEN 'unknown' WHEN o.expires_at<=? THEN 'expired'
@@ -56,12 +116,23 @@ def document_query(
           WHEN EXISTS(SELECT 1 FROM template_application a JOIN extraction_run e USING(application_id) WHERE a.document_version_id=d.current_version_id AND e.status='failed' AND e.created_at=(SELECT max(z.created_at) FROM extraction_run z WHERE z.application_id=a.application_id)) THEN 'failed'
           WHEN NOT EXISTS(SELECT 1 FROM template_application a WHERE a.document_version_id=d.current_version_id AND a.published_run_id IS NULL) THEN 'published'
           WHEN EXISTS(SELECT 1 FROM mapping_revision m WHERE m.document_version_id=d.current_version_id AND m.status<>'approved' AND m.revision_no=(SELECT max(z.revision_no) FROM mapping_revision z WHERE z.application_id=m.application_id AND z.rule_key=m.rule_key)) THEN 'review'
-          ELSE 'pending' END extraction_status
+          ELSE 'pending' END extraction_status,
+        (SELECT json_group_array(json_object('application_id',application_id,'template_id',template_id,'template_version_id',template_version_id,'name',name,'revision_no',revision_no,'state',state) ORDER BY rn)
+           FROM apps WHERE apps.document_version_id=d.current_version_id) templates_json,
+        (SELECT count(*) FROM apps WHERE apps.document_version_id=d.current_version_id) template_count,
+        (SELECT name FROM apps WHERE apps.document_version_id=d.current_version_id AND rn=1) first_template,
+        (SELECT count(*) FROM mapping_revision m WHERE m.document_version_id=d.current_version_id AND m.status<>'approved'
+           AND m.revision_no=(SELECT max(z.revision_no) FROM mapping_revision z WHERE z.application_id=m.application_id AND z.rule_key=m.rule_key)) review_pending,
+        (SELECT json_group_array(json_object('concept_id',root_id,'name',name) ORDER BY rn) FROM doc_root g WHERE g.document_id=d.document_id AND g.rn<="""
+        + str(ROOT_CAP)
+        + """) roots_json,
+        (SELECT count(*) FROM doc_root g WHERE g.document_id=d.document_id) root_count
       FROM document d LEFT JOIN document_version v ON v.document_version_id=d.current_version_id
       LEFT JOIN access_observation o ON o.access_id=(SELECT z.access_id FROM access_observation z
         WHERE z.document_version_id=d.current_version_id AND z.principal_ref=? ORDER BY z.checked_at DESC,z.access_id DESC LIMIT 1)
       WHERE d.display_name LIKE ? AND coalesce(v.author,'') LIKE ?
     """
+    )
     params = [now(), user, "%" + q + "%", "%" + author + "%"]
     if date_from:
         sql += " AND substr(v.authored_at,1,10)>=?"

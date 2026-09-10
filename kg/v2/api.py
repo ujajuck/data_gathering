@@ -245,7 +245,9 @@ def install(app: FastAPI, root, start_worker=True):
             "", "unassigned", "review", "pending", "published", "failed"
         ] = "",
         template: str = Query("", max_length=200),
-        sort: Literal["name", "author", "authored_at", "registered_at"] = "name",
+        sort: Literal[
+            "name", "author", "authored_at", "registered_at", "template", "review"
+        ] = "name",
         direction: Literal["asc", "desc"] = "asc",
         cursor: str | None = None,
         limit: int = Query(30, ge=1, le=100),
@@ -264,7 +266,7 @@ def install(app: FastAPI, root, start_worker=True):
             template,
             sort,
         )
-        return listing(
+        result = listing(
             sql,
             params,
             [
@@ -285,6 +287,12 @@ def install(app: FastAPI, root, start_worker=True):
             limit,
             direction == "desc",
         )
+        # 목록은 메타데이터만 읽는다. 문서군·템플릿 요약은 같은 SQL에서 계산되며 원본은 열지 않는다.
+        for item in result["items"]:
+            item["templates"] = json.loads(item.pop("templates_json"))
+            item["roots"] = json.loads(item.pop("roots_json"))
+            item.pop("first_template", None)
+        return result
 
     @router.get("/documents/{doc_id}/versions")
     def versions(
