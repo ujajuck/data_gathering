@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, Pager, State, useData, useNavigation, usePage } from "./client";
 import type { Row } from "./client";
 import Suggestions from "./Suggestions";
@@ -14,7 +15,15 @@ const CLEARED = {
 };
 
 // 파일 분석 표에서 고른 문서의 상세(등록 버전 · 시트 · 문서군 제안 · 템플릿 연결)를 우측 드로어로 보여준다.
-// aria-modal·inert는 쓰지 않는다: 뒤의 표와 검수 큐는 드로어가 열린 동안에도 조작할 수 있어야 한다.
+// 드로어는 모달이다: aria-modal과 Tab 순환으로 초점을 패널 안에 가두고, 뒤의 표·원본 등록·검수 큐는
+// Documents()가 inert로 닫아 둔다. 배경 클릭·닫기 버튼, 그리고 대화상자 안에서 누른 Escape로만 닫힌다.
+const FOCUSABLE =
+  'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
+// 닫힌 <details> 안에서는 summary만 초점을 받는다.
+function tabbable(el: HTMLElement) {
+  const closed = el.closest("details:not([open])");
+  return !closed || (el.tagName === "SUMMARY" && el.parentElement === closed);
+}
 export default function DocumentDrawer() {
   const { route, go } = useNavigation();
   const open = !!route.document;
@@ -25,32 +34,56 @@ export default function DocumentDrawer() {
     open && route.version ? "/versions/" + route.version + "/sheets" : null,
   );
   const panel = useRef<HTMLElement>(null);
-  const goRef = useRef(go);
-  goRef.current = go;
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
     panel.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") goRef.current(CLEARED);
-    };
-    document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("keydown", onKey);
       if (previous?.isConnected) previous.focus();
     };
   }, [open]);
   if (!open) return null;
   const close = () => go(CLEARED);
+  function onKeyDown(e: ReactKeyboardEvent<HTMLElement>) {
+    if (e.defaultPrevented) return;
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      close();
+      return;
+    }
+    if (e.key !== "Tab" || !panel.current) return;
+    const focusable = Array.from(
+      panel.current.querySelectorAll<HTMLElement>(FOCUSABLE),
+    ).filter(tabbable);
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    const inside = !!active && panel.current.contains(active);
+    if (!first) {
+      e.preventDefault();
+      panel.current.focus();
+    } else if (
+      e.shiftKey &&
+      (!inside || active === first || active === panel.current)
+    ) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (!inside || active === last)) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
   return (
     <>
       <div className="v2-drawer-backdrop" onClick={close} aria-hidden="true" />
       <aside
         className="v2-drawer"
         role="dialog"
+        aria-modal="true"
         aria-label="문서 상세"
         tabIndex={-1}
         ref={panel}
+        onKeyDown={onKeyDown}
       >
         <div className="v2-card-head v2-drawer-head">
           <h2>문서 상세</h2>

@@ -1286,10 +1286,13 @@
   cursor: pointer;
   list-style: revert;
 }
-.v2-register > summary h2 {
+/* summary는 disclosure 버튼으로 노출되므로 안에 h2를 두지 않고 span을 제목처럼 그린다. */
+.v2-register > summary .v2-register-title {
   display: inline;
   margin: 0;
   font-size: 16px;
+  font-weight: 650;
+  line-height: 1.25;
 }
 .v2-register[open] > summary {
   margin-bottom: 14px;

@@ -61,7 +61,8 @@ describe("기존 기능과 디자인 복원", () => {
   });
   it("제품명과 기존 탭 순서를 유지하고 문서 필터를 조회에 반영한다", async () => {
     const f = workbenchFixture();
-    f.open("documents");
+    // 문서 상세 드로어는 모달이라 열린 동안 필터 도구 모음은 inert다. 드로어를 닫은 채 연다.
+    f.open("documents", { document: "", version: "" });
     const user = userEvent.setup();
     render(<Workbench />);
     expect(screen.getByText("Semantic Excel Integration")).toBeTruthy();
@@ -166,7 +167,8 @@ describe("기존 기능과 디자인 복원", () => {
   });
   it("검수 큐의 승인에서 현재 편집 순번과 규칙을 보존한다", async () => {
     const f = workbenchFixture();
-    f.open("documents");
+    // 검수 큐는 문서 상세 드로어(모달)가 닫혀 있을 때만 조작할 수 있다.
+    f.open("documents", { document: "", version: "" });
     f.overrides.set("GET /review-queue", () =>
       page(
         f.state.saved
