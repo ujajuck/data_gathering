@@ -68,6 +68,7 @@ v2에서 그 원칙에 실제로 걸리는 테이블은 **`render_chunk` 하나*
 필수라는 근거는 아니다(2026-09-11 [답장](dvc-minimal-schema-response.md)의 반론을 수용). 불변식 기준의 3범주 재분류와
 병합 권고(run_mapping 흡수, series_region+item_region 통합, build_input 제거, integration_project 흡수)는
 [재답변](dvc-minimal-schema-reply.md)에 있다.
+이어서 [22개 코어안](parsing-core-schema.md)과 그에 대한 [답변](parsing-core-schema-reply.md)(합의 확인, 스펙 스냅샷·바인딩 단위 등 결함 5개, 검증 질문 5개의 현재 동작)이 있다.
 
 v2의 약점(인정): 34테이블·72트리거는 PoC치고 무겁고 트리거 기반 불변성은 PostgreSQL 이식 시 유지보수 부담이다(번역은 있으나
 런타임 미검증). 값이 `value_text`(Decimal도 문자열)+JSON 명세라 SQL 직접 집계가 불편하다(사용자 DB 빌드에서 타입을 복원하는
