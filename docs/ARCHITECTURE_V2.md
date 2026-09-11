@@ -553,7 +553,8 @@ classDiagram
     }
     class graph {
         <<module>>
-        +coverage_graph(conn, kg, domain, cap)  "L1 문서군 hull·발행 출처 수"
+        +coverage_graph(conn, kg, domain, cap)  "L1 문서군 hull·발행 출처 수·발행 상태 서명 캐시"
+        +graph_page(service, kg, focus, query, version, cursor, limit)  "이웃 탐색 페이지·문서 버전별 커버리지"
     }
     class suggest {
         <<module>>
@@ -845,13 +846,18 @@ classDiagram
         2. 개념 탐색 (3열: 목록 / 그래프 / 상세)
     }
     class DomainGraph {
-        SVG · L1 hull · 발행 출처 수 · 확대 · layoutDomain()
+        SVG · L1 hull · 발행 출처 수 · 확대 · layoutDomain()  (기본 모드, /kg/{kg}/graph)
+    }
+    class KnowledgeGraph {
+        이웃 탐색 모드 (kg_view=explore, /kg/{kg}/explore)
+        중심 개념 주변 · 페이지 30개 · 관계 120개 · 문서 버전별 검수 커버리지
     }
     class ConceptEditor {
         이름·정의·동의어·관계·폐기 → 새 KG 리비전(CAS)
     }
     Workbench --> Knowledge
     Knowledge *-- DomainGraph
+    Knowledge *-- KnowledgeGraph
     Knowledge *-- ConceptEditor
 
     class Source {

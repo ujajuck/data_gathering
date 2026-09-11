@@ -235,7 +235,7 @@ FastAPI `/docs`가 요청 파라미터의 기준이다. POST 작업은 `request_
 | 원본 등록/버전 | `POST /documents/register`, `GET /documents`(문서마다 현재 버전의 `templates[]`(적용 건마다 `application_id`·`scope_key`·`state`·`review_pending`)·`template_count`(적용 건 수: 같은 템플릿 버전을 scope를 달리해 여러 번 적용할 수 있다)·`review_pending`(미승인 규칙 헤드 수)·`roots[]`(발행 실행 기준 문서군 L1 뿌리, 최대 8개; 이름은 매핑이 고정된 KG 리비전의 것 = `GET /kg/{pinned}/graph`의 group, 문서가 여러 고정 리비전에 걸치면 가장 새 고정 리비전; 그래프의 2000 노드 절단은 적용하지 않음)·`root_count`. 정렬 키(`sort=template|review`)는 페이지 SQL이 인덱스로 계산하고 `templates[]`·`roots[]`는 같은 읽기 트랜잭션에서 페이지 문서에 대해서만 두 번째 메타데이터 SQL로 계산; `template=` 필터가 있으면 `sort=template`은 필터에 맞는 첫 템플릿 기준; 원본은 열지 않음), `/documents/{id}/versions`, `/versions/{id}/sheets` |
 | 권한/표시 | `GET /versions/{id}/access`, `POST /viewports` |
 | 작업 | `GET /jobs/{id}`, `POST /jobs/{id}/cancel` |
-| KG | `POST /kg/import`, `/kg/import-current`, `GET /kg/revisions`, `/kg/{id}/concepts`, `/kg/{id}/aliases`, `GET /kg/{id}/graph`(개념 트리 + 현재 문서 버전·발행 실행 기준 출처 수, 최대 2000 노드 초과 시 `truncated`) |
+| KG | `POST /kg/import`, `/kg/import-current`, `GET /kg/revisions`, `/kg/{id}/concepts`, `/kg/{id}/aliases`, `GET /kg/{id}/graph`(개념 트리 + 현재 문서 버전·발행 실행 기준 출처 수, 최대 2000 노드 초과 시 `truncated`), `GET /kg/{id}/explore`(이웃 탐색: `focus_id`·`q`·`document_version_id`·커서, 페이지당 30개·관계 120개, 문서 버전별 검수/발행 커버리지), `GET /kg/{id}/concepts/{cid}`, `GET /kg/{id}/concepts/{cid}/mappings?document_version_id=` |
 | 템플릿 | `POST /templates`, `GET /templates`, `/templates/{id}/versions`, `/template-versions/{id}` |
 | 배정/검수 | `POST /applications`, `GET /applications?version_id=…`, `/applications/{id}/mappings`, `/mappings/{id}` |
 | 수정 | `POST /applications/{id}/mappings/{id}/revisions` (`expected_seq`, `effective_spec`, `concept_id`, `status`) |
@@ -319,8 +319,8 @@ Node 24.19.0에서 Vitest·jsdom으로 실제 React 화면을 마운트하고, �
 브라우저 레이아웃/히트 테스트나 실제 DRM 제품의 원본 충실도 검증을 대신하지 않는다.
 
 기존 문서/매핑의 자동 마이그레이션, 임의 코드 템플릿 실행, 이미지/OCR 키 추출, 템플릿 영향도 diff,
-모든 겹친 템플릿의 동시 overlay, KG 그래프 캔버스, 작업 큐 분산화는 목표 설계의 다음 단계다.
-현재는 선택한 적용 건/규칙의 overlay와 페이지로 나눈 개념 관계 탐색을 제공한다.
+모든 겹친 템플릿의 동시 overlay, 문서군 커버리지 hull, 작업 큐 분산화는 목표 설계의 다음 단계다.
+현재는 선택한 적용 건/규칙의 overlay와 [문서 버전별 KG 커버리지 캔버스](v2-kg-coverage.md)를 제공한다.
 PostgreSQL/AGE는 동일 안정 ID/관계형 출처를 옮기고 KG를 투영하는 [이행 설계](db-schema-v2.md)를 따른다.
 DVC 자동 연동은 하지 않았다. JSON 템플릿은 Git, 승인된 파생 산출물·manifest는 선택적으로 DVC에
 연결할 수 있도록 artifact의 Git/DVC 참조 컬럼을 유지한다. DRM 원본/렌더를 자동 커밋하지 않는다.

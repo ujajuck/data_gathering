@@ -45,6 +45,7 @@ from .features import (
 )
 from .graph import coverage_graph
 from .recrawl import recrawl, require_template_version, status_query, status_summary
+from .graph import GraphPage, graph_page
 from .service import Service
 from .spec import address, bounds
 from .suggest import list_suggestions, store_signature, transplant
@@ -445,6 +446,57 @@ def install(app: FastAPI, root, start_worker=True):
             limit,
         )
 
+    @router.get("/kg/{kg}/explore", response_model=GraphPage)
+    def kg_explore(
+        kg: str,
+        focus_id: str = Query("", max_length=200),
+        q: str = Query("", max_length=200),
+        document_version_id: str | None = None,
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=30),
+        user=Depends(principal),
+    ):
+        """최대 30개 개념 + 중심 1개, 관계 120개. 커버리지는 선택한 문서 버전에 한정한다."""
+        if document_version_id:
+            service.authorize(document_version_id, user)
+        return graph_page(service, kg, focus_id, q, document_version_id, cursor, limit)
+
+    @router.get("/kg/{kg}/concepts/{cid}")
+    def concept_detail(kg: str, cid: str, user=Depends(principal)):
+        with service.db.connect() as conn:
+            return one(
+                conn,
+                "SELECT * FROM domain_concept WHERE kg_revision_id=? AND concept_id=?",
+                (kg, cid),
+            )
+
+    @router.get("/kg/{kg}/concepts/{cid}/mappings")
+    def concept_mappings(
+        kg: str,
+        cid: str,
+        document_version_id: str,
+        cursor: str | None = None,
+        limit: int = Query(30, ge=1, le=100),
+        user=Depends(principal),
+    ):
+        service.authorize(document_version_id, user)
+        return listing(
+            """SELECT m.mapping_revision_id,m.application_id,m.document_version_id,m.rule_key,
+                m.status,m.revision_no,t.name template_name,v.document_id,
+                (SELECT s.sheet_id FROM application_sheet s WHERE s.application_id=m.application_id
+                    ORDER BY s.role_key,s.ordinal LIMIT 1) sheet_id
+                FROM mapping_revision m JOIN template_version tv USING(template_version_id)
+                JOIN template t USING(template_id) JOIN document_version v USING(document_version_id)
+                WHERE m.kg_revision_id=? AND m.concept_id=? AND m.document_version_id=?
+                AND m.revision_no=(SELECT max(x.revision_no) FROM mapping_revision x
+                    WHERE x.application_id=m.application_id AND x.rule_key=m.rule_key)""",
+            (kg, cid, document_version_id),
+            ["concept-mappings", kg, cid, document_version_id],
+            ["m.application_id", "m.rule_key"],
+            cursor,
+            limit,
+        )
+
     @router.get("/kg/{kg}/concepts/{cid}/relations")
     def relations(
         kg: str,
@@ -644,13 +696,19 @@ def install(app: FastAPI, root, start_worker=True):
         run_id: str | None = None,
         concept_id: str | None = None,
         kg_revision_id: str | None = None,
+        document_version_id: str | None = None,
         roots: list[str] = Query([]),
         excluded: list[str] = Query([]),
         cursor: str | None = None,
         limit: int = Query(30, ge=1, le=100),
         user=Depends(principal),
     ):
-        sql = "SELECT s.*,m.concept_id,m.rule_key,m.application_id,m.kg_revision_id,(SELECT c.name FROM domain_concept c WHERE c.kg_revision_id=m.kg_revision_id AND c.concept_id=m.concept_id) concept_name,json_extract(m.effective_spec_json,'$.value_spec.type') target_type,(SELECT i.unit_normalized FROM extracted_item i WHERE i.series_id=s.series_id ORDER BY i.item_index LIMIT 1) target_unit FROM extracted_series s JOIN mapping_revision m USING(mapping_revision_id) JOIN template_application a USING(application_id) JOIN document_version v ON v.document_version_id=s.document_version_id JOIN document d USING(document_id) WHERE "
+        sql = "SELECT s.*,v.document_id,m.concept_id,m.rule_key,m.application_id,m.kg_revision_id,(SELECT c.name FROM domain_concept c WHERE c.kg_revision_id=m.kg_revision_id AND c.concept_id=m.concept_id) concept_name,json_extract(m.effective_spec_json,'$.value_spec.type') target_type,(SELECT i.unit_normalized FROM extracted_item i WHERE i.series_id=s.series_id ORDER BY i.item_index LIMIT 1) target_unit FROM extracted_series s JOIN mapping_revision m USING(mapping_revision_id) JOIN template_application a USING(application_id) JOIN document_version v ON v.document_version_id=s.document_version_id JOIN document d USING(document_id) WHERE "
+        current_version = (
+            ""
+            if document_version_id
+            else " AND d.current_version_id=s.document_version_id"
+        )
         if run_id:
             sql += "s.run_id=? AND EXISTS(SELECT 1 FROM extraction_run e WHERE e.run_id=s.run_id AND e.status='succeeded')"
             params = (run_id,)
@@ -659,21 +717,41 @@ def install(app: FastAPI, root, start_worker=True):
             sql = (
                 cte
                 + sql
-                + "s.run_id=a.published_run_id AND d.current_version_id=s.document_version_id AND m.kg_revision_id=? AND m.concept_id IN(SELECT id FROM selected)"
+                + "s.run_id=a.published_run_id"
+                + current_version
+                + " AND m.kg_revision_id=? AND m.concept_id IN(SELECT id FROM selected)"
             )
             params = (*selected_params, kg_revision_id)
         else:
-            sql += "s.run_id=a.published_run_id AND d.current_version_id=s.document_version_id AND m.concept_id=? AND m.kg_revision_id=?"
+            sql += (
+                "s.run_id=a.published_run_id"
+                + current_version
+                + " AND m.concept_id=? AND m.kg_revision_id=?"
+            )
             params = (concept_id, kg_revision_id)
+        if document_version_id:
+            service.authorize(document_version_id, user)
+            sql += " AND s.document_version_id=?"
+            params = (*params, document_version_id)
         result = listing(
             sql,
             params,
-            ["series", run_id, concept_id, kg_revision_id, roots, excluded],
+            [
+                "series",
+                run_id,
+                concept_id,
+                kg_revision_id,
+                roots,
+                excluded,
+                document_version_id,
+            ],
             ["s.series_id"],
             cursor,
             limit,
         )
-        for vid in {r["document_version_id"] for r in result["items"]}:
+        for vid in {r["document_version_id"] for r in result["items"]} - {
+            document_version_id
+        }:
             service.authorize(vid, user)
         return result
 

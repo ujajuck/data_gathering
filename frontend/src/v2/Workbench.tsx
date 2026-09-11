@@ -23,6 +23,7 @@ import { TemplatePresets } from "./Presets";
 import ConceptEditor from "./ConceptEditor";
 import DomainGraph from "./DomainGraph";
 import type { Graph, GraphNode } from "./DomainGraph";
+import KnowledgeGraph, { coverageVersion } from "./KnowledgeGraph";
 import Recrawl from "./Recrawl";
 import DocumentsTable from "./DocumentsTable";
 import DocumentDrawer from "./DocumentDrawer";
@@ -290,16 +291,46 @@ export function Knowledge() {
           "/relations"
       : null,
   );
+  // 이웃 탐색 모드에서 고른 문서 버전(coverage)이 있으면 출처·검수 규칙을 그 버전으로 좁힌다.
+  const coverage = coverageVersion(route);
   const sources = usePage(
     kg && route.concept
       ? "/series?kg_revision_id=" +
           kg +
           "&concept_id=" +
-          encodeURIComponent(route.concept)
+          encodeURIComponent(route.concept) +
+          (coverage
+            ? "&document_version_id=" + encodeURIComponent(coverage)
+            : "") +
+          "&r=" +
+          refresh
+      : null,
+  );
+  const detail = useData(
+    kg && route.concept
+      ? "/kg/" + kg + "/concepts/" + encodeURIComponent(route.concept)
+      : null,
+  );
+  const mappings = usePage(
+    kg && route.concept && coverage
+      ? "/kg/" +
+          kg +
+          "/concepts/" +
+          encodeURIComponent(route.concept) +
+          "/mappings?document_version_id=" +
+          encodeURIComponent(coverage) +
+          "&r=" +
+          refresh
       : null,
   );
   const graph = useData(kg ? "/kg/" + kg + "/graph" : null);
-  const [view, setView] = useState<"graph" | "list">("graph");
+  // 보기 방식은 URL(kg_view)에 남긴다: graph(문서군 hull, 기본) · explore(이웃 탐색·문서 커버리지) · list
+  const view: "graph" | "explore" | "list" =
+    route.kg_view === "list" || route.kg_view === "explore"
+      ? route.kg_view
+      : "graph";
+  const setView = (next: "graph" | "explore" | "list") =>
+    go({ kg_view: next === "graph" ? "" : next });
   const [zoom, setZoom] = useState(1);
   const rootFilter = route.root || "";
   const selectedOnPage = concepts.data?.items.find(
@@ -312,6 +343,7 @@ export function Knowledge() {
       : null,
   );
   const selected =
+    detail.data ||
     selectedOnPage ||
     lookup.data?.items?.find((c: Row) => c.concept_id === route.concept);
   const graphData = graph.data as Graph | null;
@@ -339,7 +371,7 @@ export function Knowledge() {
         current ? {} : JSON.parse(definition),
       );
       changed();
-      go({ kg: r.kg_revision_id, concept: "", root: "" });
+      go({ kg: r.kg_revision_id, concept: "", root: "", graph_focus: "" });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -355,7 +387,7 @@ export function Knowledge() {
       />
       <div
         className={
-          "v2-grid " + (view === "graph" ? "three v2-kg-layout" : "two")
+          "v2-grid " + (view === "list" ? "two" : "three v2-kg-layout")
         }
       >
         <section className="v2-card" aria-label="도메인 개념">
@@ -367,6 +399,12 @@ export function Knowledge() {
                 onClick={() => setView("graph")}
               >
                 그래프
+              </button>
+              <button
+                aria-pressed={view === "explore"}
+                onClick={() => setView("explore")}
+              >
+                이웃 탐색
               </button>
               <button
                 aria-pressed={view === "list"}
@@ -381,13 +419,13 @@ export function Knowledge() {
             <select
               value={kg}
               onChange={(e) =>
-                go({ kg: e.target.value, concept: "", root: "" })
+                go({ kg: e.target.value, concept: "", root: "", graph_focus: "" })
               }
             >
               <option value="">KG 선택</option>
               {revisions.data?.items.map((k) => (
                 <option key={k.kg_revision_id} value={k.kg_revision_id}>
-                  v{k.revision_no} · {k.created_at.slice(0, 10)}
+                  v{k.revision_no} · {k.created_at?.slice(0, 10)}
                 </option>
               ))}
             </select>
@@ -528,14 +566,62 @@ export function Knowledge() {
             )}
           </section>
         )}
-        <section className="v2-card">
-          <h2>{route.concept || "개념을 선택하세요"}</h2>
+        {view === "explore" && <KnowledgeGraph kg={kg} query={search} />}
+        <section className="v2-card" aria-label="선택 개념 상세">
+          <h2>{selected?.name || route.concept || "개념을 선택하세요"}</h2>
           {selected && (
             <ConceptEditor
               key={kg + route.concept}
               kg={kg}
               concept={selected}
             />
+          )}
+          {coverage && route.concept && (
+            <>
+              <h3>선택 문서의 검수 규칙</h3>
+              <State
+                resource={mappings}
+                empty="선택한 KG·문서 버전에 연결된 규칙이 없습니다."
+              />
+              {mappings.data?.items.map((m) => (
+                <button
+                  key={m.mapping_revision_id}
+                  className="v2-list-item"
+                  onClick={() =>
+                    go({
+                      tab: "source",
+                      document: m.document_id,
+                      version: m.document_version_id,
+                      application: m.application_id,
+                      mapping: m.mapping_revision_id,
+                      sheet: m.sheet_id || "",
+                      series: "",
+                      item: "",
+                      row: "1",
+                      col: "1",
+                    })
+                  }
+                >
+                  <span>
+                    <strong>
+                      {m.template_name} · {m.rule_key}
+                    </strong>
+                    <small>
+                      r{m.revision_no} ·{" "}
+                      {
+                        {
+                          approved: "승인",
+                          proposed: "검수 대기",
+                          rejected: "반려",
+                        }[m.status as string]
+                      }
+                    </small>
+                  </span>
+                  <span>검수 →</span>
+                </button>
+              ))}
+              <Pager page={mappings} />
+            </>
           )}
           <h3>연결 관계</h3>
           <State resource={relations} empty="등록된 관계가 없습니다." />

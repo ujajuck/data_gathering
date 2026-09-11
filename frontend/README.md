@@ -6,6 +6,8 @@ v1과 공유한다(`src/product.ts`, `src/product.css`). [복원 범위와 결�
 복원한 기능과 남은 항목을 명시한다. `/api/v2`는 독립 서버 `kg.v2` 또는
 기존 `kg.webapp`에서 제공한다. [v2 실행 안내](../docs/design/db-schema-v2-runtime.md)에
 샘플 생성, 검수와 추출, DRM Reader 계약 및 지원 범위를 정리했다.
+개념 탐색의 [KG 커버리지 캔버스](../docs/design/v2-kg-coverage.md)는 선택한 문서 버전의
+검수·발행 상태와 도메인 관계를 페이지·확대·드래그로 탐색하고 원본 검수로 연결한다.
 빌드 산출물(`dist/`)이 커밋되어 서버가 루트
 `/` 에 바로 서빙한다 — 프론트를 고치면 `npm run build` 후 dist까지 커밋한다.
 (초기 바닐라 JS UI `kg/web_kg`는 포트 완료 후 제거됐다.)

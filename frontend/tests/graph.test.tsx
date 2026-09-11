@@ -114,7 +114,10 @@ describe("개념 탐색 커버리지 그래프", () => {
       await screen.findByRole("button", { name: "개념 공정온도" }),
     );
     await waitFor(() => expect(query("concept")).toBe(f.ids.concept));
-    expect(screen.getByRole("heading", { name: f.ids.concept })).toBeTruthy();
+    // 상세 헤더는 개념 ID가 아니라 이름을 보여준다(단건 조회 /kg/{kg}/concepts/{cid}).
+    expect(
+      await screen.findByRole("heading", { name: "공정온도" }),
+    ).toBeTruthy();
     await waitFor(() =>
       expect(
         f.calls.some(

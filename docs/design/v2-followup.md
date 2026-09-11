@@ -10,6 +10,7 @@
 
 | 항목 | 구현 | 검증 |
 |---|---|---|
+| KG 이웃 탐색 그래프 (codex/v2-kg-coverage 편입) | 개념 탐색의 `이웃 탐색` 모드: `GET /kg/{kg}/explore`(중심 개념 주변 한 단계, 페이지당 30개·관계 120개, 선택 문서 버전의 승인/검수/반려/발행 시리즈 수), `frontend/src/v2/KnowledgeGraph.tsx`, 상세 패널의 "선택 문서의 검수 규칙 → 검수 →". 기본 모드는 아래 hull 캔버스. | codex 테스트 3개(`tests/test_v2_runtime.py`), `frontend/tests/knowledge-graph.test.tsx`, `e2e/v2/graph.spec.ts` |
 | KG 커버리지 그래프 캔버스 | `GET /api/v2/kg/{kg}/graph` (`kg/v2/graph.py`) + `frontend/src/v2/DomainGraph.tsx`. v1 DomainGraph의 배치 알고리즘·색을 그대로 쓰고 데이터는 v2(현재 문서 버전의 발행 실행)로 계산한다. 개념 탐색 화면이 v1처럼 3열(목록/그래프/상세)이 되며 hull 클릭은 문서군 필터, 노드 클릭은 개념 상세·편집기다. 하위 개념이 없는 L1도 hull로 그린다. 2,000노드 상한을 넘으면 `truncated`. | `tests/test_v2_graph.py`, `frontend/tests/graph.test.tsx`; 이관한 financier KG(L1 7·리프 48)로 실제 브라우저 확인 |
 | v1 `kg.db` → v2 이관 | `python -m kg.v2 migrate --ws <v2> --from-ws <v1> [--raw DIR] [--dry-run] [--report r.json]` (`kg/v2/migrate.py`). 새 안정 ID, `artifact` 링크로 멱등, 매핑은 전부 `proposed`, 값은 재추출 대상. v1 `IS_A`(자식→부모)는 레벨 차 1일 때 `parent_of`로 방향을 뒤집어 옮긴다. | `tests/test_v2_migrate.py`(19); 실제 financier 워크스페이스 이관: 문서 13·시트 139·개념 55·별칭 252·엣지 68, 재실행 시 전부 `existing` |
 | 같은 양식 문서군 제안 · 레시피 이식 | 문서 버전의 구조 서명(시트명·라벨·병합) 캐시(`version_signature`), `GET /versions/{id}/suggestions`, `POST /versions/{id}/applications/from-suggestion` (`kg/v2/suggest.py`), 파일 분석 화면의 `Suggestions.tsx`. 이식된 규칙은 항상 `proposed`(§4.10). | `tests/test_v2_suggest.py`, `frontend/tests/suggestions.test.tsx`; 복사본 문서로 브라우저 확인(점수 1.0 → 등록 → 원본 화면에 검수 대기 규칙) |

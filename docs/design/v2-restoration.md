@@ -92,3 +92,9 @@ DRM 샘플로 별도 검증해야 한다. 현재 미설정 환경의 실행 결�
 PostgreSQL DDL·AGE projection, DVC 내보내기를 추가했다 — [후속 구현 기록](v2-followup.md).
 실제 DRM SDK·네이티브 렌더 연동, PostgreSQL/AGE 런타임 검증, 겹친 템플릿 동시 overlay는 여전히 후속 범위이며,
 기존 기능 목록과 동등하다고 주장하지 않는다.
+
+`codex/v2-kg-coverage`의 [문서 버전별 이웃 탐색 그래프](v2-kg-coverage.md)는 개념 탐색의 **이웃 탐색** 모드로 편입했다(문서군 hull 캔버스는 기본 그래프 모드로 유지).
+
+v1 데이터 자동 마이그레이션, PostgreSQL+AGE, DVC 자동 연동,
+겹친 템플릿 동시 overlay, 문서군 자동 제안/레시피 이식, 재크롤링 정책, watch 자동 등록은 후속 범위다.
+기존 기능 목록과 동등하다고 주장하지 않으며, 각각 v2 버전·권한·재검수 정책에 맞춰 설계한다.
