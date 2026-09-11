@@ -324,3 +324,28 @@ def test_multi_parent_picks_smallest_parent_and_orphan_has_no_root(workspace):
     assert n["orphan"]["parent"] is None and n["orphan"]["root"] is None
     assert len(g["edges"]) == 3
     assert [x["root_concept_id"] for x in g["groups"]] == ["a", "b"]
+
+
+def test_graph_cache_invalidates_on_publish_and_new_version(workspace, monkeypatch):
+    # 같은 발행 상태에서는 캐시된 그래프를 돌려주고, 발행·현재 버전이 바뀌면 다시 계산한다.
+    from kg.v2 import graph as module
+
+    s = workspace
+    module._cache.clear()
+    calls = []
+    original = module._build_graph
+
+    def counting(conn, kg, cap):
+        calls.append(kg)
+        return original(conn, kg, cap)
+
+    monkeypatch.setattr(module, "_build_graph", counting)
+    before = graph(s)
+    assert graph(s) == before and len(calls) == 1
+    publish(s)
+    after = graph(s)
+    assert len(calls) == 2 and after != before
+    assert by_id(after)["temperature"]["sources"] == 1
+    assert graph(s) == after and len(calls) == 2
+    # 다른 상한(cap)은 별도 항목이며, 캐시는 도메인 이름을 요청마다 새로 붙인다.
+    assert after["domain"] == s["root"].name

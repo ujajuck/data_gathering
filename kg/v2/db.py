@@ -151,6 +151,7 @@ class Database:
                 CREATE INDEX IF NOT EXISTS access_latest ON access_observation(document_version_id,principal_ref,checked_at DESC,access_id DESC);
                 CREATE INDEX IF NOT EXISTS app_source ON template_application(document_version_id,application_id);
                 CREATE INDEX IF NOT EXISTS version_provider ON document(provider,source_ref);
+                CREATE INDEX IF NOT EXISTS document_current ON document(current_version_id,document_id);
                 CREATE INDEX IF NOT EXISTS series_by_mapping ON extracted_series(mapping_revision_id,run_id,series_id);
                 CREATE INDEX IF NOT EXISTS items_by_series ON extracted_item(series_id,item_index,item_id);
                 CREATE TABLE IF NOT EXISTS version_signature (

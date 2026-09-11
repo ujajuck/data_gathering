@@ -44,6 +44,17 @@ CLI는 `python -m kg.v2 <serve|watch|migrate|sign|export|age-projection>`이며,
 전체 스캔 제거 — 200문서 기준 370ms→8ms, 드로어 모달 접근성·포커스 트랩·Esc 범위, 배지 상태 클래스, 검수 버튼 대상 등)을 수정했다.
 검증: `tests/test_v2_documents.py`, `frontend/tests/documents-table.test.tsx`, e2e 2건, 실제 브라우저 확인.
 
+## 운영 점검 항목 (2026-09-11)
+
+| 항목 | 상태 |
+|---|---|
+| Reader(DRM/COM) 프로세스 격리·타임아웃 | 이미 있음 — `kg/v2/jobs.py` spawn 프로세스, `KG_V2_READER_TIMEOUT_SECONDS`(120초)·`KG_V2_READER_MEMORY_MB`(POSIX RLIMIT), IPC 8MB |
+| SQLite WAL | 이미 있음 — `kg/v2/db.py` `journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=5000` |
+| 문서군/그래프 캐시 | 추가 — `kg/v2/graph.py` 발행 상태 해시 서명 캐시 + 발행 적용 건 기준 커버리지 쿼리 + `document(current_version_id)` 인덱스 |
+| `data_payload` LEFT JOIN·`representative_values` 폴백 | v1 전용 자료 구조(`kg/webapp.py`). v2는 `extracted_item`+`item_region`이 값과 출처를 함께 가지므로 해당 없음 |
+| 원본 화면 `data.sheets` 방어 | v2 `Source.tsx`는 `sheets.data?.items`로 이미 방어. v1 `SourceScreen.tsx:174`의 무방비 `.map`은 `?? []`로 보강 |
+| `.env` 자동 로드 | 추가 — `kg/env.py` (`<ws>/.env` → `./.env`, export된 값 우선), v1/v2 서버 진입점에 연결, `tests/test_env.py` |
+
 ## 남은 범위
 
 - 실제 DRM SDK 연동과 네이티브 렌더(원본 충실 보기) — `python -m kg.v2.reader_probe` 계약 점검만 가능.

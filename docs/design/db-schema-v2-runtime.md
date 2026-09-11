@@ -157,7 +157,7 @@ Decimal은 TEXT로 저장해 28자리 Decimal 기본 컨텍스트로 반올림�
 허용되는 파생 저장 및 브라우저 렌더 정책은 해당 운영 환경에서 연결·검증해야 한다.
 `tests/v2_reader_fixture.py`는 계약 테스트 대역이며 실제 DRM 구현으로 사용하지 않는다.
 
-서버 환경 변수:
+서버 환경 변수 (`python -m kg.v2 <command>`와 `python -m kg.webapp`은 시작 시 `<workspace>/.env` → `./.env` 순으로 읽어 아직 없는 키만 채운다. `kg/env.py`, 의존성 없음):
 
 | 변수 | 기본값 / 의미 |
 |---|---|
@@ -285,6 +285,8 @@ FastAPI `/docs`가 요청 파라미터의 기준이다. POST 작업은 `request_
 ## 검증과 다음 연동
 
 `tests/test_schema_v2.py`는 버전/소유권/FK/발행/불변 조건을 검증한다.
+`GET /kg/{id}/graph`는 (문서의 현재 버전, 적용 건의 발행 실행) 목록의 해시를 서명으로 하는 프로세스 내 캐시(최대 16개 리비전)를 쓴다. 실행·series·매핑이 불변이므로 이 서명이 바뀔 때만 다시 계산한다 — 2,000문서·10,000 series에서 96ms → 4ms.
+
 `tests/test_v2_runtime.py`는 실제 생성 XLSX로 등록·복수 키·병합·다중 시트·가로 목록·행렬·빈칸 종료,
 정확한 Decimal, 검수 충돌과 현재 결과 무효화, 수식 캐시 실패, 원본 변경, 취소/idempotency,
 페이지 커서, native 좌표 계약, 렌더 비영속, 권한 철회, 중복 통합과 모든 lineage,

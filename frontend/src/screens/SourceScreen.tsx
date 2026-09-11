@@ -171,7 +171,7 @@ export default function SourceScreen() {
           <div className="sheetTabs">
             {data ? (
               <>
-                {data.sheets.map((sh) => (
+                {(data.sheets ?? []).map((sh) => (
                   <button key={sh} className={`sheet${sh === data.sheet ? " sel" : ""}`}
                     onClick={() => { if (docId) loadSheet(docId, sh).catch((e) => setVmsg(e.message)); }}>
                     {sh}</button>

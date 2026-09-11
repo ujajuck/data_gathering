@@ -11,6 +11,7 @@ import os
 import sys
 from pathlib import Path
 
+from ..env import load_env
 from .db import Problem
 
 COMMANDS = ("serve", "watch", "migrate", "sign", "export", "age-projection")
@@ -74,6 +75,8 @@ parse_args = parse
 
 def main(argv=None):
     args = parse(argv)
+    # 작업 공간과 현재 폴더의 .env를 읽는다. 이미 export된 값이 우선이다.
+    load_env(getattr(args, "ws", None) or ".", ".")
     principal = os.environ.get("KG_V2_PRINCIPAL", "local-user")
     if args.command == "watch":
         from .watch import run

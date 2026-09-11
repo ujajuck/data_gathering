@@ -2716,6 +2716,9 @@ def main() -> int:
     p.add_argument("--port", default=8010, type=int)
     p.add_argument("--host", default="127.0.0.1")
     args = p.parse_args()
+    from kg.env import load_env
+
+    load_env(args.ws, ".")
     uvicorn.run(create_app(args.ws), host=args.host, port=args.port)
     return 0
 
