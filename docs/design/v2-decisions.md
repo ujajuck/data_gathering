@@ -47,6 +47,32 @@
 | `codex/v2-kg-coverage`(이웃 탐색 그래프 + 문서 버전별 검수 커버리지) | **공존으로 편입** — 기본 그래프는 v1 문서군 hull 캔버스(`GET /kg/{kg}/graph`), codex 구현은 `이웃 탐색` 모드(`kg_view=explore`, `GET /kg/{kg}/explore`) | 두 구현이 같은 경로를 다른 계약으로 썼다. hull 캔버스는 제품 책임자가 요구·확인한 v1 기능이고, codex의 이웃 탐색은 큰 KG(페이지당 30개·관계 120개)와 "선택 문서 버전의 검수 상태" 표시라는 별개 가치가 있어 버리지 않았다. `/kg/{kg}/concepts/{cid}`, `/concepts/{cid}/mappings`, `/series?document_version_id`는 그대로 수용하고 상세 패널에 "선택 문서의 검수 규칙 → 검수 →" 목록을 합쳤다. e2e는 같은 서버 워크스페이스를 공유하므로 각 시나리오가 최초 KG 리비전에 고정한다(순서 의존 실패를 실측하고 수정). |
 | DVC 중심 최소 스키마(`db/dvc/*`, `docs/design/db-schema-dvc-minimal.md`) | **설계 제안으로 보존, 런타임 전환은 하지 않음** | 12개 테이블로 줄이는 제안이며 문서 자체가 "기존 `kg/v2` 런타임과 테스트가 v2 테이블에 결합돼 있어 비교/마이그레이션 기준으로 남긴다"고 명시한다. 제안의 불변식 테스트(`tests/test_schema_dvc_minimal.py`)는 통과하며 v2와 충돌하지 않는다. 전환 여부는 DRM 원본을 DVC에 둘 수 있는지(설계 §10: 정책상 불가하면 manifest만)에 달려 있어 제품 결정이 필요하다. |
 
+## 2-2. DVC 최소 스키마 vs v2 — 요구사항 대조 (2026-09-11)
+
+결론: **런타임 스키마는 v2 유지.** 최소안(12테이블)은 "검수 이력 불필요 · 셀 단위 lineage 불필요 · DRM 원본이 DVC에 있음"이라는
+전제에서만 합리적이며, 그 전제는 스키마 취향이 아니라 제품 범위 결정이다. 원 요구(설계 문서 §0의 주의사항 8개)에 대조한 결과:
+
+| 요구 | 최소안 | 판정 |
+|---|---|---|
+| 1. 키·값 위치와 도메인 연결을 사용자가 수정 | `mapping` 행을 제자리 갱신, 이력·CAS 없음(§6) | **위반.** `extracted_value.mapping_id`가 현재 mapping을 가리키므로 매핑을 고치면 이미 발행된 값의 근거가 바뀐다. 사후에 `mapping_audit`를 붙여도 그 전 값의 근거는 복원 불가. 롤백·동시 수정 감지 없음(v1에도 레시피 이력·롤백은 있었음) |
+| 4. 키·값의 복수 영역·병합, 리스트 값 | `key_region_id`·`value_region_id` 단일 FK, `extracted_value.source_region_id` 단일 | **부분 위반.** 비연속 영역은 `geometry_json`으로만 표현되고, 합계·결합처럼 한 값이 여러 셀에서 계산된 경우는 표현 불가(v2 `series_region`·`item_region` N:M) |
+| 2. DRM 원본 읽기 전용 | 문서 버전 복원을 DVC(`document.dvc_rev`)에 위임 | **전제 미확정.** DRM 암호문의 DVC 보관 가능 여부는 정책 결정 사항(설계 §10). 불가하면 `document_version` 없이 값이 어느 파일 상태에서 나왔는지 잃는다 |
+| 목표: 사용자 맞춤 DB 추출 | 통합 DB·lineage 제외(§10 "요구가 생기면") | **이미 있는 요구를 미룸.** v1에도 `_source_*` lineage가 있었다 |
+| KG는 사람이 발행 | `kg_revision` 없이 파일 DVC ref | 절충 가능. 다만 개념 폐기·개명 시 과거 매핑 의미가 바뀐다(§4.8) |
+| 8. 시트:템플릿 N:M | `template_application(document, template, scope_key)` + `mapping.sheet_id` | 표현 가능 |
+| 5. SQLite → PostgreSQL | `db/dvc/schema_postgres.sql` 동봉 | 동일 |
+
+최소안이 맞게 짚은 것: 안정 ID + 해시는 속성(v2와 동일), `source_region.geometry_json`(동일), "요구 전에 미리 만들지 않는다".
+v2에서 그 원칙에 실제로 걸리는 테이블은 **`render_chunk` 하나**다(정책상 렌더 바이트를 영속하지 않아 런타임이 쓰지 않는다);
+나머지 33개(런타임 2개 포함)는 현재 런타임·테스트가 읽고 쓴다.
+
+v2의 약점(인정): 34테이블·72트리거는 PoC치고 무겁고 트리거 기반 불변성은 PostgreSQL 이식 시 유지보수 부담이다(번역은 있으나
+런타임 미검증). 값이 `value_text`(Decimal도 문자열)+JSON 명세라 SQL 직접 집계가 불편하다(사용자 DB 빌드에서 타입을 복원하는
+설계). `mapping_head`+`edit_seq` CAS와 복합 FK는 진입 비용이 크다.
+
+후속 조치: (1) `render_chunk`는 사용 시점까지 "미사용(정책상 렌더 비영속)"으로 표기 — 아래 항목 참조,
+(2) DRM 원본의 DVC 보관 가능 여부를 제품 결정으로 확정하면 이 항목을 갱신한다.
+
 ## 3. 하지 않은 것 중 "다음에 할 것"
 
 - 실제 DRM 어댑터 PoC (SDK가 생기면 `reader_probe`부터), 겹친 템플릿 동시 overlay, 이미지/OCR 키 추출, Python 템플릿 실행기.

@@ -461,6 +461,10 @@ erDiagram
     document_version ||--o{ version_signature : "document_version_id"
 ```
 
+> `render_chunk`는 DDL에는 있으나 **현재 런타임이 쓰지 않는다** — 렌더 바이트를 영속하지 않는 정책(runtime 문서) 때문에
+> 뷰포트 캐시는 프로세스 메모리(8개·60초)에만 둔다. 네이티브 렌더 어댑터가 파생물 보관을 허용할 때 사용한다
+> ([결정 기록 §2-2](design/v2-decisions.md)).
+
 ### 트리거·뷰 요약
 
 | 종류 | 대상 | 규칙 |

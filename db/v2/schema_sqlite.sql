@@ -366,6 +366,8 @@ CREATE TABLE item_region (
 CREATE INDEX item_by_region ON item_region(region_id, item_id);
 
 -- 렌더는 재생성 가능한 페이지/타일/셀 블록 캐시. 전체 시트 JSON/BLOB를 한 행에 넣지 않는다.
+-- 현재 런타임(kg/v2)은 이 테이블을 쓰지 않는다: 렌더 바이트를 영속하지 않는 정책이라 뷰포트 캐시는 프로세스 메모리에만 둔다.
+-- 네이티브 렌더 어댑터가 파생물 보관(can_cache_derivative)을 허용하는 배포에서만 사용한다 (docs/design/v2-decisions.md §2-2).
 CREATE TABLE render_chunk (
     sheet_id TEXT NOT NULL REFERENCES sheet,
     render_profile_key TEXT NOT NULL,
