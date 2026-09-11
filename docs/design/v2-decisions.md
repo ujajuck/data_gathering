@@ -64,7 +64,10 @@
 
 최소안이 맞게 짚은 것: 안정 ID + 해시는 속성(v2와 동일), `source_region.geometry_json`(동일), "요구 전에 미리 만들지 않는다".
 v2에서 그 원칙에 실제로 걸리는 테이블은 **`render_chunk` 하나**다(정책상 렌더 바이트를 영속하지 않아 런타임이 쓰지 않는다);
-나머지 33개(런타임 2개 포함)는 현재 런타임·테스트가 읽고 쓴다.
+나머지 33개(런타임 2개 포함)는 현재 런타임·테스트가 읽고 쓴다 — 이 사실은 **전환 비용**의 근거이지 각 테이블이 제품 요구상
+필수라는 근거는 아니다(2026-09-11 [답장](dvc-minimal-schema-response.md)의 반론을 수용). 불변식 기준의 3범주 재분류와
+병합 권고(run_mapping 흡수, series_region+item_region 통합, build_input 제거, integration_project 흡수)는
+[재답변](dvc-minimal-schema-reply.md)에 있다.
 
 v2의 약점(인정): 34테이블·72트리거는 PoC치고 무겁고 트리거 기반 불변성은 PostgreSQL 이식 시 유지보수 부담이다(번역은 있으나
 런타임 미검증). 값이 `value_text`(Decimal도 문자열)+JSON 명세라 SQL 직접 집계가 불편하다(사용자 DB 빌드에서 타입을 복원하는
