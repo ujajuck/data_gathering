@@ -2,6 +2,7 @@
 
 2026-09-09 · 브랜치 `claude/data-gathering-schema-review-6kf0n9` (codex/db-schema-redesign @ ee51355 위에 추가)
 
+판단 근거(넣은 것·안 넣은 것·이유)는 [v2-decisions.md](v2-decisions.md)에 따로 모았다.
 [복원 기록](v2-restoration.md)이 "후속 범위"로 남겨 둔 항목 가운데 이 환경에서 구현·검증할 수 있는 것을 구현했다.
 실제 DRM SDK·네이티브 렌더 어댑터는 SDK가 없어 여전히 미연동이며, PDF 프리뷰는 DRM 문서에 적용할 수 없어 범위에서 제외했다.
 
