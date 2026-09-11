@@ -91,7 +91,7 @@ def seed(conn: sqlite3.Connection) -> None:
         ),
     )
     conn.execute(
-        "INSERT INTO mapping VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO mapping VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "map-1",
             "app-1",
@@ -123,7 +123,7 @@ def seed(conn: sqlite3.Connection) -> None:
         ),
     )
     conn.execute(
-        "INSERT INTO extracted_value VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO extracted_value VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "value-1",
             "run-1",
