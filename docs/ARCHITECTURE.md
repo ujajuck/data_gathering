@@ -5,6 +5,7 @@
 각 모듈 소스이며, 스키마가 바뀌면 이 문서도 같은 커밋에서 갱신한다.
 (GitHub에서 mermaid가 바로 렌더된다.)
 
+- **v2 런타임(`kg/v2/`, `v2.db`)의 ERD·클래스 다이어그램: [ARCHITECTURE_V2.md](ARCHITECTURE_V2.md)** — 이 문서는 v1(`kg/schema.sql`) 기준이다.
 - 작업 이력: [PROGRESS.md](PROGRESS.md)
 - 레거시(src) → 현행(kg) 정리 계획·모듈 처분표: [MIGRATION.md](MIGRATION.md)
 - 레거시 초기 설계: [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)

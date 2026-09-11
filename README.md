@@ -40,6 +40,7 @@ python -m kg.v2 watch --ws /tmp/data-gathering-v2-demo --once
 - [실행·Reader 계약·지원 범위·검증](docs/design/db-schema-v2-runtime.md)
 - 기존 v1 `kg.db`는 `python -m kg.v2 migrate --ws <v2 ws> --from-ws <v1 ws> [--dry-run] [--report r.json]`으로
   새 ID·`proposed` 매핑으로 옮긴다(값은 재추출 대상). 자세한 규칙은 위 문서의 "v1 이관" 절 참고.
+- [v2 아키텍처 다이어그램 — ERD 전체·클래스 다이어그램](docs/ARCHITECTURE_V2.md)
 - [DB 설계와 ERD](docs/design/db-schema-v2.md), [목표 UI/API 설계](docs/design/db-schema-v2-ui.md),
   [기능·디자인 복원 기록](docs/design/v2-restoration.md), [후속 구현 기록](docs/design/v2-followup.md)
 - 기존 서버 `python -m kg.webapp ...`에도 `/api/v2`가 연결되며 기본 화면은 v2다.
