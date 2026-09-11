@@ -1,22 +1,24 @@
-# DVC — 현행(kg) 파이프라인 기준.
+# DVC — 현행 kg/v2 파이프라인 + DVC 중심 최소 스키마 전환 기준.
 #
-# 원본 버전닝은 시스템 중립이다: `dvc add data/raw` (미설치 환경은
-# src/dvc_adapter의 sha256 fallback이 동일 인터페이스로 동작).
+# 신규 설계(db/dvc, docs/design/db-schema-dvc-minimal.md)의 원칙:
+#   - 원본 Excel, 템플릿 정의, KG export/spec, 통합 산출물의 파일 이력은 Git/DVC가 담당한다.
+#   - RDB는 안정 ID, 관계, 현재 매핑, 추출 실행/결과만 담당한다.
+#   - document/template/KG revision 테이블을 DVC와 중복해서 만들지 않는다.
 #
-# 레거시 canonical 파이프라인(src.inspect → canonicalize)은 dvc.legacy.yaml로
-# 이동 — 유지보수 모드이며 새 기능은 받지 않는다 (docs/MIGRATION.md).
+# 아래 kg_ingest / v2_export_build는 아직 기존 kg/v2 런타임용이다. 최소 스키마 런타임으로
+# 전환되기 전까지 동작을 바꾸지 않는다. 즉 이 파일의 주석 변경은 기존 파이프라인의 입력/출력
+# 계약을 깨지 않으며, 신규 구현의 책임 경계만 명확히 한다.
 vars:
-  # v2_export_build 스테이지의 인자. 승인된 빌드 ID와 출력 폴더를 지정한 뒤 `dvc repro v2_export_build`.
+  # 기존 full-v2 export 경로. 승인된 빌드 ID와 출력 폴더를 지정한 뒤 `dvc repro v2_export_build`.
   - v2_export:
       ws: domains/financier
       build_id: REPLACE_WITH_APPROVED_BUILD_ID
       out: exports/v2/REPLACE_WITH_APPROVED_BUILD_ID
 stages:
   kg_ingest:
-    # 원본/파서 코어/사전이 바뀌면 재실행. kg ingest는 파일 해시 기반
-    # 멱등(무변경이면 스킵 + 매핑 승계)이라 반복 실행이 안전하다.
-    # kg.db는 웹/CLI가 함께 쓰는 상태 저장소라 DVC outs로 잡지 않는다 —
-    # 재현성은 문서 버전 해시·빌드 서명·lineage가 DB 안에서 담당한다.
+    # 현행 kg ingest는 파일 해시 기반 멱등(무변경이면 스킵 + 매핑 승계)이다.
+    # 신규 DVC-minimal 경로에서는 파일의 과거 revision 복원 책임을 DVC로 이동하고,
+    # DB의 해시는 PK/버전 엔티티가 아니라 변경 감지 속성으로만 사용한다.
     cmd: >-
       python -m kg.cli --ws domains/financier ingest
       --raw domains/financier/data/raw --map
@@ -30,9 +32,8 @@ stages:
       - src/units
       - src/common
   v2_export_build:
-    # 승인된 v2 빌드 1건을 불변 snapshot(사용자 SQLite + manifest.json)으로 내보낸다.
-    # 활성 data/kg/v2.db와 DRM 원본은 deps/outs에 두지 않는다(docs/design/db-schema-v2.md §10).
-    # 파이프라인 없이 쓰려면: python -m kg.v2 export ... --out exports/v2/<id> && dvc add exports/v2/<id>
+    # 기존 32-table v2 런타임의 export stage. 비교/마이그레이션 기준으로 유지한다.
+    # 신규 최소 스키마는 통합 산출물을 생성한 뒤 그 산출물 자체를 DVC로 추적하는 방향이다.
     cmd: python -m kg.v2 export --ws ${v2_export.ws} --build ${v2_export.build_id} --out ${v2_export.out}
     deps:
       - kg/v2
