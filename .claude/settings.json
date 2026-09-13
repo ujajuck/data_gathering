@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./**/__pycache__/**)",
+      "Read(./**/*.pyc)",
+      "Read(./**/.pytest_cache/**)",
+      "Read(./**/.mypy_cache/**)",
+      "Read(./**/.ruff_cache/**)",
+      "Read(./**/.venv/**)",
+      "Read(./**/node_modules/**)",
+      "Read(./**/dist/**)",
+      "Read(./**/build/**)",
+      "Read(./e2e/playwright-report/**)",
+      "Read(./e2e/test-results/**)",
+      "Read(./.dvc/cache/**)",
+      "Read(./**/coverage/**)"
+    ]
+  }
+}
