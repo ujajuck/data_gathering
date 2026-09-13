@@ -108,3 +108,44 @@ v2의 `integration_project`+`integration_version` 구조가 바로 이것이며,
 §1-1·1-2·1-5는 사용자 결정 없이 고칠 수 있는 결함이므로 DDL 초안에 먼저 반영하고,
 §7의 1·2·3은 결정이 나올 때까지 v2 테이블(`kg_revision`, `template_version`, `build_lineage`)을 유지한다.
 합의된 병합 4건은 지금 v2 DDL 마이그레이션으로 구현할 수 있다(`schema_meta` 버전 올림, 테스트 갱신). 이 작업은 위 결정과 독립이다.
+
+---
+
+## 5. 18개안(커밋 `8a9da5c`, 2026-09-14)에 대한 확인
+
+같은 경로의 문서가 22개안에서 18개안으로 개정됐다. 위 §1~§4는 22개안 기준이며, 18개안에 대한 확인은 이 절에 적는다.
+사용자가 2026-09-13 채팅에서 18개안에 동의했으므로 §1-3(리비전 동시 조회)·§2의 질문 2·3·4·5는 결정된 것으로 본다.
+
+### 5-1. 해소된 것
+
+| §1 결함 | 18개안의 처리 |
+|---|---|
+| 1-1 스펙 스냅샷 없음 | `mapping_revision.effective_spec_json` 추가. `parsing_rule`은 projection, 실행 의미는 리비전이 고정 |
+| 1-2 바인딩 단위 불일치 | `parsing_application.snapshot_id`, `mapping_revision.snapshot_id`. 새 snapshot은 candidate/proposed로 승계, 자동 승인 없음 |
+| 1-3 과거 리비전 SQL 조회 | 제거 유지. `parsing_application`·`extraction_run`의 `schema_rev`/`profile_rev` pin으로 대체 — 사용자 결정 |
+| 1-4 값 컬럼 4개 | `value_state`·`source_identity_key`·`derivation_key`·`formula_state`·`display_text` 복귀 |
+| 1-5 integration 제자리 수정 | integration·build 계열을 코어에서 제거하고 일회성 export + manifest로 — 사용자 결정 |
+
+`extracted_series` 제거는 문제없다. `cardinality`·`axis`는 이미 값 명세(`spec.py:186-194`)에 있어 `effective_spec_json`으로 따라오고, 묶음 정체성은 `group_key`로 남는다.
+
+### 5-2. 남은 빈칸 3개 (DDL 확정 전 처리)
+
+1. **발행 실행이 없다.** 22개안에 있던 `parsing_application.published_run_id`가 빠졌다. v2는 이 컬럼으로 "이 적용 건의 현재 값은 어느 실행인가"를 정하며 `extract.py`·`api.py`·`graph.py`·`features.py`·`build.py`·`recrawl.py` 17곳이 참조한다. 없으면 "가장 최근 succeeded 실행"이 암묵 규칙이 되고, 재추출 중 이전 값이 보이는 문제와 실패한 재추출 뒤 어느 값이 현재인지가 정의되지 않는다. `published_run_id`(nullable, FK → extraction_run)를 되돌리기를 권한다.
+2. **projection 동기화 규칙.** `parsing_field`·`parsing_rule`을 정의 파일의 현재 projection으로 두면서 `mapping_revision.field_id`·`mapping.rule_id`가 FK로 참조한다. 정의 파일에서 필드·규칙이 사라졌을 때 행을 지우면 과거 리비전의 FK가 깨진다. "projection은 추가·`status=deprecated` 표시만 하고 삭제하지 않는다"를 규칙으로 적어야 한다. `parsing_rule`에는 `status` 컬럼이 없으므로 추가가 필요하다.
+3. **값 출처의 이중 표현.** `extracted_value.source_region_id`(단일)와 `extracted_value_region`(복수)을 함께 두면 "이 셀에서 나온 값 전부" 조회가 두 경로의 UNION이 된다. 원본 UI의 역방향 조회가 18개안 §7.3의 근거이므로, 값 쪽도 한 경로로 통일(항상 `extracted_value_region`, 단일 출처는 행 1개)하는 편이 조회가 단순하다. 저장 행 수는 늘지만 v2의 `item_region`이 이미 그 방식이다.
+
+### 5-3. 현재 제품에서 바뀌는 것 (사용자가 동의한 결과)
+
+- **통합 DB 탭**: 통합 정의·빌드 이력·lineage 조회(`Database.tsx`의 `/integrations`, `/builds`, lineage 패널)가 영속 객체가 아니게 된다. 선택 → 파일 생성 → 다운로드의 일회성 화면으로 바뀌고, 결과 셀에서 원본 셀로 가는 기능은 파일의 `_source_*` 컬럼으로 옮긴다. 전처리 프리셋은 매핑 리비전의 `normalization`으로 이미 옮겨져 있어 유지된다.
+- **개념 탐색**: KG 리비전 목록·과거 리비전 이름 조회가 없어진다. 폐기 필드는 `status=deprecated`로 현재 projection에서 표시한다. 개념 단건 편집(현재 새 KG 리비전 발행)은 정의 파일 수정 + projection 재적재로 바뀐다.
+- **파일 분석 목록의 접근 상태 열**: `access_observation`이 코어 밖이므로 목록 표시용 캐시로 남기거나 열을 없앤다.
+- **용어**: Domain KG/개념/템플릿 → Parsing Schema/Field/Profile. 물리 이름 변경 시점은 18개안도 별도 결정으로 남겼다.
+
+### 5-4. 구현 경로
+
+18개안은 v2 런타임(32테이블, 백엔드 테스트 250개, 5탭 UI)과 테이블 절반이 다르므로 제자리 마이그레이션이 아니라 **v3**다.
+앞서 제안한 "v2 안에서의 병합 4건"은 그중 3건(run_mapping, build_input, integration_project)이 v3에서 사라지는 테이블에 대한 것이라 하지 않는다.
+
+1. `db/v3/schema_sqlite.sql`·`schema_postgres.sql` + 불변식 테스트(리비전 불변, 승인 CAS, snapshot 바인딩, projection 삭제 금지).
+2. v2 → v3 데이터 이관 스크립트: series → `group_key`, `item_region`/`series_region` → `extracted_value_region`, `kg_revision`·`template_version` → 정의 파일 + `schema_rev`/`profile_rev`, integration/build → manifest 파일로 내보내기.
+3. 런타임·API·UI를 v3로 전환(통합 DB 탭 재설계 포함). v2는 이관이 끝날 때까지 유지.
