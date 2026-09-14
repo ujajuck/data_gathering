@@ -3,7 +3,7 @@
 // 네 test()는 같은 작업 공간을 순서대로 쓴다(fullyParallel=false). 모든 단언은 실제 표시 문구(한국어 라벨·셀 텍스트)를 본다.
 import { test, expect } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
-import { api, collectErrors, mutateFirstDocument, openScreen, registerViaApi, resetWorkspace, runPython, waitForJobs, workspaceRoot } from "./helpers";
+import { DRM_MESSAGE, api, collectErrors, mutateFirstDocument, openScreen, registerViaApi, resetWorkspace, runPython, waitForJobs, workspaceRoot } from "./helpers";
 
 const REFERENCE = "공정데이터_2024_01.xlsx";
 const SHIFTED = "공정데이터_2024_04_양식이동.xlsx";
@@ -12,7 +12,6 @@ const LOCKED = "공정데이터_2024_06_잠김.xlsx";
 const HEAVY = "공정데이터_2024_09_대용량.xlsx";
 const PROFILE_V1 = "공정데이터_A양식 v1";
 const SCHEMA_KEY = "process_standard";
-const DRM_MESSAGE = "암호화 문서는 승인된 보안 읽기 어댑터로 접근해야 합니다.";
 const RENDER_PORT = process.env.SCHEMA_E2E_RENDER_PORT || "8032";
 const QUEUE_LABELS = ["신규 양식", "매핑 검수", "파싱 실패", "변경 감지", "충돌"] as const;
 const QUEUE_KINDS = ["unmatched", "review", "failed", "changed", "conflict"] as const;
@@ -106,7 +105,7 @@ test("요약 카드 · 신규 양식/매핑 검수/파싱 실패 큐 · 렌더 �
   await expect(cards.nth(0)).toHaveAttribute("aria-pressed", "true");
   await expect(cards.nth(1)).toHaveAttribute("aria-pressed", "false");
 
-  // 신규 양식 큐: '신규 양식 후보 · 1문서' 묶음, 프로파일 만들기 → ?screen=profiles&import=1&snapshot=.
+  // 신규 양식 큐: '신규 양식 후보 · 1문서' 묶음, 프로파일 만들기 → ?screen=profiles&import=1('새 프로파일' 대화상자).
   const unmatchedLabel = "신규 양식 후보 · 1문서";
   await expect(queuePanel(page, "신규 양식")).toBeVisible();
   await expect(queuePanel(page, "신규 양식").getByText("같은 원인·같은 양식은 한 행으로 묶여 있습니다.")).toBeVisible();
@@ -130,17 +129,19 @@ test("요약 카드 · 신규 양식/매핑 검수/파싱 실패 큐 · 렌더 �
   await expect(otherMember.getByRole("button", { name: "원본 보기" })).toBeDisabled();
   await expect(otherMember.getByRole("button", { name: "원본 보기" })).toHaveAttribute("title", "적용 결과가 없습니다.");
   await expectNoIds(page.locator("main"));
-  const unmatchedSnapshot = queues.groups.unmatched[0].representative.snapshot_id as string;
   await unmatchedRow.getByRole("button", { name: "프로파일 만들기" }).click();
   await expect(page).toHaveURL(/screen=profiles/);
   await expect(page).toHaveURL(/import=1/);
-  await expect(page).toHaveURL(new RegExp(`snapshot=${unmatchedSnapshot}`));
+  // 저장 전 초안은 테스트할 수 없으므로 snapshot은 더 이상 넘기지 않는다(대화상자에 '대표 문서로 테스트'가 없다).
+  await expect(page).not.toHaveURL(/snapshot=/);
   await expect(page.getByRole("navigation", { name: "주 메뉴" }).getByRole("button", { name: "파싱 프로파일", exact: true })).toHaveAttribute("aria-current", "page");
-  const importDialog = page.getByRole("dialog", { name: "외부 Profile Import" });
-  await expect(importDialog).toBeVisible();
-  await expect(importDialog.getByRole("heading", { name: "외부 Profile Import" })).toBeVisible();
-  await importDialog.press("Escape");
-  await expect(importDialog).toHaveCount(0);
+  const newProfileDialog = page.getByRole("dialog", { name: "새 프로파일" });
+  await expect(newProfileDialog).toBeVisible();
+  await expect(newProfileDialog.getByRole("heading", { name: "새 프로파일" })).toBeVisible();
+  await expect(newProfileDialog).toContainText("저장한 뒤 상세 화면에서 문서를 골라 테스트하세요.");
+  await expect(newProfileDialog.getByRole("button", { name: "대표 문서로 테스트" })).toHaveCount(0);
+  await newProfileDialog.press("Escape");
+  await expect(newProfileDialog).toHaveCount(0);
   await expect(page).not.toHaveURL(/import=/);
 
   // 매핑 검수 큐: 프로파일 v1 묶음(호환 1), 규칙 11개, 멤버 양식이동 문서 → 원본 보기 → ?review=<application_id>.

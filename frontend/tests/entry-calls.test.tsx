@@ -21,17 +21,29 @@ type Case = {
   fixture: () => { calls: Call[]; renderApp: (url: string) => unknown };
   landmark: () => Promise<unknown>;
   expected: string[];
+  // 화면 하나의 예산은 3이다. 계약 §7이 "목록과 상세를 한 화면에 함께 그리는 곳"만 예외로 적어 두었고
+  // 지금은 파싱 프로파일 상세 하나뿐이다 — 여기서 예산을 늘리기 전에 계약 §7을 먼저 고쳐야 한다.
+  budget?: number;
 };
 
 const cases: Case[] = [
   { name: "문서", url: "?screen=documents", fixture: documentsFixture, landmark: () => screen.findByRole("table", { name: "문서 목록" }), expected: ["GET /documents", "GET /profiles"] },
   { name: "파싱 프로파일 목록", url: "?screen=profiles", fixture: profilesFixture, landmark: () => screen.findByRole("table", { name: "파싱 프로파일 목록" }), expected: ["GET /profiles"] },
   {
+    // 탭 없는 한 화면(요약줄·정의 JSON 편집기·변경 이력). 상세 자체는 §7 예산 3개(상세 + 현재 리비전 정의 + 변경 이력);
+    // 왼쪽 프로파일 목록이 같은 화면에 함께 남으므로 이 URL에서만 4개다(계약 §7이 명시한 유일한 예외).
+    // 적용 문서는 팝오버를 열 때만 읽는다.
     name: "파싱 프로파일 상세",
     url: `?screen=profiles&profile=${ids.profile}`,
     fixture: profilesFixture,
-    landmark: () => screen.findByRole("table", { name: "적용 문서" }),
-    expected: ["GET /profiles", `GET /profiles/${ids.profile}`, `GET /profiles/${ids.profile}/documents`],
+    landmark: () => screen.findByLabelText("프로파일 JSON"),
+    expected: [
+      "GET /profiles",
+      `GET /profiles/${ids.profile}`,
+      `GET /profiles/${ids.profile}/revisions/2`,
+      `GET /profiles/${ids.profile}/revisions`,
+    ],
+    budget: 4,
   },
   { name: "파싱 스키마", url: "?screen=schema", fixture: schemaFixture, landmark: () => screen.findByRole("tree", { name: "필드 트리" }), expected: ["GET /schemas", "GET /schemas/process_std", "GET /schemas/process_std/tree"] },
   { name: "데이터 빌드", url: "?screen=build", fixture: () => buildFixture(), landmark: () => screen.findByRole("table", { name: "대상 문서" }), expected: ["POST /builds/candidates"] },
@@ -48,7 +60,7 @@ const cases: Case[] = [
 ];
 
 describe("화면 진입 API 호출 수(§7 ≤ 3)", () => {
-  it.each(cases)("$name", async ({ url, fixture, landmark, expected }) => {
+  it.each(cases)("$name", async ({ url, fixture, landmark, expected, budget = 3 }) => {
     const f = fixture();
     f.renderApp(url);
     await landmark();
@@ -56,7 +68,7 @@ describe("화면 진입 API 호출 수(§7 ≤ 3)", () => {
     const own = f.calls.filter((c) => !isShell(c) && !isRenderTile(c));
     const labels = own.map((c) => `${c.method} ${c.path}`);
     expect(labels.sort()).toEqual([...expected].sort());
-    expect(own.length).toBeLessThanOrEqual(3);
+    expect(own.length).toBeLessThanOrEqual(budget);
     // 같은 GET을 두 번 부르지 않는다(in-flight 중복 제거·캐시).
     const gets = own.filter((c) => c.method === "GET").map((c) => c.path + c.url.search);
     expect(new Set(gets).size).toBe(gets.length);

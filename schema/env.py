@@ -4,7 +4,7 @@
 `.env`(git 미추적)에 두며, `.env.sample`이 키 목록의 기준이다.
 
 읽는 접두는 `SCHEMA_` 하나뿐이다. 옛 접두는 폴백하지 않고 `warn_legacy_env()`가 시작할 때 한 번 짚어 준다
-(옛 이름만 설정돼 있으면 접근 토큰·렌더 주소가 조용히 꺼지므로).
+(옛 이름만 설정돼 있으면 렌더 주소·Reader 어댑터가 조용히 기본값으로 내려가므로).
 """
 
 from __future__ import annotations
@@ -15,6 +15,12 @@ from pathlib import Path
 
 # 더 이상 읽지 않는 옛 접두 — 값이 남아 있으면 기본값으로 떨어지는 것을 알린다.
 LEGACY_PREFIXES = ("KG_V3_", "KG_V2_", "KG_E2E_", "KG_DRM_")
+
+# 접두는 그대로인데 **이름이 바뀐** SCHEMA_* 키: 옛 이름 → 지금 이름.
+# 한 릴리스 동안은 지금 이름이 비어 있을 때만 옛 값을 그대로 쓰고 경고를 남긴다(업그레이드하자마자 렌더 서버
+# 인증이 조용히 꺼지지 않게). `SCHEMA_ACCESS_TOKEN`은 메인 API의 사용자 인증이 사라지면서 렌더 서버 내부
+# bearer 전용으로 좁아졌고 이름도 그에 맞게 바뀌었다(§5).
+RENAMED_KEYS = {"SCHEMA_ACCESS_TOKEN": "SCHEMA_RENDER_TOKEN"}
 
 
 def parse_env(text: str) -> dict[str, str]:
@@ -74,14 +80,37 @@ def renamed_key(key: str) -> str:
     return "SCHEMA_" + key[len("KG_") :]
 
 
+def renamed_env_keys(environ: dict[str, str] | None = None) -> list[tuple[str, str]]:
+    """설정돼 있는 옛 이름 → 지금 이름 쌍(정렬). 지금 이름이 이미 있으면 알리지 않는다."""
+    env = os.environ if environ is None else environ
+    return sorted((old, new) for old, new in RENAMED_KEYS.items() if env.get(old) and not env.get(new))
+
+
+def apply_renamed_env(environ: dict[str, str] | None = None, stream=None) -> list[tuple[str, str]]:
+    """이름이 바뀐 키의 옛 값을 지금 이름으로 옮기고 경고한다(한 릴리스 동안의 폴백). 옮긴 쌍을 돌려준다."""
+    env = os.environ if environ is None else environ
+    moved = renamed_env_keys(env)
+    for old, new in moved:
+        env[new] = env[old]
+    if moved:
+        pairs = ", ".join(f"{old} → {new}" for old, new in moved)
+        print(
+            f"[경고] 이름이 바뀐 환경변수 {len(moved)}개를 옛 이름으로 읽었습니다: {pairs}. "
+            "이번 릴리스까지만 옛 이름을 받습니다 — `.env`의 키 이름을 바꾸세요.",
+            file=sys.stderr if stream is None else stream,
+        )
+    return moved
+
+
 def warn_legacy_env(environ: dict[str, str] | None = None, stream=None) -> list[str]:
-    """옛 접두 환경변수가 남아 있으면 stderr로 알린다(폴백하지 않는다). 알린 키 목록을 돌려준다."""
+    """옛 접두 환경변수가 남아 있으면 stderr로 알리고(폴백 없음), 이름만 바뀐 키는 옮겨 준다(폴백 + 경고)."""
+    apply_renamed_env(environ, stream)
     keys = legacy_env_keys(environ)
     if keys:
         renamed = ", ".join(f"{k} → {renamed_key(k)}" for k in keys)
         print(
             f"[경고] 더 이상 읽지 않는 환경변수 {len(keys)}개가 설정돼 있습니다: {renamed}. "
-            "값은 무시되고 기본값이 쓰입니다 — 접근 토큰은 인증이 꺼지고, 렌더 주소는 같은 프로세스 렌더로 내려갑니다. "
+            "값은 무시되고 기본값이 쓰입니다 — 렌더 주소는 같은 프로세스 렌더로, Reader 어댑터는 평문 전용으로 내려갑니다. "
             "`SCHEMA_` 접두로 바꾸세요.",
             file=sys.stderr if stream is None else stream,
         )

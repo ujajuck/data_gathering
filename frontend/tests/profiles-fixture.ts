@@ -1,5 +1,5 @@
 // 파싱 프로파일 화면 테스트 픽스처: 공용 appFixture 위에 프로파일 쓰기 경로(import-preview · POST/PUT /profiles · approve ·
-// reparse · export · revisions/{rev} · test)와 상태 필터를 덧붙인다.
+// reparse · export · revisions/{rev} · 저장된 리비전 테스트)와 상태 필터를 덧붙인다. 초안 테스트(POST /profiles/test)는 없다.
 import type { ProfileDetail, ProfileDocumentRow, ProfileSaveResult } from "../src/app/types";
 import { errorBody, ids, job, page, profileDetail, profileRows, reply, uuid, appFixture } from "./fixture";
 
@@ -101,6 +101,8 @@ export function profilesFixture() {
     ]),
     approved: [] as Row[],
     reparsed: [] as Row[],
+    deprecated: [] as string[],
+    deleted: [] as string[],
     saved: [] as Row[],
     documents: profileDocumentRows(),
   };
@@ -138,8 +140,19 @@ export function profilesFixture() {
       return job({ kind: "reparse", label: "공정데이터_A양식 v2", target_kind: "profile", target_id: id, result: { queued: 3, skipped: [{ document_id: ids.document(6), document_name: "손상파일_2024.xlsx", reason: "locked" }] } });
     });
     f.overrides.set(`POST /profiles/${id}/test`, () => ({ bindings: { main: ["Sheet1"] }, compatibility: "identical", groups: [], errors: [] }));
+    f.overrides.set(`POST /profiles/${id}/deprecate`, () => {
+      state.deprecated.push(id);
+      return { profile_id: id, profile_name: detailOf(id).profile_name, status: "deprecated" };
+    });
+    f.overrides.set(`DELETE /profiles/${id}`, () => {
+      const detail = detailOf(id);
+      // 적용된 문서가 있으면 지울 수 없다(§4.2.1) — 그때는 '폐기'만 가능하다.
+      if (detail.document_count)
+        return reply(409, errorBody("PROFILE_IN_USE", `이 프로파일은 문서 ${detail.document_count}개에 적용돼 있어 지울 수 없습니다. 더 쓰지 않으려면 '폐기'하세요.`));
+      state.deleted.push(id);
+      return { profile_id: id, profile_name: detail.profile_name, deleted: { rules: 2 } };
+    });
   }
-  f.overrides.set("POST /profiles/test", () => ({ bindings: { main: ["Sheet1"] }, compatibility: "identical", groups: [], errors: [] }));
   // 형식 판별: parsing-profile → 그대로, fields[] → generic-keyvalue(경고), __invalid → 오류.
   f.overrides.set("POST /profiles/import-preview", (call) => {
     const definition: Row = call.body?.definition || {};

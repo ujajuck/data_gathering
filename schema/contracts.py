@@ -90,13 +90,6 @@ class ProfileTestRequest(Contract):
     snapshot_id: Identifier
 
 
-class ProfileTestDefinitionRequest(Contract):
-    schema_key: Key
-    definition: dict[str, Any]
-    snapshot_id: Identifier
-    format: ProfileFormat = "auto"
-
-
 class ProfileApproveRequest(Contract):
     application_id: Identifier
 
@@ -107,6 +100,16 @@ class ReparseRequest(Contract):
 
 class SchemaDefinitionRequest(Contract):
     definition: dict[str, Any]
+
+
+class FieldCreateRequest(Contract):
+    field_key: Key
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    type: Literal["text", "decimal", "boolean", "date", "datetime", "group"] = "text"
+    unit: Annotated[str, Field(max_length=64)] | None = None
+    description: Annotated[str, Field(max_length=4000)] | None = None
+    aliases: Annotated[list[Annotated[str, Field(min_length=1, max_length=200)]], Field(max_length=100)] | None = None
+    parent_field_key: Key | None = None
 
 
 class FieldPatchRequest(Contract):

@@ -111,7 +111,7 @@ def world(tmp_path_factory):
     patch.setattr(service_module, "reader_events", counted_events)
     app = create_app(root, start_worker=False)
     try:
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://127.0.0.1") as client:
             service = app.state.service
             service._render = RenderClient(root, event_source=inprocess_source)
             env = World(root, client, service)
@@ -126,7 +126,11 @@ def world(tmp_path_factory):
 
 def test_schema_and_draft_profile(world):
     schema = world.post("/schemas", {"definition": demo.SCHEMA}, expect=201)
-    assert schema["schema_key"] == SCHEMA_KEY and schema["current_rev"] == 1 and schema["fields"] == 14
+    assert schema["schema_key"] == SCHEMA_KEY and schema["schema_name"] == demo.SCHEMA["schema_name"] and schema["current_rev"] == 1
+    assert schema["unchanged"] is False and schema["fields"] == {"total": 14, "added": 14, "updated": 0, "deprecated": 0}
+    # POST는 생성 전용(§4.2): 같은 키를 다시 보내면 409이고 리비전이 늘지 않는다.
+    exists = world.post("/schemas", {"definition": demo.SCHEMA}, expect=409)
+    assert exists["error"]["code"] == "SCHEMA_EXISTS" and world.get(f"/schemas/{SCHEMA_KEY}")["current_rev"] == 1
     profile = world.post("/profiles", {"schema_key": SCHEMA_KEY, "definition": demo.PROFILE}, expect=201)
     assert profile["status"] == "draft" and profile["current_rev"] == 1 and profile["report"]["format_detected"] == "parsing-profile-3.0"
     assert profile["rules"] == 11 and profile["deprecated_rules"] in (0, [])
@@ -502,15 +506,11 @@ def test_profile_test_dry_run_leaves_no_application(world):
     assert len(groups) == 11 and groups["temperature"]["count"] == 12 and len(groups["temperature"]["values"]) == 12
     assert groups["temperature"]["field"]["key"] == "temperature" and groups["temperature"]["regions"]["value"][0]["sheet_name"] == demo.MAIN_SHEET
     assert groups["product_name"]["values"][0]["value_text"] == "제품-02"
-    definition = copy.deepcopy(demo.PROFILE)
-    definition["rules"] = definition["rules"][:5]
-    partial = world.post("/profiles/test", {"schema_key": SCHEMA_KEY, "definition": definition, "snapshot_id": sid})
-    assert partial["compatibility"] == "compatible" and len(partial["groups"]) == 5 and partial["errors"] == []
     other = world.post(f"/profiles/{pid}/test", {"snapshot_id": world.doc(DOC_OTHER)["snapshot"]["snapshot_id"]})
     assert other["compatibility"] == "incompatible" and other["groups"] == [] and other["errors"] and other["errors"][0]["code"]
     assert len(world.get(f"/snapshots/{sid}/applications")["items"]) == before
     tests = world.get("/jobs?kind=test")["items"]
-    assert len(tests) == 3 and tests[-1]["label"].startswith(f"{demo.PROFILE_NAME} r1 · ") and tests[-1]["state"] == "succeeded"
+    assert len(tests) == 2 and tests[-1]["label"].startswith(f"{demo.PROFILE_NAME} r1 · ") and tests[-1]["state"] == "succeeded"
 
 
 # ---------------------------------------------------------------------------- 11. 검색 · 문서 상태 전이
@@ -554,7 +554,7 @@ def test_search_and_document_status_transitions(world):
 
 def test_document_list_page_under_50ms_with_2000_documents(tmp_path):
     app = create_app(tmp_path / "ws", start_worker=False)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         service = app.state.service
         stamp = now()
         docs, snaps = [], []

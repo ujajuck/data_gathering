@@ -126,7 +126,7 @@ export default function QueuePanel({
   function act(group: QueueGroup, action: QueueAction) {
     const rep = group.representative;
     if (action === "open_review") rep.application_id && go(reviewRoute({ application_id: rep.application_id }));
-    else if (action === "create_profile") reset({ screen: "profiles", import: "1", snapshot: rep.snapshot_id });
+    else if (action === "create_profile") reset({ screen: "profiles", import: "1" });
     else if (action === "approve_all") void perform(group, { action, extract: true });
     else onDialog({ group, action, submit: (body) => void perform(group, body) });
   }

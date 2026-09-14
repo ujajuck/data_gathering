@@ -27,7 +27,7 @@ NASCA/DRM/로컬 Excel ─▶ Reader(격리 프로세스) ─▶ describe(+match
 ## 1. DB 스키마 (ERD)
 
 `<ws>/workspace.db` 하나에 코어 18개 + `schema_meta` + 런타임 3개(`runtime_job`, `snapshot_signature`, `source_digest`; `schema/db.py`가 만든다) = 22개 테이블,
-트리거 35개(불변성·CAS·발행 조건·레벨·projection 보호), 뷰 1개(`current_value`), 명시 인덱스 39개.
+트리거 35개(불변성·CAS·발행 조건·레벨·projection 보호), 뷰 1개(`current_value`), 명시 인덱스 34개.
 PostgreSQL 번역은 [db/schema_postgres.sql](../db/schema_postgres.sql)(pglast 구문·객체 집합 검증, 런타임 미검증).
 
 핵심 규칙:
@@ -35,7 +35,9 @@ PostgreSQL 번역은 [db/schema_postgres.sql](../db/schema_postgres.sql)(pglast 
 - 문서의 정체성은 `document_id`, 내용은 `document_snapshot`(불변, `change_token`으로 새 snapshot 판정). 자식 테이블은 모두 `snapshot_id`를 갖고 복합 FK로 같은 snapshot임을 DB가 강제한다.
 - 프로파일은 snapshot에 적용된다(`parsing_application`). 규칙별 `mapping`의 헤드는 **마지막 리비전**이고 `edit_seq = 헤드 revision_no`(CAS 트리거). 헤드가 바뀌면 `published_run_id`가 NULL이 된다.
 - 값은 `extracted_value`(불변)이고 출처는 **항상** `extracted_value_region`(단일 출처도 행 1개). `source_region_id` 컬럼은 없다.
-- `parsing_field`·`parsing_rule`은 DELETE가 금지된다(정의 파일에서 사라지면 `status='deprecated'`).
+- `parsing_rule`은 DELETE가 금지된다(정의 파일에서 사라지면 `status='deprecated'`). `parsing_field`는 **쓰이지 않을 때만** 지울 수 있다:
+  트리거 `parsing_field_in_use_no_delete`가 자식 `parent_of` 간선 · `parsing_rule.default_field_id` · `mapping_revision.field_id` · `extracted_value.field_id` 중
+  하나라도 걸려 있으면 거부한다(계약 §1.2). 스키마 삭제(§4.2.1)·필드 삭제(§4.2.2)만 이 문을 쓰고, 서비스가 먼저 같은 조건을 검사해 409로 돌려준다.
 - `source_digest`는 로컬 원본의 `(byte_size, mtime_ns)` → 내용 SHA-256 캐시다(폴더 일괄 등록 미리보기가 같은 stat이면 파일을 다시 읽지 않게 한다). 진실은 `document_snapshot.change_token`이라 언제 지워도 되고, 다음 스캔이 다시 채운다(계약 §1.6).
 
 ### 문서·snapshot·원본 위치
@@ -396,8 +398,11 @@ flowchart LR
     API --> OPS[operations.py]
     SVC --> DB[(workspace.db · db.py)]
     SVC --> JOBS[jobs.py<br/>runtime_job 큐 1워커]
-    JOBS -->|spawn 격리| RD[readers.py<br/>XlsxReader / DRM factory]
-    RD --> ENG[engine.py<br/>resolve · extract · match]
+    JOBS -->|spawn 격리| RD[readers.py<br/>make_reader — 컨테이너 판별]
+    RD -->|평문 ooxml| XLSX[XlsxReader]
+    RD -->|보호 문서| DRM[drm.py<br/>해제 세션 · 감사 · COM 참조]
+    DRM -->|해제본 경로| XLSX
+    XLSX --> ENG[engine.py<br/>resolve · extract · match]
     ENG --> NORM[normalization.py]
     SVC --> PROF[profile.py<br/>validate · compile]
     PROF --> ADP[adapters.py<br/>3.0 · 이전 세대 템플릿 · generic]
@@ -405,7 +410,7 @@ flowchart LR
     RC -->|HTTP 또는 in-process| RS[render/server.py<br/>워커 1개 · 큐]
     RS --> RCACHE[(render/cache.py<br/>meta.json · band-*.json · assets/)]
     RS -->|격리| RD
-    RD --> RR[render/renderer.py<br/>openpyxl → meta/band/image 이벤트]
+    XLSX --> RR[render/renderer.py<br/>openpyxl → meta/band/image 이벤트]
     CLI[python -m schema] --> API
     CLI --> RS
     CLI --> WATCH[filewatch.py]
@@ -419,15 +424,16 @@ flowchart LR
 | `adapters.py` | 외부 프로파일 JSON → canonical(`detect_format`, `to_canonical` + 경고 보고) | §2 Import Adapter |
 | `normalization.py` | 정규화 op 실행(`trim_text`·`strip_thousands`·`split_unit_suffix`·`percent_to_ratio`·`automatic`·`split_delimiter`), 파이프라인 검증, 프리셋 | §2 normalization |
 | `engine.py` | 영역 해결(range/find/regex/relative/anchor/composite), 추출 스트림(group → values → verified), 시트 바인딩, 매치 판정(`match_profile`·`match_specs`, 매치 서명) | §3.1, §3.3 |
-| `readers.py` | Reader 계약: `describe(profiles)`(등록 시 프로세스 1회) · `match` · `match_specs` · `extract` · `render`; `SCHEMA_READER_FACTORY`로 DRM Reader 교체 | §3.2 |
-| `service.py` | 등록·snapshot 판정·자동 적용·승계·검수(CAS)·추출·발행·프로파일 테스트/승인/재파싱·문서 상태 캐시·조회, 폴더 재귀 스캔·분류(`scan_sources`)와 폴더 일괄 등록 작업(`register_directory`) | §4, §4.1.1 |
+| `readers.py` | Reader 계약: `describe(profiles)`(등록 시 프로세스 1회) · `match` · `match_specs` · `extract` · `render`. `make_reader(root, provider, principal, source_ref)`가 **컨테이너를 보고 한 곳에서만** Reader를 고른다(평문 → `XlsxReader`, 보호 → 팩토리) | §3.2, §3.5 |
+| `drm.py` | 보호 문서 접근: 앞 32바이트 컨테이너 판별(`sniff_container`), snapshot당 1회 해제 세션(`SESSIONS.acquire`, 작업 공간 밖 0700 폴더·TTL·총량 상한), 감사(`<ws>/data/audit/drm-*.jsonl`), 설정 카드 값(`settings_snapshot`), 점검(`probe`), 윈도우 Excel COM 참조 구현(`ExcelComReader`, 기본 비연결) | §3.5 |
+| `service.py` | 등록·snapshot 판정·자동 적용·승계·검수(CAS)·추출·발행·프로파일 테스트/승인/재파싱·문서 상태 캐시·조회, 폴더 재귀 스캔·분류(`scan_sources`)와 폴더 일괄 등록 작업(`register_directory`), 스키마·필드 삭제(`delete_schema`·`delete_field` — 사용 중이면 409) | §4, §4.1.1, §4.2.1, §4.2.2 |
 | `build.py` | 후보 판정 · 미리보기 · CSV/XLSX/SQLite 생성 · manifest · `build_key` 재사용 · 단위 변환(`UnitRegistry`) | §4.10 |
 | `operations.py` | 검수 큐 5종(같은 원인·서명 묶음), 멤버, 묶음 처리 작업 | §4.11 |
 | `api.py` | FastAPI `/api`(§6 전부), 오류 봉투, `?wait=`, 렌더 프록시(권한 → ETag/304), 정적 프런트 | §6 |
 | `contracts.py` | Pydantic 요청 모델(`extra=forbid`) | §6 |
 | `render/*` | 렌더 서버(§5): `renderer`(이벤트) · `assemble`(밴드 파일) · `cache`(창·LRU·세대·asset 검증) · `server`(POST/GET/DELETE/status, 멱등 큐, 실패 보관) · `client`(HTTP·in-process 동일 형태, `RenderUnavailable`) | §5 |
 | `watch.py` · `filewatch.py` | 원본 폴더 감시 → 등록+자동 적용(기본 하위 폴더까지, `--no-recursive`로 최상위만; 제외 규칙은 폴더 스캔과 같다). `filewatch.py`는 파일 안정화 판정(`FileEventWatcher`·`StabilityGuard`) | §4.1.1, §9 |
-| `__main__.py` | `serve · render-serve · watch · register · import-schema · import-profile · build · seed-demo`(`.env` 자동 로드; 서브커맨드를 생략하면 `serve`) | §9 |
+| `__main__.py` | `serve · render-serve · watch · register · drm-probe · import-schema · import-profile · build · seed-demo`(`.env` 자동 로드; 서브커맨드를 생략하면 `serve`. `serve`·`render-serve`는 시작할 때 해제본 임시 폴더를 검사·비운다) | §9 |
 
 ### 2.1 등록 → 자동 적용 → 추출 → 발행
 
@@ -458,7 +464,7 @@ sequenceDiagram
 ```
 
 - 같은 문서에 다른 `change_token`이 오면 새 snapshot을 만들고 이전 application을 `match_specs`로 재판정해 **항상 `proposed`(origin inherited)**로 승계한다(자동 승인 없음, [decisions.md §1](design/decisions.md)). 작업 내역 '변경 감지'의 `approve_all`이 승인+추출+발행을 요청 1회로 처리한다.
-- 잠긴 파일(DRM Reader 미등록)은 `document.status='locked'` + 실패 작업으로 남는다.
+- 보호 문서인데 Reader 어댑터가 없으면 `document.status='locked'` + 실패 작업으로 남는다(§2.5). 어댑터를 붙인 뒤 `변경 없는 문서·잠긴 문서도 다시 읽기`로 같은 파일을 다시 등록한다.
 
 **폴더 일괄 등록(§4.1.1)** — 파일을 하나씩 고르는 대신 루트 폴더 하나를 지정하면 그 아래(하위 폴더 포함) 전부가 대상이다.
 
@@ -526,6 +532,34 @@ sequenceDiagram
 
 `POST /builds/candidates` → 문서별 사용 가능/제외 사유·필드별 값 있는 문서 수 → `POST /builds/preview`(50행, 셀마다 원본 위치) → `POST /builds {format}` → `<ws>/data/exports/<build_key>/data.{csv|xlsx|sqlite}` + `manifest.json`(sources·columns·excluded·conflicts). `build_key`는 입력(문서·스키마 rev·컬럼·행 모드·발행 실행)의 해시라 같은 입력은 재사용한다. 문서 200개·행 20만 초과는 작업으로 돌리고 작업 내역에서 내려받는다.
 
+### 2.5 보호 문서(DRM) 접근
+
+**전제는 보호 문서가 기본이고 평문 OOXML이 예외다**(계약 §3.5, 결정 [decisions.md §16](design/decisions.md)). 확장자가 아니라 원본 **앞 32바이트**로 컨테이너를 판별하고, 보호 문서는 잠금으로 끝내지 않고 운영자가 연결한 Reader에게 넘긴다. `DRM_READER_REQUIRED`는 넘길 Reader가 없을 때만 남는 마지막 상태이고, 그 문구는 무엇을 설정해야 하는지 말한다.
+
+```mermaid
+flowchart LR
+    SRC[원본 파일] -->|앞 32바이트| SNIFF{sniff_container}
+    SNIFF -->|SCHEMA_DRM_MAGIC 일치| PROT[protected]
+    SNIFF -->|PK| PLAIN[ooxml 평문]
+    SNIFF -->|D0CF11E0 · 그 밖| PROT
+    PLAIN --> XLSX[XlsxReader — 원본 그대로]
+    PROT --> FAC{SCHEMA_READER_FACTORY}
+    FAC -->|없음| REQ[403 DRM_READER_REQUIRED<br/>무엇을 설정해야 하는지 알려 준다]
+    FAC -->|있음| SESS[SESSIONS.acquire<br/>키 = provider + source_ref + change_token]
+    SESS -->|해제 1회| TMP[(작업 공간 밖 0700 폴더<br/>0600 세션 파일 · TTL)]
+    SESS -->|재사용| TMP
+    TMP --> XLSX
+    SESS --> AUD[(감사 data/audit/drm-*.jsonl<br/>+ 작업 result_json.drm)]
+```
+
+- **판별은 `make_reader` 한 곳에서만** 한다. `XlsxReader.authorize`는 컨테이너로 잠금을 판정하지 않는다 — 두 곳에서 판정하면 어댑터를 붙여도 계속 잠기는 화면이 남는다.
+- **해제 비용은 snapshot마다 한 번**이다. 세션 키가 `document_snapshot.change_token`이라 같은 snapshot의 `describe`·`match`·`match_specs`·`extract`·`render`는 같은 해제본을 다시 쓴다(설계 문서 기준 건당 약 5초를 연산마다 치르지 않는다). `SCHEMA_DRM_CACHE_TTL_SECONDS=0`이면 재사용 없이 연산마다 해제하고 즉시 지운다.
+- **해제본은 작업 공간 안에 만들지 않는다.** 폴더가 `<ws>` 아래를 가리키면 서버가 `DRM_TEMP_IN_WORKSPACE`로 시작을 거부한다. 임시 폴더는 0700으로 **새로** 만들고, 이미 있으면 `lstat`으로 (심볼릭 링크가 아닌지 · 내 소유인지 · 남에게 열려 있지 않은지) 확인해 하나라도 어긋나면 `DRM_TEMP_UNSAFE`로 시작을 막는다(예측 가능한 공용 경로에 남이 만들어 둔 폴더를 그대로 쓰지 않는다). 서버는 시작할 때 **살아 있는 프로세스가 붙잡고 있지 않은** 항목만 비운다(진행 중인 해제의 부분 파일과 잠금 파일은 남긴다 — 그것까지 지우면 상호 배제가 깨진다).
+- **지우는 자리는 연산이 끝나는 자리다.** 각 Reader 연산(`describe`·`match`·`match_specs`·`extract`·`render`)이 `finally`에서 세션을 놓고, Reader 자식 프로세스는 SIGTERM을 받아도(타임아웃·취소·스트림 중단) 감사와 삭제를 마치고 끝낸다. `atexit`에만 기대면 forkserver 자식(`os._exit`)과 강제 종료 경로에서 평문이 그대로 남는다.
+- **해제된 내용에서 나온 파생물도 작업 공간에 남기지 않는다.** 보호 문서 snapshot의 렌더 결과(셀·서식·워크북에 박힌 이미지)는 `<ws>/data/render-cache`가 아니라 렌더 서버 메모리(`MemoryRenderCache`, `SCHEMA_RENDER_MEMORY_MB`·`_TTL_SECONDS`)에만 둔다. 평문 문서는 그대로 디스크 캐시를 쓴다.
+- **모든 접근이 기록에 남는다**: `<ws>/data/audit/drm-<YYYYMMDD>.jsonl`(append-only, 0600)과 그 접근을 일으킨 작업의 `result_json.drm{unlocked, reused, failed}`. 해제본 경로·자격 증명·파일 내용은 쓰지 않는다.
+- 운영자 확인은 `python -m schema drm-probe --ws <ws> [--unlock]`(종료 코드 0 정상 · 1 해제 실패 · 2 어댑터 없음)와 설정 화면의 Reader 카드다. 윈도우 Excel COM 참조 구현(`schema.drm:excel_com_reader`)은 **기본으로 연결되지 않고** 운영자가 `SCHEMA_READER_FACTORY`로 가리켜야 쓰인다. 해제 경로 선택지와 담당자 확인 목록은 [design/drm-integration.md](design/drm-integration.md).
+
 ---
 
 ## 3. API 지도 (화면 → `/api`)
@@ -534,20 +568,21 @@ sequenceDiagram
 |---|---|---|
 | 문서 | `GET /documents`, `GET /profiles`(필터), `GET /status`(쉘 공유) | `POST /documents/register?wait`, `GET /sources/scan?directory=`(폴더 미리보기) → `POST /documents/register-directory?wait`, `POST /snapshots/{sid}/applications?wait` |
 | 문서 상세 | `GET /documents/{id}`, `GET /snapshots/{sid}/sheets`, 탭별 1건 | — |
-| 파싱 프로파일 | `GET /profiles`, `GET /profiles/{id}`, `GET /profiles/{id}/documents` | `POST/PUT /profiles`, `import-preview`, `test`, `approve`, `reparse` |
-| 파싱 스키마 | `GET /schemas`, `GET /schemas/{key}`, `GET /schemas/{key}/tree` (그래프는 토글 시) | `POST/PUT /schemas`, `PATCH .../fields/{key}` |
+| 파싱 프로파일 | `GET /profiles`, `GET /profiles/{id}`, `GET /profiles/{id}/revisions/{rev}`, `GET /profiles/{id}/revisions`(목록과 상세를 한 화면에 그려 목록 호출만큼 예산 +1) | `POST /profiles`, `PUT /profiles/{id}`(새 리비전), `POST /profiles/import-preview`, `POST /profiles/{id}/test`(저장된 리비전만), `approve`, `reparse` |
+| 파싱 스키마 | `GET /schemas`, `GET /schemas/{key}`, `GET /schemas/{key}/tree` (그래프는 토글 시, 리비전 JSON은 `GET .../revisions/{rev}`) | `POST /schemas`(생성 전용 — 있는 키는 409 `SCHEMA_EXISTS`) · `PUT /schemas/{key}`(새 리비전) · `DELETE /schemas/{key}`(409 `SCHEMA_IN_USE`) · `POST/PATCH/DELETE .../fields/{key}`(409 `FIELD_IN_USE`·`FIELD_HAS_CHILDREN`) |
 | 데이터 빌드 | `POST /builds/candidates` (스키마 선택 시 1회 더) | `POST /builds/preview`, `POST /builds?wait` |
 | 작업 내역 | `GET /queues`, `GET /jobs`, `GET /queues/{kind}` | `POST /queues/{kind}/groups/{key}/actions?wait`, `POST /jobs/{id}/cancel` |
 | Source Review | `GET /applications/{aid}`, 렌더 창 ≤2 | `POST /mappings/{mid}/revisions`, `rollback`, `POST /applications/{aid}/approve-all?wait` |
-| 설정 | `GET /settings`, `GET /normalization-presets` | — |
+| 설정 | `GET /settings`(`reader.drm` 포함), `GET /normalization-presets` | — |
 
 전체 경로와 응답 형태는 [design/contracts.md §6](design/contracts.md).
+메인 API에는 **사용자 인증이 없다** — `python -m schema serve`는 기본으로 `127.0.0.1`에 바인딩하고, `--host`로 그 밖에 열면 시작할 때 stderr에 경고 한 줄이 나온다(결정 [decisions.md §15](design/decisions.md)). 렌더 서버와 주고받는 내부 bearer(`SCHEMA_RENDER_TOKEN`, 옛 이름 `SCHEMA_ACCESS_TOKEN`)는 서버 대 서버라 그대로 있다. 인증이 없는 자리는 **출처 검사**가 메운다: `/api/*`는 `Host`가 루프백(또는 `SCHEMA_ALLOWED_HOSTS`)이 아니면 400 `HOST_NOT_ALLOWED`, 교차 출처 쓰기는 403 `CROSS_ORIGIN_DENIED`로 끊는다 — DNS 리바인딩 방어다.
 
 ---
 
 ## 4. 프런트 (`frontend/src/app/`)
 
-승인 목업([design/assets/ui-approved-mockup.svg](design/assets/ui-approved-mockup.svg)) 그대로 좌측 사이드바 `문서 · 파싱 프로파일 · 파싱 스키마 · 데이터 빌드 · 작업 내역`(+ 설정), 상단 통합 검색, Source Review는 독립 메뉴가 아닌 오버레이(`?review=` / `?test=`)다.
+승인 목업([design/assets/ui-approved-mockup.svg](design/assets/ui-approved-mockup.svg)) 그대로 좌측 사이드바 `문서 · 파싱 프로파일 · 파싱 스키마 · 데이터 빌드 · 작업 내역`(+ 설정), 상단 통합 검색, Source Review는 독립 메뉴가 아닌 오버레이(`?review=` / `?test=<profile_id>&snapshot=<snapshot_id>`)다. 테스트 오버레이는 **저장된 리비전만** 연다 — 저장 전 초안에는 리비전이 없어 테스트가 성립하지 않는다(결정 [decisions.md §14](design/decisions.md)).
 
 ```mermaid
 classDiagram
@@ -557,14 +592,20 @@ classDiagram
     class Documents { 표 · 필터 · 정렬 · 선택 → 데이터 빌드 · 등록 대화상자 }
     class DocumentRegister { 파일 고르기 ↔ 폴더 미리보기 · 진행 · 결과 요약 }
     class DocumentDetail { 파일 보기 · 추출 결과 · 적용 프로파일 · 연결 스키마 }
-    class Profiles { 목록 · 상세 6탭 · 규칙 폼 · JSON · Import }
-    class Schema { 목록 · 트리/그래프 토글 · 사용 프로파일 · 연관 문서 · 필드 상세 }
+    class Profiles { 목록(+ 새 프로파일 하나) · 탭 없는 단일 상세 }
+    class ProfileDetail { 요약줄 · 정의 JSON 편집기 · 테스트 · 변경 이력 }
+    class ProfileNew { 빈 골격 · 붙여넣기 · 파일 업로드 · 형식 자동 판별 }
+    class Schema { 목록 · 트리/그래프 토글 · 사용 프로파일 · 연관 문서 · 필드 상세 · 생성/새 리비전/삭제 }
+    class DeleteDialog { 삭제 확인 · 409 사용 중이면 열어 둔 채 사유 표시 }
     class Build { 5단계 · 출력 Header 편집 · 순서 · 미리보기 · 생성 }
     class Jobs { 큐 요약 카드 · 묶음 처리 · 작업 목록 }
     class SourceReview { 3열 · 매핑 상세 · 승인/반려/복원 · 테스트 모드 }
     Workbench --> Documents
     Workbench --> Profiles
+    Profiles --> ProfileDetail
+    Profiles --> ProfileNew
     Workbench --> Schema
+    Schema --> DeleteDialog
     Workbench --> Build
     Workbench --> Jobs
     Workbench --> SourceReview
@@ -578,6 +619,9 @@ classDiagram
 - `+ 문서 등록` 대화상자는 두 모드다: 파일 체크박스(`POST /documents/register`)와 **폴더 일괄 등록**(툴바 `이 폴더 전체 등록`·폴더 행 `전체 등록` → `GET /sources/scan?directory=` 미리보기 칩 `새 파일 · 변경된 문서 · 변경 없음 · 잠김`, 체크박스 `변경 없는 문서·잠긴 문서도 다시 읽기`, 주 행동 `N개 등록 시작` → `POST /documents/register-directory?wait=10` → 진행률 `(completed/total)` → 요약 `N개 중 R개 등록 · U개 변경 없음 · F개 실패`와 파일별 결과 표). 미리보기는 폴더당 1회 호출이고 대상이 0이면 시작 버튼이 비활성이다.
 - 화면 문자열에 내부 ID(UUID·SHA-256)를 쓰지 않는다(`frontend/tests/ids.test.tsx`), 금지 용어(`템플릿·문서군·KG·Concept·Integration·Template`)를 쓰지 않는다(`frontend/tests/terms.test.tsx`), `src/app/**`의 import 대상은 정적으로 검사한다(`frontend/tests/imports.test.tsx`), 화면 진입 호출 ≤3(`frontend/tests/entry-calls.test.tsx`).
 - 파일·라우트·픽스처 설명은 [frontend/src/app/README.md](../frontend/src/app/README.md).
+- 프로파일 상세에 **탭이 없다**. 요약줄(프로파일명·리비전·상태·연결 스키마·대표 문서·적용 문서 수) + 정의 JSON 편집기(검증 오류·경고, 저장하면 새 리비전) + `테스트`(문서를 고르면 Source Review 테스트 모드) + 하단 `변경 이력` 하나로 합쳤다. 목록 버튼도 `+ 새 프로파일` 하나이고 외부 정의 붙여넣기·파일 올리기가 그 대화상자 안에 들어간다(결정 [decisions.md §14](design/decisions.md)).
+- 스키마 화면의 쓰기 행동은 `+ 새 스키마`(생성 전용) · `새 리비전` · `이름 바꾸기` · `삭제` · `+ 필드 추가` · 필드 `편집`/`삭제`다. 삭제는 확인 모달을 거치고, 409(`SCHEMA_IN_USE`·`FIELD_IN_USE`·`FIELD_HAS_CHILDREN`)면 모달을 **열어 둔 채** 서버 `message`와 `사용 프로파일 보기`·`하위 필드 보기` 버튼을 붙인다.
+- 설정 화면에 사용자 접근 토큰 입력칸이 없다. Reader 카드가 보안 읽기 어댑터 연결 상태·해제본 임시 폴더·해제 캐시 유지 시간·등록된 시그니처 수를 보여 준다(`GET /settings`의 `reader.drm`).
 - `App.tsx`에 버전 분기가 없다. 화면은 이것 하나이고 URL 질의는 `?screen=`·`?review=`·`?test=` 등 화면 상태에만 쓴다.
 
 ---
@@ -586,10 +630,12 @@ classDiagram
 
 | 계층 | 위치 | 내용 |
 |---|---|---|
-| 스키마 불변식 | `tests/test_schema.py`, `tests/test_schema_postgres.py` | 리비전 불변·CAS·발행 조건·projection 삭제 금지·snapshot 바인딩·레벨·group 필드·pglast |
+| 스키마 불변식 | `tests/test_schema.py`, `tests/test_schema_postgres.py` | 리비전 불변·CAS·발행 조건·projection 삭제 조건(참조 있으면 거부·없으면 통과)·snapshot 바인딩·레벨·group 필드·pglast |
 | DSL·엔진·정규화 | `tests/test_profile.py`, `test_engine.py`, `test_normalization.py` | 문법·기본값·adapter·앵커/composite/relations/regex·매치 판정·split_delimiter |
 | 렌더 | `tests/test_render.py` | 밴드·창 불변식·asset 격리·202/200/304·멱등 큐·세대·격리 중 응답 시간 |
 | 서비스·API | `tests/test_service.py`, `test_api.py`, `test_build.py`, `test_operations.py`, `test_runtime.py` | 등록→자동 적용→검수→승인→재파싱→추출→빌드→큐→새 snapshot 승계→테스트→검색·상태 전이, 2,000건 목록 성능 |
+| 스키마 쓰기 | `tests/test_schema_write.py` | `POST /schemas` 생성 전용(409 `SCHEMA_EXISTS`, 아무것도 쓰지 않음)·`PUT` 새 리비전·스키마/필드 삭제와 409 세 가지·`PATCH` 필드 상세 응답·메인 API 무인증 |
+| 보호 문서(DRM) | `tests/test_drm.py` | 컨테이너 판별·시그니처 설정·Reader 선택 한 곳·snapshot당 1회 해제와 재사용·작업 공간 밖 강제·TTL/총량 정리·감사 줄·`drm-probe` 출력과 종료 코드 |
 | 폴더 일괄 등록 | `tests/test_register_directory.py`, `tests/test_watch.py` | 스캔 분류(new/changed/unchanged/locked)·건너뜀·숨김 폴더·`source_digest` 재사용(해시 호출 0회)·진행률·요약/`truncated`/취소·`include_unchanged`·경로 오류·413 한도·API 두 경로·CLI `register`·watch 재귀 |
 | 컴포넌트 | `frontend/tests/*.test.tsx` | 화면별 상호작용 + 규칙 테스트(용어·ID·import·진입 호출·접근성) |
 | 브라우저 | `e2e/specs/*.spec.ts` (`cd e2e && npm test`) | 임시 작업 공간 + 렌더 서버 별도 프로세스; `register-directory.spec.ts`가 폴더 트리 등록 → 재스캔(변경 없음) → 다시 읽기 → 변경 감지를 한 흐름으로 확인한다. 결과는 [e2e-results.md](e2e-results.md) |
@@ -605,9 +651,20 @@ python -m schema render-serve --ws /tmp/demo-ws --port 8032  # 렌더 서버(별
 SCHEMA_RENDER_URL=http://127.0.0.1:8032 python -m schema serve --ws /tmp/demo-ws --port 8010
 python -m schema watch --ws /tmp/demo-ws                     # 원본 폴더 감시 → 등록 + 자동 적용(기본 하위 폴더 포함, --no-recursive로 최상위만)
 python -m schema register --ws /tmp/demo-ws --directory 2024 # 폴더 아래 전부 등록(요약 JSON; --include-unchanged로 다시 읽기)
+python -m schema drm-probe --ws /tmp/demo-ws --unlock        # 보호 문서를 실제로 읽을 수 있는지 점검(0 정상 · 1 해제 실패 · 2 어댑터 없음)
 ```
 
-환경변수: `SCHEMA_RENDER_URL`(없으면 in-process 렌더), `SCHEMA_READER_FACTORY`(DRM Reader), `SCHEMA_READER_TIMEOUT_SECONDS`/`_MEMORY_MB`, `SCHEMA_RENDER_CONCURRENCY`(기본 1), `SCHEMA_RENDER_LRU_MB`/`_CACHE_MB`, `SCHEMA_REGISTER_DIRECTORY_LIMIT`(폴더 일괄 등록 한 번의 대상 파일 상한, 기본 10,000 — 넘으면 413과 함께 하위 폴더로 나누라고 안내한다), `SCHEMA_ACCESS_TOKEN`, `SCHEMA_PRINCIPAL`. 모두 `SCHEMA_` 접두 하나이며 구 변수 폴백은 없다 — 옛 접두가 설정돼 있으면 시작할 때 stderr로 한 번 경고하고 무시한다(키 목록은 [.env.sample](../.env.sample)).
+**메인 API는 기본으로 `127.0.0.1`에만 바인딩하고, `/api/*`는 `Host`·`Origin`을 검사한다(`SCHEMA_ALLOWED_HOSTS`로 넓힌다).** 사용자 대상 인증은 없다 — `--host`로 그 밖에 열면 시작할 때 stderr에 경고 한 줄이 나오고, 앞단에 인증을 두는 것은 운영자 책임이다(결정 [decisions.md §15](design/decisions.md)). 렌더 서버도 기본이 `127.0.0.1`이고, 루프백이 아닌 host로 열려면 내부 bearer `SCHEMA_RENDER_TOKEN`이 반드시 있어야 한다(403 `RENDER_TOKEN_REQUIRED`).
+
+환경변수(모두 `SCHEMA_` 접두 하나, 구 변수 폴백 없음 — 옛 접두가 설정돼 있으면 시작할 때 stderr로 한 번 경고하고 무시한다. 전체 키와 기본값은 [.env.sample](../.env.sample)):
+
+| 묶음 | 키 |
+|---|---|
+| 렌더 | `SCHEMA_RENDER_URL`(없으면 in-process 렌더) · `SCHEMA_RENDER_TOKEN`(서버 대 서버 내부 bearer; 옛 이름 `SCHEMA_ACCESS_TOKEN`은 한 릴리스 동안 경고와 함께 폴백) · `SCHEMA_RENDER_CONCURRENCY`(기본 1) · `SCHEMA_RENDER_LRU_MB`/`_CACHE_MB` · `SCHEMA_RENDER_MEMORY_MB`/`_MEMORY_TTL_SECONDS`(보호 문서 파생물은 디스크가 아니라 여기에만) · `SCHEMA_RENDER_QUEUE` |
+| Reader | `SCHEMA_READER_FACTORY`(보안 읽기 어댑터 `<모듈>:<함수>`) · `SCHEMA_READER_REVISION` · `SCHEMA_READER_TIMEOUT_SECONDS`/`_MEMORY_MB` · `SCHEMA_READER_CONTEXT` |
+| 보호 문서 해제(§2.5) | `SCHEMA_DRM_MAGIC`(벤더 시그니처 목록) · `SCHEMA_DRM_TEMP_DIR` · `SCHEMA_DRM_CACHE_TTL_SECONDS`(900, `0`이면 재사용 없음) · `SCHEMA_DRM_CACHE_MB`(2048) · `SCHEMA_DRM_CACHE_MAX_SESSIONS`(64) · `SCHEMA_DRM_OPEN_TIMEOUT_SECONDS`(60) · `SCHEMA_DRM_COM_LOCK` |
+| 그 밖 | `SCHEMA_REGISTER_DIRECTORY_LIMIT`(폴더 일괄 등록 한 번의 대상 파일 상한, 기본 10,000 — 넘으면 413과 함께 하위 폴더로 나누라고 안내한다) · `SCHEMA_PRINCIPAL` |
 
 작업 공간 백업 대상은 정의 파일(`<ws>/schemas/`·`<ws>/profiles/`)과 원본(`<ws>/data/raw/`)이다.
 `<ws>/workspace.db`·`<ws>/data/exports/`·`<ws>/data/render-cache/`는 정의와 원본에서 다시 만들 수 있어 Git에 넣지 않는다.
+`<ws>/data/audit/drm-*.jsonl`은 보호 문서 접근 기록이라 다시 만들 수 없다 — 보존 기간은 운영 정책을 따르고, 해제본 임시 폴더는 작업 공간 밖이라 백업 대상이 아니다.

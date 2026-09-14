@@ -62,19 +62,24 @@ describe("작업 공간 쉘", () => {
     expect(route().get("profile")).toBe(f.ids.profile2);
   });
 
-  it("/status가 401이면 토큰 입력을 보여주고, 연결하면 토큰을 저장해 다시 요청한다", async () => {
+  it("/status가 실패하면 연결 오류만 보여주고(토큰 입력은 없다) '다시 시도'로 다시 읽는다", async () => {
     const f = appFixture();
-    f.state.requireToken = true;
+    let down = true;
+    f.overrides.set("GET /status", () => (down ? { __status: 503, body: { error: { code: "SERVICE_UNAVAILABLE", message: "서버에 연결할 수 없습니다." } } } : { version: "3", workspace: "/tmp/ws", render: { mode: "inprocess", url: null }, counts: {} }));
     f.renderApp("/");
-    const user = userEvent.setup();
-    const input = await screen.findByLabelText("서버 접근 토큰");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("서버에 연결할 수 없습니다.");
+    expect(screen.queryByLabelText("서버 접근 토큰")).toBeNull();
+    expect(screen.queryByRole("button", { name: "연결" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "작업 공간 연결" }).parentElement!.textContent).toContain("127.0.0.1");
     expect(screen.queryByRole("heading", { name: "문서" })).toBeNull();
-    await user.type(input, "secret-token");
-    await user.click(screen.getByRole("button", { name: "연결" }));
+    // 어떤 요청에도 Authorization 헤더를 붙이지 않는다.
+    expect(f.calls.filter((c) => c.headers.authorization)).toHaveLength(0);
+
+    down = false;
+    const user = userEvent.setup();
+    await user.click(within(alert).getByRole("button", { name: "다시 시도" }));
     await screen.findByRole("heading", { name: "문서" });
-    expect(localStorage.getItem("schema.token")).toBe("secret-token");
-    const authorized = f.calls.filter((c) => c.path === "/status" && c.headers.authorization === "Bearer secret-token");
-    expect(authorized.length).toBeGreaterThan(0);
   });
 
   it("진행 중 작업이 있으면 JobBar에 수를 보여주고, 없으면 /jobs를 폴링하지 않는다", async () => {

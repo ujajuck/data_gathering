@@ -1,14 +1,14 @@
 """API(계약 §6, prefix `/api`) — 서비스 규칙은 `service.py`에 있고 여기는 HTTP 경계만 맡는다.
 
-공통: 오류 `{error:{code,message,fields?}}`, 목록 `{items,has_more,next_cursor}`(keyset, limit ≤ 200), 본문 2MB, 접근 토큰
-`SCHEMA_ACCESS_TOKEN`, `Cache-Control: no-store`(렌더 창·asset만 `private, no-cache` + ETag/304),
+공통: 오류 `{error:{code,message,fields?,detail?}}`, 목록 `{items,has_more,next_cursor}`(keyset, limit ≤ 200), 본문 2MB,
+`Cache-Control: no-store`(렌더 창·asset만 `private, no-cache` + ETag/304). 사용자 인증은 없다 — 메인 API는 기본으로
+127.0.0.1에만 바인딩하고, 접근 제어는 그 경계에서 한다(렌더 서버와 주고받는 내부 bearer는 별개다).
 `?wait=<초≤60>`는 작업 완료를 기다렸다가 최종 JobResponse를 돌려준다. 빌드(`/builds*`)는 `build.py`, 작업 큐(`/queues*`)는 `operations.py`에 위임한다.
 """
 
 from __future__ import annotations
 
 import heapq
-import hmac
 import os
 import re
 import threading
@@ -20,6 +20,7 @@ from typing import Literal, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, FastAPI, Header, Query, Request
+from fastapi import Path as FPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +28,7 @@ from pydantic import Field
 
 from . import ENGINE_VERSION
 from . import build as build_module
+from . import drm
 from . import operations
 from .contracts import (
     ApplicationRequest,
@@ -38,9 +40,9 @@ from .contracts import (
     FieldPatchRequest,
     ImportPreviewRequest,
     JobResponse,
+    FieldCreateRequest,
     ProfileApproveRequest,
     ProfileCreateRequest,
-    ProfileTestDefinitionRequest,
     ProfileTestRequest,
     ProfileUpdateRequest,
     QueueActionRequest,
@@ -303,8 +305,10 @@ def profile_detail(service, profile_id):
 
 SCHEMA_COUNTS = (
     "(SELECT count(*) FROM parsing_field f WHERE f.schema_id=s.schema_id AND f.status='active') field_count, "
-    "(SELECT count(*) FROM parsing_profile p WHERE p.schema_id=s.schema_id AND p.status<>'deprecated') profile_count, "
-    "(SELECT count(DISTINCT d.document_id) FROM parsing_application a JOIN document d ON d.current_snapshot_id=a.snapshot_id WHERE a.schema_id=s.schema_id) document_count"
+    "(SELECT count(*) FROM parsing_profile p WHERE p.schema_id=s.schema_id) profile_count, "
+    "(SELECT count(DISTINCT d.document_id) FROM parsing_application a JOIN document d ON d.current_snapshot_id=a.snapshot_id WHERE a.schema_id=s.schema_id) document_count, "
+    # 화면이 '삭제' 버튼을 띄울지 판단하는 값 — delete_schema가 막는 기준과 같다(§4.2.1).
+    "(SELECT count(*) FROM parsing_application a WHERE a.schema_id=s.schema_id) application_count"
 )
 
 
@@ -322,6 +326,7 @@ def _schema_public(r):
         "field_count": r["field_count"],
         "profile_count": r["profile_count"],
         "document_count": r["document_count"],
+        "application_count": r["application_count"],
         "created_at": r["created_at"],
         "updated_at": r["updated_at"],
     }
@@ -554,7 +559,7 @@ def field_detail(service, schema_key, field_key):
         usage = _field_usage(conn, s["schema_id"]).get(field["field_id"], {})
     return {
         **_field_public(field),
-        "schema": {"key": s["schema_key"], "name": s["schema_name"]},
+        "schema": {"key": s["schema_key"], "name": s["schema_name"], "rev": s["current_rev"]},
         "profile_count": usage.get("profile_count", 0),
         "document_count": usage.get("document_count", 0),
     }
@@ -631,6 +636,63 @@ def snapshot_context(service, snapshot_id):
         )
 
 
+# ---------------------------------------------------------------------------- 출처 방어
+
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
+WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+
+
+def allowed_hosts() -> list[str]:
+    """`SCHEMA_ALLOWED_HOSTS`(쉼표 구분)로 넓힐 수 있는 Host 허용 목록. 기본은 루프백뿐이다."""
+    extra = [h.strip().lower() for h in env("ALLOWED_HOSTS", "").split(",") if h.strip()]
+    return list(LOOPBACK_HOSTS) + extra
+
+
+def host_allowed(host: str, allowed=None) -> bool:
+    """`Host` 헤더가 허용 목록에 있는가. 포트는 무시하고 이름만 본다."""
+    name = (host or "").strip().lower()
+    if not name:
+        return False
+    if name.startswith("["):  # IPv6 리터럴 [::1]:8031
+        name = name.split("]", 1)[0] + "]"
+    else:
+        name = name.rsplit(":", 1)[0] if name.count(":") == 1 else name
+    allowed = allowed_hosts() if allowed is None else allowed
+    return name in allowed or (name == "*" and "*" in allowed)
+
+
+def guard_origin(request: Request):
+    """DNS 리바인딩·교차 출처 쓰기 차단(§6 공통).
+
+    메인 API에는 사용자 인증이 없고 기본으로 127.0.0.1에만 바인딩한다. 브라우저의 동일 출처 정책은 루프백을
+    막아 주지만 DNS 리바인딩은 막지 못한다 — 공격자 도메인이 127.0.0.1로 바뀌면 그 페이지에게 `/api/*`는
+    **동일 출처**가 된다. 그래서 (1) `Host`가 루프백(또는 `SCHEMA_ALLOWED_HOSTS`)이 아니면 끊고,
+    (2) 쓰기 메서드는 교차 출처(`Sec-Fetch-Site`/`Origin`)면 거부한다."""
+    allowed = allowed_hosts()
+    if "*" not in allowed and not host_allowed(request.headers.get("host", ""), allowed):
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "HOST_NOT_ALLOWED",
+                    "message": "이 주소로는 API를 쓸 수 없습니다. 127.0.0.1로 접속하거나 서버에 SCHEMA_ALLOWED_HOSTS를 설정하세요.",
+                }
+            },
+            status_code=400,
+        )
+    if request.method in WRITE_METHODS:
+        site = (request.headers.get("sec-fetch-site") or "").lower()
+        origin = (request.headers.get("origin") or "").strip()
+        cross = site in ("cross-site", "same-site") or (
+            not site and origin and not host_allowed(origin.split("//", 1)[-1], allowed)
+        )
+        if cross:
+            return JSONResponse(
+                {"error": {"code": "CROSS_ORIGIN_DENIED", "message": "다른 출처에서 온 쓰기 요청은 거부합니다."}},
+                status_code=403,
+            )
+    return None
+
+
 # ---------------------------------------------------------------------------- 설치
 
 
@@ -645,6 +707,9 @@ def install(app: FastAPI, root, start_worker=True):
         body = {"error": {"code": exc.code, "message": exc.message}}
         if exc.fields:
             body["error"]["fields"] = exc.fields
+        # §6 detail — SCHEMA_IN_USE·FIELD_IN_USE·FIELD_HAS_CHILDREN의 구조화 본문(화면은 message만으로도 뜻이 통한다).
+        if getattr(exc, "detail", None) is not None:
+            body["error"]["detail"] = exc.detail
         headers = {"Retry-After": "5"} if exc.code in ("RENDER_UNAVAILABLE", "RENDER_QUEUE_FULL", "QUEUE_FULL") else None
         return JSONResponse(body, status_code=exc.status, headers=headers)
 
@@ -665,6 +730,9 @@ def install(app: FastAPI, root, start_worker=True):
     async def bounded_request(request: Request, call_next):
         if not request.url.path.startswith("/api/"):
             return await call_next(request)
+        denied = guard_origin(request)
+        if denied is not None:
+            return denied
         if request.method in ("POST", "PUT", "PATCH"):
             data = bytearray()
             async for chunk in request.stream():
@@ -678,11 +746,9 @@ def install(app: FastAPI, root, start_worker=True):
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
-    def principal(authorization: Optional[str] = Header(None)):
-        token = env("ACCESS_TOKEN", "")
-        if token and not hmac.compare_digest(authorization or "", "Bearer " + token):
-            raise Problem("AUTH_REQUIRED", "서버 접근 토큰이 필요합니다.", 401)
-        # 클라이언트가 사용자 이름을 전달해 권한을 바꾸지 못하게 principal은 서버 설정에서만 읽는다.
+    def principal():
+        # 메인 API는 사용자 토큰을 받지 않는다(§6). 클라이언트가 사용자 이름을 전달해 권한을 바꾸지 못하게
+        # principal은 언제나 서버 설정(SCHEMA_PRINCIPAL)에서만 읽는다.
         return service.principal
 
     Wait = Query(0.0, ge=0, le=MAX_WAIT)
@@ -743,7 +809,6 @@ def install(app: FastAPI, root, start_worker=True):
             # 절대 경로 대신 작업 공간 이름만 노출한다(paths는 상대 경로).
             "workspace": service.root.name,
             "principal": user,
-            "access_token_required": bool(env("ACCESS_TOKEN", "")),
             "engine_version": ENGINE_VERSION,
             "renderer_version": RENDERER_VERSION,
             "render": {"mode": client.mode, "url": client.url or None, "concurrency": int(env("RENDER_CONCURRENCY", "1")), "queue": int(env("RENDER_QUEUE", "32"))},
@@ -752,6 +817,8 @@ def install(app: FastAPI, root, start_worker=True):
                 "timeout_seconds": int(env("READER_TIMEOUT_SECONDS", "120")),
                 "memory_mb": int(env("READER_MEMORY_MB", "1536")),
                 "revision": env("READER_REVISION", "unversioned-operator-adapter"),
+                # 설정 화면 Reader 카드의 보호 문서(DRM) 줄(§3.5·§6). 절대 경로는 싣지 않는다.
+                "drm": drm.settings_snapshot(service.root),
             },
             "limits": {
                 "page": 200,
@@ -985,10 +1052,6 @@ def install(app: FastAPI, root, start_worker=True):
     def import_preview(body: ImportPreviewRequest, user=Depends(principal)):
         return service.preview_profile(body.schema_key, body.definition, body.format)
 
-    @router.post("/profiles/test")
-    def test_definition(body: ProfileTestDefinitionRequest, user=Depends(principal)):
-        return service.test_profile(body.snapshot_id, definition=body.definition, schema_key=body.schema_key, format=body.format, principal=user)
-
     @router.get("/profiles/{profile_id}")
     def profile(profile_id: str, user=Depends(principal)):
         return profile_detail(service, profile_id)
@@ -1034,6 +1097,16 @@ def install(app: FastAPI, root, start_worker=True):
     def approve_profile(profile_id: str, body: ProfileApproveRequest, user=Depends(principal)):
         return service.approve_profile(profile_id, body.application_id, user)
 
+    @router.delete("/profiles/{profile_id}")
+    def delete_profile(profile_id: str, user=Depends(principal)):
+        """§4.2.1. 적용된 문서가 있으면 409 PROFILE_IN_USE(아무것도 지우지 않는다)."""
+        return service.delete_profile(profile_id, user)
+
+    @router.post("/profiles/{profile_id}/deprecate")
+    def deprecate_profile(profile_id: str, user=Depends(principal)):
+        """프로파일 폐기. 스키마 삭제(§4.2.1)를 막는 '쓰는 프로파일'에서 빠진다."""
+        return service.deprecate_profile(profile_id, user)
+
     @router.post("/profiles/{profile_id}/reparse", response_model=JobResponse, status_code=202)
     def reparse(profile_id: str, body: ReparseRequest, wait: float = Wait, user=Depends(principal)):
         return job_response(service.reparse(profile_id, body.mode, user, wait))
@@ -1049,7 +1122,8 @@ def install(app: FastAPI, root, start_worker=True):
 
     @router.post("/schemas", status_code=201)
     def create_schema(body: SchemaDefinitionRequest, user=Depends(principal)):
-        return service.import_schema(body.definition, user)
+        """생성 전용(§4.2). 이미 있는 키는 409 SCHEMA_EXISTS로 거부하고 아무것도 쓰지 않는다."""
+        return service.import_schema(body.definition, user, mode="create")
 
     @router.get("/schemas/{schema_key}")
     def schema(schema_key: str, user=Depends(principal)):
@@ -1057,12 +1131,16 @@ def install(app: FastAPI, root, start_worker=True):
 
     @router.put("/schemas/{schema_key}")
     def update_schema(schema_key: str, body: SchemaDefinitionRequest, user=Depends(principal)):
+        """새 리비전 전용(§4.2). 없는 키는 404, 본문 schema_key가 경로와 다르면 422."""
         declared = body.definition.get("schema_key") if isinstance(body.definition, dict) else None
         if declared != schema_key:
             raise Problem("SCHEMA_KEY_MISMATCH", "정의의 schema_key가 경로의 스키마와 다릅니다.")
-        with service.db.connect() as conn:
-            _schema_row(conn, schema_key)
-        return service.import_schema(body.definition, user)
+        return service.import_schema(body.definition, user, mode="revision")
+
+    @router.delete("/schemas/{schema_key}")
+    def delete_schema(schema_key: str, user=Depends(principal)):
+        """§4.2.1. 쓰는 프로파일·적용 건이 있으면 409 SCHEMA_IN_USE(아무것도 지우지 않는다)."""
+        return service.delete_schema(schema_key, user)
 
     @router.get("/schemas/{schema_key}/tree")
     def schema_tree_view(schema_key: str, user=Depends(principal)):
@@ -1078,6 +1156,13 @@ def install(app: FastAPI, root, start_worker=True):
             row = _schema_row(conn, schema_key)
         return _definition_revisions(service.root / "schemas" / schema_key, row["current_rev"], "field_count")
 
+    @router.get("/schemas/{schema_key}/revisions/{rev}")
+    def schema_revision(schema_key: str, rev: int = FPath(ge=1), user=Depends(principal)):
+        """그 리비전의 canonical 정의 JSON('새 리비전'·'이름 바꾸기' 대화상자가 현재 정의를 채울 때 쓴다).
+
+        rev는 1부터다 — 0은 현재 정의로 넘어가지 않고 422로 거절한다(`rev or current_rev`의 0 함정)."""
+        return service.schema_definition(schema_key, rev)
+
     @router.get("/schemas/{schema_key}/profiles")
     def schema_profiles_view(schema_key: str, field_key: Optional[str] = Query(None, max_length=64), user=Depends(principal)):
         return schema_profiles(service, schema_key, field_key)
@@ -1088,13 +1173,28 @@ def install(app: FastAPI, root, start_worker=True):
     ):
         return schema_documents(service, schema_key, field_key, cursor, limit)
 
+    @router.post("/schemas/{schema_key}/fields", status_code=201)
+    def create_field(schema_key: str, body: FieldCreateRequest, user=Depends(principal)):
+        """필드 추가 = 새 리비전. 본문은 아래 GET·PATCH와 같은 필드 상세다."""
+        service.create_field(
+            schema_key, body.field_key, body.name, body.type, body.unit, body.description, body.aliases, body.parent_field_key, user
+        )
+        return field_detail(service, schema_key, body.field_key)
+
     @router.get("/schemas/{schema_key}/fields/{field_key}")
     def field(schema_key: str, field_key: str, user=Depends(principal)):
         return field_detail(service, schema_key, field_key)
 
     @router.patch("/schemas/{schema_key}/fields/{field_key}")
     def patch_field(schema_key: str, field_key: str, body: FieldPatchRequest, user=Depends(principal)):
-        return service.patch_field(schema_key, field_key, body.name, body.description, body.aliases, body.status)
+        """필드 단건 편집 = 새 리비전 + projection. 화면이 이 응답만으로 갱신하도록 필드 상세를 돌려준다."""
+        service.patch_field(schema_key, field_key, body.name, body.description, body.aliases, body.status)
+        return field_detail(service, schema_key, field_key)
+
+    @router.delete("/schemas/{schema_key}/fields/{field_key}")
+    def delete_field(schema_key: str, field_key: str, user=Depends(principal)):
+        """§4.2.2. 자식이 있으면 409 FIELD_HAS_CHILDREN, 규칙·매핑·추출값이 쓰면 409 FIELD_IN_USE."""
+        return service.delete_field(schema_key, field_key, user)
 
     @router.get("/schemas/{schema_key}/fields/{field_key}/profiles")
     def field_profiles(schema_key: str, field_key: str, user=Depends(principal)):

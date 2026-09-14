@@ -3,7 +3,7 @@
 // 3번이 대표 문서를 바꿔 새 snapshot을 만든다. 모든 단언은 실제 표시 문구(한국어 라벨·셀 텍스트)를 본다.
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { api, collectErrors, copyRawDocument, mutateFirstDocument, openDocument, openScreen, registerViaApi, resetWorkspace, waitForJobs } from "./helpers";
+import { DRM_MESSAGE, api, collectErrors, copyRawDocument, mutateFirstDocument, openDocument, openScreen, registerViaApi, resetWorkspace, waitForJobs } from "./helpers";
 
 const REFERENCE = "공정데이터_2024_01.xlsx";
 const IDENTICAL = ["공정데이터_2024_02.xlsx", "공정데이터_2024_03.xlsx"];
@@ -14,7 +14,6 @@ const NEW_COPY = "공정데이터_2024_07.xlsx";
 const PROFILE_V1 = "공정데이터_A양식 v1";
 const SCHEMA_NAME = "공정 데이터 표준";
 const STATUS_LABELS = ["정상", "검수 필요", "변경 감지", "프로파일 없음", "재추출 필요", "파싱 실패", "잠김(DRM)"];
-const DRM_MESSAGE = "암호화 문서는 승인된 보안 읽기 어댑터로 접근해야 합니다.";
 
 const documentsTable = (page: Page) => page.getByRole("table", { name: "문서 목록" });
 const rowOf = (page: Page, name: string) => documentsTable(page).getByRole("row").filter({ has: page.getByRole("button", { name, exact: true }) });
@@ -132,6 +131,21 @@ test("쉘 · 문서 표 · 상태 칩 · 필터 · 정렬", async ({ page }) => 
   // 다른 화면으로 갔다가 돌아와도 aria-current가 따라온다.
   await openScreen(page, "설정");
   await expect(nav.getByRole("button", { name: "문서", exact: true })).not.toHaveAttribute("aria-current", "page");
+  // 설정은 읽기 전용이다: 사용자 접근 토큰 카드는 없고(메인 API는 인증하지 않는다), Reader 카드가 무엇을 설정해야 하는지 알려 준다.
+  await expect(page.getByRole("region", { name: "서버 접근" })).toHaveCount(0);
+  await expect(page.getByLabel("접근 토큰")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "저장", exact: true })).toHaveCount(0);
+  const reader = page.getByRole("region", { name: "Reader" });
+  await expect(reader).toBeVisible();
+  await expect(reader).toContainText("보호된 문서를 읽으려면 서버에 SCHEMA_READER_FACTORY를 설정하고 python -m schema drm-probe로 확인하세요.");
+  await expect(reader).toContainText("이 서버는 기본으로 127.0.0.1에만 열립니다.");
+  // 계약 §7: 칩 문구는 `연결됨`/`연결 안 됨`이다.
+  await expect(reader.locator(".app-chip").first()).toHaveText("연결 안 됨");
+  await expect(reader).toContainText("등록된 보호 문서 시그니처");
+  const settingsApi = await api(page, "GET", "/settings");
+  expect(settingsApi.status).toBe(200);
+  expect(settingsApi.json).not.toHaveProperty("access_token_required");
+  expect(settingsApi.json.reader).toMatchObject({ drm: { available: false } });
   await openScreen(page, "문서");
   await expect(page).toHaveURL(/screen=documents/);
   errors.assertClean();

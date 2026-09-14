@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { UUID_RE, ids } from "./fixture";
-import { SCHEMA_KEY, schemaFixture } from "./schema-fixture";
+import { SCHEMA_KEY, SECOND_SCHEMA, schemaFixture } from "./schema-fixture";
 
 const route = () => new URLSearchParams(location.search);
 const detail = () => screen.getByRole("region", { name: "스키마 상세" });
@@ -179,8 +179,12 @@ describe("파싱 스키마 화면", () => {
     const history = await screen.findByRole("table", { name: "변경 이력" });
     expect(within(history).getAllByRole("row")).toHaveLength(4);
     expect(within(history).getByText("현재", { selector: ".app-chip" }).closest("td")!.textContent).toContain("v3");
-    expect(history.textContent).toContain("시간(초) 폐기");
-    expect(screen.getByRole("button", { name: "새 리비전 가져오기" })).toBeTruthy();
+    // 계약 §7: 정의 파일에서 알 수 있는 값만 보여 준다(작성자·요약 열은 없다).
+    expect(within(history).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["버전", "일시", "필드"]);
+    expect(history.textContent).toContain("필드 14개");
+    // '새 리비전'은 헤더에만 있다(탭 안에 같은 버튼을 또 두지 않는다).
+    expect(screen.queryByRole("button", { name: "새 리비전 가져오기" })).toBeNull();
+    expect(within(detail()).getByRole("button", { name: "새 리비전" })).toBeTruthy();
 
     // 원본 보기 → Source Review overlay
     await user.click(within(tabs).getByRole("tab", { name: "연관 문서 (5)" }));
@@ -341,18 +345,184 @@ describe("파싱 스키마 화면", () => {
     expect(f.callsTo(/^\/schemas$/).length).toBeLessThanOrEqual(2);
   });
 
-  it("변경 이력의 '새 리비전 가져오기'는 PUT /schemas/{key} {definition}을 보낸다", async () => {
+  it("헤더의 '새 리비전'은 PUT /schemas/{key} {definition}을 보낸다", async () => {
     const f = schemaFixture();
     f.renderApp("?screen=schema&tab=history");
     await screen.findByRole("table", { name: "변경 이력" });
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "새 리비전 가져오기" }));
+    await user.click(within(detail()).getByRole("button", { name: "새 리비전" }));
     const dialog = await screen.findByRole("dialog", { name: /새 리비전/ });
-    await user.click(within(dialog).getByLabelText("정의 JSON"));
+    // 현재 정의를 채워 둔다(GET /schemas/{key}/revisions/{rev}).
+    const editor = within(dialog).getByLabelText("정의 JSON") as HTMLTextAreaElement;
+    await waitFor(() => expect(editor.value).toContain(`"schema_key": "${SCHEMA_KEY}"`));
+    expect(f.callsTo(new RegExp(`^/schemas/${SCHEMA_KEY}/revisions/3$`))).toHaveLength(1);
+    await user.clear(editor);
     await user.paste(JSON.stringify({ schema_key: SCHEMA_KEY, schema_name: "공정 데이터 표준", fields: [] }));
     await user.click(within(dialog).getByRole("button", { name: "새 리비전 저장" }));
     await waitFor(() => expect(f.schema.revised).toHaveLength(1));
     expect(f.callsTo(new RegExp(`^/schemas/${SCHEMA_KEY}$`), "PUT")[0].body).toEqual({ definition: { schema_key: SCHEMA_KEY, schema_name: "공정 데이터 표준", fields: [] } });
     await waitFor(() => expect(within(detail()).getByRole("heading", { level: 2 }).textContent).toContain("공정 데이터 표준 v4"));
+  });
+  it("'새 스키마'는 생성 전용이라 이미 있는 키면 409 SCHEMA_EXISTS 메시지를 그대로 보여 주고 아무것도 바꾸지 않는다", async () => {
+    const f = schemaFixture();
+    f.renderApp("?screen=schema");
+    await screen.findByRole("tree", { name: "필드 트리" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "새 스키마" }));
+    const dialog = await screen.findByRole("dialog", { name: "새 스키마" });
+    await user.click(within(dialog).getByLabelText("정의 JSON"));
+    await user.paste(JSON.stringify({ schema_key: SCHEMA_KEY, schema_name: "공정 데이터 표준", fields: [] }));
+    await user.click(within(dialog).getByRole("button", { name: "가져오기" }));
+    await waitFor(() =>
+      expect(within(screen.getByRole("dialog", { name: "새 스키마" })).getByRole("alert").textContent).toContain(
+        "이미 있는 스키마 키입니다. 새 리비전으로 저장하려면 스키마를 열어 '새 리비전'을 쓰세요.",
+      ),
+    );
+    // 아무것도 쓰이지 않았다(리비전도 늘지 않는다).
+    expect(f.schema.imported).toHaveLength(0);
+    expect(f.schema.revised).toHaveLength(0);
+    expect(screen.getByRole("dialog", { name: "새 스키마" })).toBeTruthy();
+    expect(f.callsTo(new RegExp(`^/schemas/${SCHEMA_KEY}$`), "PUT")).toHaveLength(0);
+  });
+
+  it("쓰는 프로파일·적용 문서가 없는 스키마만 '삭제'가 뜨고, 지우면 목록에서 빠진다", async () => {
+    const f = schemaFixture();
+    f.renderApp(`?screen=schema&schema=${SECOND_SCHEMA.schema_key}`);
+    await screen.findByRole("tree", { name: "필드 트리" });
+    const user = userEvent.setup();
+    await user.click(within(detail()).getByRole("button", { name: "삭제" }));
+    const dialog = await screen.findByRole("dialog", { name: "스키마 삭제" });
+    expect(dialog.textContent).toContain("'레시피 표준'과(와) 필드 3개를 지웁니다. 되돌릴 수 없습니다.");
+    expect(within(dialog).getByRole("button", { name: "취소" })).toBeTruthy();
+    await user.click(within(dialog).getByRole("button", { name: "삭제" }));
+    await waitFor(() => expect(f.schema.deletedSchemas).toEqual([SECOND_SCHEMA.schema_key]));
+    expect(f.callsTo(new RegExp(`^/schemas/${SECOND_SCHEMA.schema_key}$`), "DELETE")).toHaveLength(1);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "스키마 삭제" })).toBeNull());
+    expect(await screen.findByText("'레시피 표준' 스키마를 지웠습니다.")).toBeTruthy();
+    const list = screen.getByRole("region", { name: "스키마 목록" });
+    await waitFor(() => expect(within(list).queryByRole("button", { name: /레시피 표준/ })).toBeNull());
+    expect(route().get("schema")).toBe(SCHEMA_KEY);
+  });
+
+  it("쓰는 프로파일·적용 문서가 있는 스키마에는 '삭제' 버튼이 아예 없다(언제나 실패하는 버튼을 두지 않는다)", async () => {
+    const f = schemaFixture();
+    f.renderApp("?screen=schema");
+    await screen.findByRole("tree", { name: "필드 트리" });
+    expect(within(detail()).queryByRole("button", { name: "삭제" })).toBeNull();
+    // 왜 지울 수 없는지는 헤더의 사용 현황이 말한다.
+    expect(detail().textContent).toContain("프로파일 2 · 문서 5");
+    expect(f.schema.deletedSchemas).toHaveLength(0);
+  });
+
+  it("같은 키로 다시 만든 스키마는 목록에 바로 다시 나타난다(삭제 기억이 남지 않는다)", async () => {
+    const f = schemaFixture();
+    f.renderApp(`?screen=schema&schema=${SECOND_SCHEMA.schema_key}`);
+    await screen.findByRole("tree", { name: "필드 트리" });
+    const user = userEvent.setup();
+    await user.click(within(detail()).getByRole("button", { name: "삭제" }));
+    const dialog = await screen.findByRole("dialog", { name: "스키마 삭제" });
+    await user.click(within(dialog).getByRole("button", { name: "삭제" }));
+    const list = screen.getByRole("region", { name: "스키마 목록" });
+    await waitFor(() => expect(within(list).queryByRole("button", { name: /레시피 표준/ })).toBeNull());
+    // 같은 키로 다시 만든다 → 목록에도 다시 보이고 그 상세가 열린다.
+    await user.click(screen.getAllByRole("button", { name: "새 스키마" })[0]);
+    const create = await screen.findByRole("dialog", { name: "새 스키마" });
+    const editor = within(create).getByLabelText("정의 JSON") as HTMLTextAreaElement;
+    await user.clear(editor);
+    await user.paste(JSON.stringify({ schema_key: SECOND_SCHEMA.schema_key, schema_name: SECOND_SCHEMA.schema_name, fields: [] }));
+    await user.click(within(create).getByRole("button", { name: "가져오기" }));
+    await waitFor(() => expect(within(list).getByRole("button", { name: /레시피 표준/ })).toBeTruthy());
+    expect(route().get("schema")).toBe(SECOND_SCHEMA.schema_key);
+  });
+
+  it("'이름 바꾸기'는 현재 정의의 schema_name만 바꿔 PUT하고, '+ 필드 추가'는 POST .../fields 뒤 새 필드를 선택한다", async () => {
+    const f = schemaFixture();
+    f.renderApp("?screen=schema");
+    await screen.findByRole("tree", { name: "필드 트리" });
+    const user = userEvent.setup();
+    await user.click(within(detail()).getByRole("button", { name: "이름 바꾸기" }));
+    const rename = await screen.findByRole("dialog", { name: "스키마 이름 바꾸기" });
+    const save = within(rename).getByRole("button", { name: "저장" }) as HTMLButtonElement;
+    await waitFor(() => expect(save.disabled).toBe(true));
+    const input = within(rename).getByLabelText("스키마명") as HTMLInputElement;
+    expect(input.value).toBe("공정 데이터 표준");
+    await user.clear(input);
+    expect(save.disabled).toBe(true);
+    await user.type(input, "공정 표준(개정)");
+    await user.click(save);
+    await waitFor(() => expect(f.schema.revised).toHaveLength(1));
+    expect(f.schema.revised[0].definition.schema_name).toBe("공정 표준(개정)");
+    expect(f.schema.revised[0].definition.schema_key).toBe(SCHEMA_KEY);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "스키마 이름 바꾸기" })).toBeNull());
+
+    await user.click(screen.getByRole("button", { name: "+ 필드 추가" }));
+    const add = await screen.findByRole("dialog", { name: "필드 추가" });
+    const submit = within(add).getByRole("button", { name: "추가" }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    await user.type(within(add).getByLabelText("영문 키"), "lot_no");
+    await user.type(within(add).getByLabelText("필드명"), "LOT 번호");
+    await user.selectOptions(within(add).getByLabelText("상위 필드"), "process");
+    await user.click(submit);
+    await waitFor(() => expect(f.schema.created).toHaveLength(1));
+    // 타입 기본값은 계약 §1.2의 value_type 어휘를 따른다(text·decimal·boolean·date·datetime·group) — "string"은 없는 값이다.
+    expect(f.schema.created[0]).toEqual({ field_key: "lot_no", name: "LOT 번호", type: "text", parent_field_key: "process" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "필드 추가" })).toBeNull());
+    expect(route().get("field_key")).toBe("lot_no");
+    expect(await screen.findByText("LOT 번호 필드 저장됨")).toBeTruthy();
+  });
+
+  it("필드 '삭제'는 그 필드를 뺀 새 리비전을 저장하고 v{rev} 토스트를 띄운다", async () => {
+    const f = schemaFixture();
+    f.renderApp("?screen=schema&field_key=temperature");
+    await screen.findByText("공정 설정 온도", undefined, { timeout: 4000 });
+    const user = userEvent.setup();
+    await user.click(within(fieldPanel()).getByRole("button", { name: "삭제" }));
+    const dialog = await screen.findByRole("dialog", { name: "필드 삭제" });
+    expect(dialog.textContent).toContain("'온도' 필드를 지운 새 리비전을 저장합니다.");
+    await user.click(within(dialog).getByRole("button", { name: "삭제" }));
+    await waitFor(() => expect(f.schema.deletedFields).toEqual(["temperature"]));
+    expect(f.callsTo(new RegExp(`^/schemas/${SCHEMA_KEY}/fields/temperature$`), "DELETE")).toHaveLength(1);
+    expect(await screen.findByText("'온도' 필드를 지웠습니다 · v4")).toBeTruthy();
+    await waitFor(() => expect(route().get("field_key")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "필드 삭제" })).toBeNull());
+  });
+
+  it("자식이 있는 필드 삭제는 409 FIELD_HAS_CHILDREN으로 막고 '하위 필드 보기'가 그 필드로 보낸다", async () => {
+    const f = schemaFixture();
+    f.renderApp("?screen=schema&field_key=duration");
+    // 목록 → 상세 → 트리 → 필드 상세 순서로 읽는다.
+    await screen.findByRole("tree", { name: "필드 트리" }, { timeout: 4000 });
+    const user = userEvent.setup();
+    await user.click(await within(fieldPanel()).findByRole("button", { name: "삭제" }, { timeout: 4000 }));
+    const dialog = await screen.findByRole("dialog", { name: "필드 삭제" });
+    await user.click(within(dialog).getByRole("button", { name: "삭제" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain("하위 필드 1개가 있습니다. 먼저 하위 필드를 지우세요.");
+    // 근거(detail.children)는 버튼을 누르지 않아도 모달 안에 보인다
+    expect(within(within(dialog).getByRole("list", { name: "하위 필드" })).getByText("시간(초)")).toBeTruthy();
+    expect(f.schema.deletedFields).toHaveLength(0);
+    expect((within(dialog).getByRole("button", { name: "삭제" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(within(alert).getByRole("button", { name: "하위 필드 보기" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "필드 삭제" })).toBeNull());
+    expect(route().get("field_key")).toBe("duration_sec");
+  });
+
+  it("쓰이는 필드 삭제는 409 FIELD_IN_USE로 막고 어느 프로파일·규칙이 쓰는지 보여 준다", async () => {
+    const f = schemaFixture();
+    f.schema.fieldInUse.add("pressure");
+    f.renderApp("?screen=schema&field_key=pressure");
+    await screen.findByText("공정 압력", undefined, { timeout: 4000 });
+    const user = userEvent.setup();
+    await user.click(within(fieldPanel()).getByRole("button", { name: "삭제" }));
+    const dialog = await screen.findByRole("dialog", { name: "필드 삭제" });
+    await user.click(within(dialog).getByRole("button", { name: "삭제" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain("공정데이터_A양식 외 1개 프로파일이 이 필드를 씁니다. 추출값 5건이 남아 있습니다.");
+    expect(within(dialog).getByRole("list", { name: "사용 프로파일" }).textContent).toContain("규칙 pressure");
+    expect(f.schema.deletedFields).toHaveLength(0);
+    await user.click(within(alert).getByRole("button", { name: "사용 프로파일 보기" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "필드 삭제" })).toBeNull());
+    expect(route().get("tab")).toBe("profiles");
+    expect(route().get("field_filter")).toBe("pressure");
   });
 });

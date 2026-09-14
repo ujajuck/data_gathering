@@ -1,6 +1,5 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { setProfileDraft } from "../src/app/profileDraft";
 import { SHA_RE, UUID_RE, ids } from "./fixture";
 import { sourceReviewFixture, testResult } from "./source-review-fixture";
 
@@ -268,24 +267,4 @@ describe("Source Review — 테스트 모드", () => {
     expect(params.get("snapshot")).toBeNull();
   });
 
-  it("test=draft는 profileDraft의 정의로 POST /profiles/test를 호출한다", async () => {
-    const f = sourceReviewFixture();
-    setProfileDraft({ schema_key: "process_std", definition: { version: "3.0", rules: [] }, profile_name: "새 양식" });
-    f.renderApp(testUrl("draft"));
-    await f.waitForApi(/^\/profiles\/test$/, "POST");
-    expect(f.review.tests).toEqual([{ path: "/profiles/test", schema_key: "process_std", definition: { version: "3.0", rules: [] }, snapshot_id: ids.snapshot }]);
-    await screen.findByTestId("test-panel");
-    expect(screen.getByRole("dialog", { name: "Source Review" }).textContent).toContain("새 양식 (초안)");
-    expect(f.callsTo(/^\/profiles\/[^/]+$/)).toHaveLength(0);
-  });
-
-  it("초안이 없으면 안내만 보이고 테스트를 실행하지 않는다", async () => {
-    const f = sourceReviewFixture();
-    setProfileDraft(null);
-    f.renderApp(testUrl("draft"));
-    await screen.findByRole("dialog", { name: "Source Review" });
-    expect(screen.getByRole("alert").textContent).toContain("편집 중인 정의가 없습니다");
-    await settle();
-    expect(f.review.tests).toHaveLength(0);
-  });
 });

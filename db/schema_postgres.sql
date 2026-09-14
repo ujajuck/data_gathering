@@ -441,6 +441,29 @@ BEGIN
 END
 $fn$;
 
+-- projection 삭제는 §4.2.1 스키마·프로파일 삭제와 §4.2.2 필드 삭제에서만 일어나고, 그때도 참조가 하나도 없어야 한다.
+CREATE OR REPLACE FUNCTION v3_parsing_field_in_use() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+    IF EXISTS (SELECT 1 FROM parsing_field_edge WHERE relation = 'parent_of' AND from_field_id = OLD.field_id)
+       OR EXISTS (SELECT 1 FROM parsing_rule WHERE default_field_id = OLD.field_id)
+       OR EXISTS (SELECT 1 FROM mapping_revision WHERE field_id = OLD.field_id)
+       OR EXISTS (SELECT 1 FROM extracted_value WHERE field_id = OLD.field_id) THEN
+        RAISE EXCEPTION 'parsing_field is in use; deprecate instead of delete';
+    END IF;
+    RETURN OLD;
+END
+$fn$;
+
+-- 규칙 DELETE도 참조(mapping)가 남아 있을 때만 거부한다 — 실제 삭제는 §4.2.1 프로파일 삭제뿐이다.
+CREATE OR REPLACE FUNCTION v3_parsing_rule_in_use() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+    IF EXISTS (SELECT 1 FROM mapping WHERE rule_id = OLD.rule_id) THEN
+        RAISE EXCEPTION 'parsing_rule is in use; deprecate instead of delete';
+    END IF;
+    RETURN OLD;
+END
+$fn$;
+
 CREATE OR REPLACE FUNCTION v3_mapping_edit_seq() RETURNS trigger LANGUAGE plpgsql AS $fn$
 BEGIN
     IF NEW.revision_no IS DISTINCT FROM (SELECT edit_seq + 1 FROM mapping WHERE mapping_id = NEW.mapping_id) THEN
@@ -563,10 +586,10 @@ CREATE TRIGGER field_group_not_target_revision BEFORE INSERT ON mapping_revision
     FOR EACH ROW WHEN (NEW.field_id IS NOT NULL) EXECUTE FUNCTION v3_field_group_not_target('field_id');
 CREATE TRIGGER field_group_guard BEFORE UPDATE OF value_type ON parsing_field
     FOR EACH ROW WHEN (NEW.value_type = 'group' AND OLD.value_type <> 'group') EXECUTE FUNCTION v3_field_group_guard();
-CREATE TRIGGER parsing_field_no_delete BEFORE DELETE ON parsing_field
-    FOR EACH ROW EXECUTE FUNCTION v3_reject('parsing_field is a projection; deprecate instead of delete');
-CREATE TRIGGER parsing_rule_no_delete BEFORE DELETE ON parsing_rule
-    FOR EACH ROW EXECUTE FUNCTION v3_reject('parsing_rule is a projection; deprecate instead of delete');
+CREATE TRIGGER parsing_field_in_use_no_delete BEFORE DELETE ON parsing_field
+    FOR EACH ROW EXECUTE FUNCTION v3_parsing_field_in_use();
+CREATE TRIGGER parsing_rule_in_use_no_delete BEFORE DELETE ON parsing_rule
+    FOR EACH ROW EXECUTE FUNCTION v3_parsing_rule_in_use();
 
 CREATE TRIGGER mapping_edit_seq BEFORE INSERT ON mapping_revision
     FOR EACH ROW EXECUTE FUNCTION v3_mapping_edit_seq();

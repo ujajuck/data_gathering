@@ -15,6 +15,7 @@ import os
 import platform
 import posixpath
 import re
+import shutil
 import sqlite3
 import threading
 import time
@@ -64,6 +65,8 @@ def _integrity(exc: sqlite3.IntegrityError) -> Problem:
     text = str(exc)
     if "mapping edit conflict" in text or "mapping_revision.mapping_id, mapping_revision.revision_no" in text:
         return Problem("EDIT_CONFLICT", "다른 수정이 먼저 저장되었습니다. 최신 매핑을 다시 확인하세요.", 409)
+    if "parsing_field is in use" in text:
+        return Problem("FIELD_IN_USE", "이 필드를 쓰는 규칙·매핑·추출값이 있어 지울 수 없습니다. 규칙에서 필드를 떼어낸 뒤 다시 시도하세요.", 409)
     if "group field" in text:
         return Problem("GROUP_FIELD_TARGET", "묶음(group) 필드에는 값을 추출할 수 없습니다.")
     if "parent_of requires" in text or "field level change" in text:
@@ -316,6 +319,7 @@ def validate_schema_definition(definition):
             item["description"] = str(field["description"])[:4000]
         seen[fkey] = item
         out_fields.append(item)
+    _assign_levels(out_fields, seen)
     for item in out_fields:
         for parent in item["parents"]:
             if parent not in seen:
@@ -332,6 +336,27 @@ def validate_schema_definition(definition):
     if definition.get("description") is not None:
         out["description"] = str(definition["description"])[:4000]
     return out
+
+
+def _assign_levels(fields, by_key):
+    """`level`을 적지 않은 필드에 트리 깊이를 채운다 — 뿌리 1, 자식은 부모 + 1(§1.2 트리 규칙).
+
+    level은 정의 파일에서 선택 항목이지만 비워 두면 DDL 트리거가 parent_of 간선을 거부하고(NULL은 통과시키지
+    않는다) 화면의 들여쓰기·그래프 묶기도 깨진다. 그래서 canonical로 만들 때 빈 값만 채운다 — 명시된 값은
+    그대로 두고, 채울 수 없는 경우(부모가 없거나 순환)는 그대로 둬 아래 검증이 이유를 말하게 한다."""
+    for _ in range(len(fields) + 1):
+        changed = False
+        for item in fields:
+            if item["level"] is not None:
+                continue
+            if not item["parents"]:
+                item["level"], changed = 1, True
+                continue
+            levels = [by_key[k]["level"] for k in item["parents"] if k in by_key]
+            if levels and len(levels) == len(item["parents"]) and all(v is not None for v in levels):
+                item["level"], changed = max(levels) + 1, True
+        if not changed:
+            break
 
 
 # ---------------------------------------------------------------------------- 서비스
@@ -406,6 +431,11 @@ class Service:
 
     def _write_definition(self, folder: Path, rev: int, canonical):
         folder.mkdir(parents=True, exist_ok=True)
+        if rev == 1:
+            # 새 정의(rev 1)를 쓰는 자리에 옛 리비전 파일이 남아 있으면 지운다 — 지운 스키마의 정의가
+            # 같은 키의 새 스키마 `GET /revisions/{rev}`로 되살아나지 않게(§4.2.1).
+            for stale in folder.glob("r[0-9][0-9][0-9][0-9].json"):
+                stale.unlink(missing_ok=True)
         text = json.dumps(canonical, ensure_ascii=False, indent=2, sort_keys=True)
         path = folder / f"r{rev:04d}.json"
         path.write_text(text, encoding="utf-8")
@@ -484,8 +514,16 @@ class Service:
             by_id[r["field_id"]]["aliases"].append(r["alias_text"])
         return fields
 
-    def import_schema(self, definition, principal=None):
-        """§4.2 파일 저장 + projection upsert(추가·갱신·deprecated, 삭제 없음), current_rev 증가."""
+    def import_schema(self, definition, principal=None, mode="upsert", drop_fields=(), guard=None):
+        """§4.2 파일 저장 + projection upsert(추가·갱신·사라진 항목은 deprecated), current_rev 증가.
+
+        mode='create'(= POST /schemas)는 이미 있는 schema_key를 409 SCHEMA_EXISTS로 거부하고 **아무것도 쓰지 않는다**.
+        mode='revision'(= PUT /schemas/{key})은 없는 키를 404 UNKNOWN_SCHEMA로 거부한다.
+        mode='upsert'는 시드·CLI 전용(둘 다 허용) — 화면에서 오는 경로는 반드시 create/revision 중 하나다.
+        drop_fields에 든 field_key만 projection 행(parsing_field + 그 필드의 alias·edge)을 실제로 지운다(§4.2.2 내부 인자).
+        guard(conn)은 **쓰기 트랜잭션 안에서** 한 번 더 도는 확인이다 — 필드 삭제처럼 "참조가 없다"를 읽고 나서
+        쓰는 연산이 그 사이에 끼어든 다른 요청을 놓치지 않게, 검사와 쓰기를 같은 BEGIN IMMEDIATE 구간에 둔다.
+        """
         canonical = validate_schema_definition(definition)
         key = canonical["schema_key"]
         sha = digest(canonical)
@@ -493,9 +531,16 @@ class Service:
         previous_current, written = self._current_bytes(folder), None
         try:
             with self.db.connect(write=True) as conn:
+                if guard is not None:
+                    guard(conn)
                 schema = conn.execute("SELECT * FROM parsing_schema WHERE schema_key=?", (key,)).fetchone()
-                if schema and schema["definition_sha256"] == sha:
-                    return {"schema_id": schema["schema_id"], "schema_key": key, "current_rev": schema["current_rev"], "unchanged": True}
+                if mode == "create" and schema:
+                    raise Problem("SCHEMA_EXISTS", "이미 있는 스키마 키입니다. 새 리비전으로 저장하려면 스키마를 열어 '새 리비전'을 쓰세요.", 409)
+                if mode == "revision" and not schema:
+                    raise Problem("UNKNOWN_SCHEMA", f"파싱 스키마 {key!r}를 찾을 수 없습니다.", 404)
+                if schema and schema["definition_sha256"] == sha and not drop_fields:
+                    counts = {"total": len(canonical["fields"]), "added": 0, "updated": 0, "deprecated": 0}
+                    return {"schema_key": key, "schema_name": schema["schema_name"], "current_rev": schema["current_rev"], "unchanged": True, "fields": counts}
                 rev = (schema["current_rev"] + 1) if schema else 1
                 relative = str((folder / f"r{rev:04d}.json").relative_to(self.root))
                 stamp = now()
@@ -522,7 +567,7 @@ class Service:
                             created_at=stamp,
                             updated_at=stamp,
                         )
-                    counts = self._project_schema(conn, sid, canonical, stamp)
+                    counts = self._project_schema(conn, sid, canonical, stamp, drop_fields)
                 except sqlite3.IntegrityError as exc:
                     raise _integrity(exc) from None
                 # projection이 통과한 뒤(커밋 직전)에 파일을 쓴다. 거부된 가져오기는 파일을 남기지 않는다.
@@ -532,9 +577,9 @@ class Service:
             if written:
                 self._discard_definition(folder, written[0], previous_current, written[1])
             raise
-        return {"schema_id": sid, "schema_key": key, "current_rev": rev, "unchanged": False, **counts}
+        return {"schema_key": key, "schema_name": canonical["schema_name"], "current_rev": rev, "unchanged": False, "fields": counts}
 
-    def _project_schema(self, conn, schema_id, canonical, stamp):
+    def _project_schema(self, conn, schema_id, canonical, stamp, drop_fields=()):
         existing = {r["field_key"]: dict(r) for r in conn.execute("SELECT * FROM parsing_field WHERE schema_id=?", (schema_id,))}
         # 레벨 변경은 기존 parent_of 간선과 충돌하므로(트리거) 간선을 먼저 비우고 필드 갱신 뒤 다시 만든다.
         conn.execute("DELETE FROM parsing_field_edge WHERE schema_id=?", (schema_id,))
@@ -575,7 +620,18 @@ class Service:
                     continue
                 seen.add(key)
                 insert(conn, "parsing_alias", alias_id=uid(), field_id=fid, alias_text=alias, alias_norm=key, context_key="")
-        gone = [k for k in existing if k not in ids and existing[k]["status"] != "deprecated"]
+        # drop_fields는 §4.2.2가 참조 없음을 확인한 필드뿐이다(alias·edge는 위에서 이미 비웠다).
+        dropped = [k for k in existing if k in drop_fields and k not in ids]
+        if dropped:
+            # 폐기된 규칙(어느 프로파일 정의에도 남아 있지 않은 규칙)이 가리키던 링크는 흔적일 뿐이다 —
+            # 먼저 끊어야 FK와 parsing_field_in_use_no_delete 백스톱이 막지 않는다. 활성 규칙·매핑·추출값은
+            # §4.2.2 검사가 이미 걸렀으므로 여기까지 오지 않는다.
+            conn.executemany(
+                "UPDATE parsing_rule SET default_field_id=NULL WHERE status='deprecated' AND default_field_id=?",
+                [(existing[k]["field_id"],) for k in dropped],
+            )
+            conn.executemany("DELETE FROM parsing_field WHERE field_id=?", [(existing[k]["field_id"],) for k in dropped])
+        gone = [k for k in existing if k not in ids and k not in dropped and existing[k]["status"] != "deprecated"]
         if gone:
             conn.executemany(
                 "UPDATE parsing_field SET status='deprecated',updated_at=? WHERE field_id=?",
@@ -586,7 +642,7 @@ class Service:
                 insert(conn, "parsing_field_edge", edge_id=uid(), schema_id=schema_id, from_field_id=ids[parent], to_field_id=ids[field["field_key"]], relation="parent_of", ordinal=n)
             for n, rel in enumerate(field["related"]):
                 insert(conn, "parsing_field_edge", edge_id=uid(), schema_id=schema_id, from_field_id=ids[field["field_key"]], to_field_id=ids[rel], relation="related_to", ordinal=n)
-        return {"fields": len(ids), "added": added, "deprecated": len(gone)}
+        return {"total": len(ids), "added": added, "updated": len(ids) - added, "deprecated": len(gone)}
 
     def patch_field(self, schema_key, field_key, name=None, description=None, aliases=None, status=None):
         """필드 단건 편집 = 정의 파일 새 리비전 + projection(§6 PATCH)."""
@@ -602,7 +658,215 @@ class Service:
             target["aliases"] = aliases
         if status is not None:
             target["status"] = status
-        return self.import_schema(canonical)
+        return self.import_schema(canonical, mode="revision")
+
+    def create_field(self, schema_key, field_key, name, type="text", unit=None, description=None, aliases=None, parent_field_key=None, principal=None):
+        """필드 추가 = 정의 파일 새 리비전(§6 POST /schemas/{key}/fields). 레벨은 상위 필드 + 1로 채운다."""
+        canonical = self.schema_definition(schema_key)
+        if any(f["field_key"] == field_key for f in canonical["fields"]):
+            raise Problem("FIELD_EXISTS", f"이미 있는 필드 키입니다: {field_key}", 409)
+        parent = None
+        if parent_field_key:
+            parent = next((f for f in canonical["fields"] if f["field_key"] == parent_field_key), None)
+            if parent is None:
+                raise Problem("UNKNOWN_PARENT", f"상위 필드 {parent_field_key!r}가 이 스키마에 없습니다.")
+        item = {
+            "field_key": field_key,
+            "name": name,
+            "type": type,
+            # level은 비워 둔다 — validate_schema_definition이 부모 레벨 + 1(부모가 없으면 1)로 채운다.
+            # 부모에게 레벨이 없던 스키마도 같은 저장에서 함께 채워지므로 화면이 고를 수 없는 항목이 생기지 않는다.
+            "level": None,
+            "parents": [parent_field_key] if parent_field_key else [],
+            "related": [],
+            "aliases": list(aliases or []),
+            "status": "active",
+        }
+        if unit not in (None, ""):
+            item["unit"] = unit
+        if description is not None:
+            item["description"] = description
+        canonical["fields"].append(item)
+        return self.import_schema(canonical, principal, mode="revision")
+
+    def _field_delete_guard(self, conn, schema_key, field_key):
+        """§4.2.2 필드 삭제를 막는 사유를 확인한다. 막을 게 없으면 그 필드의 projection 행을 돌려준다.
+
+        쓰기 트랜잭션의 **맨 앞**에서도 부른다: 그 시점의 `parsing_field_edge`는 아직 커밋된 상태 그대로라
+        (`_project_schema`가 간선을 비우기 전이다) 자식 판정이 유효하고, 검사와 쓰기가 한 구간에 들어와
+        그 사이에 끼어든 다른 요청을 놓치지 않는다. 규칙 판정은 `GET /schemas/{key}/profiles`와 기준을 맞춰
+        활성 규칙만 본다 — 이미 프로파일 정의에서 빠진 폐기 규칙은 삭제를 막을 이유가 없고, 막으면 화면의
+        '사용 프로파일 보기'가 "쓰는 프로파일이 없습니다"라고 반박한다."""
+        schema = one(conn, "SELECT * FROM parsing_schema WHERE schema_key=?", (schema_key,), f"파싱 스키마 {schema_key!r}를 찾을 수 없습니다.")
+        field = conn.execute("SELECT * FROM parsing_field WHERE schema_id=? AND field_key=?", (schema["schema_id"], field_key)).fetchone()
+        if field is None:
+            raise Problem("NOT_FOUND", "필드를 찾을 수 없습니다.", 404)
+        fid = field["field_id"]
+        children = rows(
+            conn,
+            "SELECT f.field_key, f.field_name FROM parsing_field_edge e JOIN parsing_field f ON f.field_id=e.to_field_id "
+            "WHERE e.relation='parent_of' AND e.from_field_id=? ORDER BY f.ordinal, f.field_key",
+            (fid,),
+        )
+        if children:
+            names = ", ".join(c["field_name"] for c in children[:3]) + (" 외" if len(children) > 3 else "")
+            raise Problem(
+                "FIELD_HAS_CHILDREN",
+                f"하위 필드 {len(children)}개({names})를 먼저 지우세요.",
+                409,
+                detail={"children": [{"field_key": c["field_key"], "name": c["field_name"]} for c in children[:20]], "count": len(children)},
+            )
+        users = {}
+        for r in rows(
+            conn,
+            "SELECT p.profile_id, p.profile_name, r.rule_key FROM parsing_rule r JOIN parsing_profile p ON p.profile_id=r.profile_id "
+            "WHERE r.default_field_id=? AND r.status='active' ORDER BY p.profile_name, r.rule_key",
+            (fid,),
+        ) + rows(
+            conn,
+            "SELECT DISTINCT p.profile_id, p.profile_name, r.rule_key FROM mapping_revision mr JOIN mapping m ON m.mapping_id=mr.mapping_id "
+            "JOIN parsing_rule r ON r.rule_id=m.rule_id JOIN parsing_profile p ON p.profile_id=r.profile_id "
+            "WHERE mr.field_id=? AND r.status='active' ORDER BY p.profile_name, r.rule_key",
+            (fid,),
+        ):
+            entry = users.setdefault(r["profile_id"], {"profile_id": r["profile_id"], "profile_name": r["profile_name"], "rule_keys": []})
+            if r["rule_key"] not in entry["rule_keys"]:
+                entry["rule_keys"].append(r["rule_key"])
+        value_count = conn.execute("SELECT count(*) FROM extracted_value WHERE field_id=?", (fid,)).fetchone()[0]
+        mapping_count = conn.execute("SELECT count(*) FROM mapping_revision WHERE field_id=?", (fid,)).fetchone()[0]
+        if users or value_count:
+            listed = list(users.values())
+            head = ", ".join(f"{u['profile_name']} 규칙 {', '.join(u['rule_keys'][:2]) or '-'}" for u in listed[:2])
+            if len(listed) > 2:
+                head += f", 외 {len(listed) - 2}개"
+            where = f"프로파일 {len(listed)}개({head})가 쓰고 있고 " if listed else ""
+            raise Problem(
+                "FIELD_IN_USE",
+                f"이 필드는 {where}추출값이 {value_count}개입니다. 프로파일 정의에서 이 필드를 쓰는 규칙을 뺀 새 리비전을 저장한 뒤 다시 시도하세요.",
+                409,
+                detail={"profiles": listed[:20], "value_count": value_count, "mapping_count": mapping_count},
+            )
+        return field
+
+    def delete_field(self, schema_key, field_key, principal=None):
+        """§4.2.2 필드 삭제 — 자식·참조가 없을 때만, 정의 파일에서 그 필드를 뺀 새 리비전으로 지운다."""
+        with self.db.connect() as conn:
+            field = self._field_delete_guard(conn, schema_key, field_key)
+        canonical = self.schema_definition(schema_key)
+        remaining = [f for f in canonical["fields"] if f["field_key"] != field_key]
+        if not remaining:
+            raise Problem(
+                "LAST_FIELD",
+                "마지막 남은 필드는 지울 수 없습니다. 스키마 자체를 지우려면 스키마 상세의 '삭제'를 쓰세요.",
+                409,
+            )
+        for f in remaining:
+            f["parents"] = [k for k in f["parents"] if k != field_key]
+            f["related"] = [k for k in f["related"] if k != field_key]
+        canonical["fields"] = remaining
+        # 검사와 쓰기를 같은 트랜잭션에 둔다 — 그 사이에 자식 필드나 규칙이 생겨도 놓치지 않는다.
+        result = self.import_schema(
+            canonical,
+            principal,
+            mode="revision",
+            drop_fields=(field_key,),
+            guard=lambda conn: self._field_delete_guard(conn, schema_key, field_key),
+        )
+        return {
+            "schema_key": schema_key,
+            "field_key": field_key,
+            "name": field["field_name"],
+            "current_rev": result["current_rev"],
+            "fields_remaining": len(remaining),
+        }
+
+    def delete_schema(self, schema_key, principal=None):
+        """§4.2.1 스키마 삭제 — 쓰는 프로파일·적용 건이 하나도 없을 때만 projection 행과 정의 폴더를 지운다.
+
+        정의 폴더는 커밋 **전에** `schemas/.trash/<key>-<uid>`로 옮긴다. 커밋 뒤에 지우면 그 틈에 같은 키로
+        만든 새 스키마의 폴더를 지워 버린다(영구 DEFINITION_MISSING). 폴더를 못 옮기면 아무것도 지우지 않는다."""
+        folder = self._definition_folder("schemas", schema_key)
+        trash = None
+        with self.db.connect(write=True) as conn:
+            schema = one(conn, "SELECT * FROM parsing_schema WHERE schema_key=?", (schema_key,), f"파싱 스키마 {schema_key!r}를 찾을 수 없습니다.")
+            sid = schema["schema_id"]
+            profiles = rows(
+                conn,
+                "SELECT p.profile_id, p.profile_name, p.current_rev, p.status, "
+                "(SELECT count(DISTINCT d.document_id) FROM parsing_application a JOIN document d ON d.current_snapshot_id=a.snapshot_id "
+                " WHERE a.profile_id=p.profile_id) document_count "
+                "FROM parsing_profile p WHERE p.schema_id=? ORDER BY p.profile_name",
+                (sid,),
+            )
+            applications = conn.execute("SELECT count(*) FROM parsing_application WHERE schema_id=?", (sid,)).fetchone()[0]
+            documents = conn.execute(
+                "SELECT count(DISTINCT d.document_id) FROM parsing_application a JOIN document d ON d.current_snapshot_id=a.snapshot_id WHERE a.schema_id=?",
+                (sid,),
+            ).fetchone()[0]
+            # 폐기한 프로파일도 규칙 행이 이 스키마의 필드를 참조하므로 남아 있으면 지울 수 없다.
+            if profiles or applications:
+                names = ", ".join(p["profile_name"] for p in profiles[:2]) + (f", 외 {len(profiles) - 2}개" if len(profiles) > 2 else "")
+                message = (
+                    f"이 스키마는 파싱 프로파일 {len(profiles)}개({names})가 쓰고 있고 적용된 문서가 {documents}개입니다. "
+                    "프로파일 상세에서 '삭제'한 뒤 다시 시도하세요."
+                    if profiles
+                    # 적용 기록을 지우는 기능은 없다 — 할 수 없는 일을 지시하지 않는다.
+                    else f"이 스키마는 문서 {documents}개에 적용된 기록이 있어 지울 수 없습니다."
+                )
+                raise Problem(
+                    "SCHEMA_IN_USE",
+                    message,
+                    409,
+                    detail={
+                        "profiles": profiles[:20],
+                        "profile_count": len(profiles),
+                        "document_count": documents,
+                        "application_count": applications,
+                    },
+                )
+            revisions = len(sorted(folder.glob("r[0-9][0-9][0-9][0-9].json"))) if folder.is_dir() else 0
+            fields = conn.execute("SELECT count(*) FROM parsing_field WHERE schema_id=?", (sid,)).fetchone()[0]
+            aliases = conn.execute(
+                "SELECT count(*) FROM parsing_alias WHERE field_id IN (SELECT field_id FROM parsing_field WHERE schema_id=?)", (sid,)
+            ).fetchone()[0]
+            edges = conn.execute("SELECT count(*) FROM parsing_field_edge WHERE schema_id=?", (sid,)).fetchone()[0]
+            try:
+                conn.execute("DELETE FROM parsing_field_edge WHERE schema_id=?", (sid,))
+                conn.execute("DELETE FROM parsing_alias WHERE field_id IN (SELECT field_id FROM parsing_field WHERE schema_id=?)", (sid,))
+                conn.execute("DELETE FROM parsing_field WHERE schema_id=?", (sid,))
+                conn.execute("DELETE FROM parsing_schema WHERE schema_id=?", (sid,))
+            except sqlite3.IntegrityError as exc:
+                raise _integrity(exc) from None
+            if folder.is_dir():
+                # 아직 잠금을 쥔 채로 옮긴다 — 같은 키의 새 생성(POST /schemas)과 직렬화된다.
+                trash = self.root / "schemas/.trash" / f"{schema_key}-{uid()}"
+                trash.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.replace(folder, trash)
+                except OSError as exc:
+                    trash = None
+                    raise Problem(
+                        "DEFINITION_LOCKED",
+                        f"정의 폴더를 지울 수 없어 스키마를 삭제하지 않았습니다({exc.strerror}). 그 폴더를 쓰는 프로그램을 닫고 다시 시도하세요.",
+                        409,
+                    ) from None
+        removed, left = True, None
+        if trash is not None:
+            try:
+                shutil.rmtree(trash)
+            except OSError:
+                removed = False
+                left = str(trash.relative_to(self.root))
+                log.exception("schema definition trash remove failed: %s", trash)
+        result = {
+            "schema_key": schema_key,
+            "schema_name": schema["schema_name"],
+            "deleted": {"fields": fields, "aliases": aliases, "edges": edges, "revisions": revisions},
+        }
+        if not removed:
+            # 파일은 못 지웠지만 작업 공간의 `schemas/<key>/`에는 없다 — 같은 키로 새로 만들어도 되살아나지 않는다.
+            result["leftover_path"] = left
+        return result
 
     # ---- 프로파일 ---------------------------------------------------------------------
     def _profile_row(self, conn, profile_id):
@@ -1085,6 +1349,10 @@ class Service:
                 self.render.invalidate(previous["snapshot_id"])
             except Problem:
                 pass
+            # 이전 snapshot의 해제본은 TTL을 기다리지 않고 여기서 지운다(§3.5(3)) — 렌더 캐시 무효화와 같은 자리다.
+            from . import drm
+
+            drm.SESSIONS.drop(provider, source_ref, previous["change_token"], workspace=self.root)
         with self.db.connect(write=True) as conn:
             for profile in approved:
                 match = matches.get(profile["profile_id"])
@@ -2218,6 +2486,62 @@ class Service:
             )
         job = self.reparse(profile_id, "rematch", principal)
         return {"profile_id": profile_id, "status": "approved", "reference_application_id": application_id, "reference_profile_rev": profile["current_rev"], "reference_signature": signature, "reparse_job": job}
+
+    def delete_profile(self, profile_id, principal=None):
+        """프로파일 삭제 — 적용된 문서가 하나도 없을 때만. 규칙 행과 정의 폴더까지 지운다(§4.2.1의 탈출구).
+
+        적용 건이 있으면 지우지 않는다(추출값·검수 기록의 근거다) — 그때는 '폐기'로 사용만 멈춘다.
+        정의 폴더는 커밋 전에 `profiles/.trash/<id>-<uid>`로 옮긴다(스키마 삭제와 같은 규칙)."""
+        trash = None
+        with self.db.connect(write=True) as conn:
+            profile = self._profile_row(conn, profile_id)
+            documents = conn.execute(
+                "SELECT count(DISTINCT d.document_id) FROM parsing_application a JOIN document d ON d.current_snapshot_id=a.snapshot_id WHERE a.profile_id=?",
+                (profile_id,),
+            ).fetchone()[0]
+            applications = conn.execute("SELECT count(*) FROM parsing_application WHERE profile_id=?", (profile_id,)).fetchone()[0]
+            if applications:
+                raise Problem(
+                    "PROFILE_IN_USE",
+                    f"이 프로파일은 문서 {documents}개에 적용돼 있어 지울 수 없습니다. 더 쓰지 않으려면 '폐기'하세요.",
+                    409,
+                    detail={"document_count": documents, "application_count": applications},
+                )
+            rules = conn.execute("SELECT count(*) FROM parsing_rule WHERE profile_id=?", (profile_id,)).fetchone()[0]
+            try:
+                conn.execute("DELETE FROM parsing_rule WHERE profile_id=?", (profile_id,))
+                conn.execute("DELETE FROM parsing_profile WHERE profile_id=?", (profile_id,))
+            except sqlite3.IntegrityError as exc:
+                raise _integrity(exc) from None
+            folder = self._definition_folder("profiles", profile_id)
+            if folder.is_dir():
+                trash = self.root / "profiles/.trash" / f"{profile_id}-{uid()}"
+                trash.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.replace(folder, trash)
+                except OSError as exc:
+                    trash = None
+                    raise Problem(
+                        "DEFINITION_LOCKED",
+                        f"정의 폴더를 지울 수 없어 프로파일을 삭제하지 않았습니다({exc.strerror}). 그 폴더를 쓰는 프로그램을 닫고 다시 시도하세요.",
+                        409,
+                    ) from None
+        self._canonicals = {k: v for k, v in self._canonicals.items() if k[0] != profile_id}
+        if trash is not None:
+            shutil.rmtree(trash, ignore_errors=True)
+        return {"profile_id": profile_id, "profile_name": profile["profile_name"], "deleted": {"rules": rules}}
+
+    def deprecate_profile(self, profile_id, principal=None):
+        """프로파일 폐기 — 더 이상 새 문서에 붙이지 않고, 스키마 삭제도 막지 않는다(§4.2.1의 탈출구).
+
+        이미 적용된 문서와 추출값은 건드리지 않는다(기록이다). 폐기한 프로파일은 목록의 프로파일 수와
+        `GET /schemas/{key}`의 profile_count에서 빠진다."""
+        with self.db.connect(write=True) as conn:
+            profile = self._profile_row(conn, profile_id)
+            if profile["status"] == "deprecated":
+                raise Problem("ALREADY_DEPRECATED", "이미 폐기된 프로파일입니다.", 409)
+            conn.execute("UPDATE parsing_profile SET status='deprecated',updated_at=? WHERE profile_id=?", (now(), profile_id))
+        return {"profile_id": profile_id, "profile_name": profile["profile_name"], "status": "deprecated"}
 
     # ---- 재파싱(§4.9) ------------------------------------------------------------------
     def reparse(self, profile_id, mode, principal=None, wait=0):

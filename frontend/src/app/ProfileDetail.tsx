@@ -1,7 +1,9 @@
-// 파싱 프로파일 상세(§7 Profiles): 탭 기본 정보 · 규칙 · 필드 매핑 · 테스트 · JSON · 변경 이력 (?profile=&tab=&rev=).
-// 진입 호출: GET /profiles/{id} + (기본 정보) GET /profiles/{id}/documents. 정의(canonical JSON)는 규칙·JSON 탭에서만
-// GET /profiles/{id}/revisions/{rev}로 읽고, 저장은 PUT /profiles/{id} {definition}.
-import { useEffect, useMemo, useState } from "react";
+// 파싱 프로파일 상세(§7 Profiles) — 탭 없는 한 화면(?profile=&rev=).
+// 구성: 상단 요약줄(프로파일명 vN · 상태 · 연결 스키마 · 대표 문서 · 적용 문서 수) + 정의 JSON 편집기(검증 오류·경고,
+// 저장하면 새 리비전) + `테스트`(문서를 고르면 Source Review 테스트 모드) + 하단 `변경 이력`(리비전을 열면 그 JSON을 읽기 전용으로).
+// 진입 호출 3개: GET /profiles/{id} · GET /profiles/{id}/revisions/{현재 rev} · GET /profiles/{id}/revisions.
+// 적용 문서 목록은 '대표 문서 지정'·'테스트' 팝오버를 열 때만 읽는다.
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Pager,
   State,
@@ -11,7 +13,6 @@ import {
   formatDateTime,
   profileLabel,
   reviewRoute,
-  schemaLabel,
   snapshotLabel,
   useData,
   useDebounced,
@@ -31,21 +32,10 @@ import type {
   ProfileSaveResult,
   RevisionRow,
 } from "./types";
-import { Chip, ProfileStatusChip, StatusChip, Tabs } from "./ui";
-import { parseDefinition, pretty, problemText, sheetRoleSummary } from "./profileModel";
+import { Chip, ProfileStatusChip } from "./ui";
+import DeleteDialog from "./DeleteDialog";
+import { parseDefinition, pretty, problemText } from "./profileModel";
 import type { Problem, ProfileDefinition } from "./profileModel";
-import { setProfileDraft } from "./profileDraft";
-import ProfileRules from "./ProfileRules";
-
-type Tab = "info" | "rules" | "mapping" | "test" | "json" | "history";
-const TABS: { id: Tab; label: string }[] = [
-  { id: "info", label: "기본 정보" },
-  { id: "rules", label: "규칙" },
-  { id: "mapping", label: "필드 매핑" },
-  { id: "test", label: "테스트" },
-  { id: "json", label: "JSON" },
-  { id: "history", label: "변경 이력" },
-];
 
 // 호환성 라벨은 types.ts의 공용 표(문서 등록·Source Review와 같은 문구).
 export { compatibilityLabel };
@@ -59,17 +49,19 @@ function unwrapDefinition(data: unknown): ProfileDefinition | null {
   return record as ProfileDefinition;
 }
 
+export const isApprovable = (row: ProfileDocumentRow) => row.heads_total > 0 && row.heads_approved === row.heads_total;
+
 export default function ProfileDetail({ profileId }: { profileId: string }) {
   const { route, go, refresh, changed } = useNavigation();
   const { notify } = useToast();
   const base = "/profiles/" + encodeURIComponent(profileId);
   const detail = useData<ProfileDetailData>(base, refresh);
   const profile = detail.data;
-  const tab = (TABS.some((t) => t.id === route.tab) ? route.tab : "info") as Tab;
-  const documents = usePage<ProfileDocumentRow>(tab === "info" || tab === "test" || tab === "json" ? base + "/documents" : null, refresh);
-  const viewingRev = tab === "json" && route.rev && profile && route.rev !== String(profile.current_rev) ? route.rev : "";
-  const definitionPath =
-    profile && (tab === "rules" || tab === "json") ? `${base}/revisions/${encodeURIComponent(viewingRev || String(profile.current_rev))}` : null;
+  // 열려 있는 팝오버: 대표 문서 지정 · 테스트 문서 고르기. 적용 문서 목록은 둘 중 하나가 열릴 때만 읽는다.
+  const [popover, setPopover] = useState<"" | "reference" | "test">("");
+  const documents = usePage<ProfileDocumentRow>(popover ? base + "/documents" : null, refresh);
+  const viewingRev = route.rev && profile && route.rev !== String(profile.current_rev) ? route.rev : "";
+  const definitionPath = profile ? `${base}/revisions/${encodeURIComponent(viewingRev || String(profile.current_rev))}` : null;
   const definitionRaw = useData<unknown>(definitionPath, refresh);
   const definition = useMemo<Resource<ProfileDefinition>>(
     () => ({ ...definitionRaw, data: unwrapDefinition(definitionRaw.data) }),
@@ -78,8 +70,33 @@ export default function ProfileDetail({ profileId }: { profileId: string }) {
   const reparse = useJob();
   const [message, setMessage] = useState("");
   const [saveError, setSaveError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  // 정의 편집기가 "저장 안 한 편집이 있다"고 알려 주는 자리(재파싱 전 확인용).
+  const dirtyRef = useRef(false);
+  const markDirty = useCallback((value: boolean) => {
+    dirtyRef.current = value;
+  }, []);
+
+  // 폐기 — 적용된 문서가 있어 지울 수 없는 프로파일의 사용을 멈추는 길(§4.2.1).
+  async function deprecate() {
+    if (!window.confirm(`'${profile?.profile_name}'을(를) 폐기합니다. 새 문서에 더 이상 붙지 않습니다. 계속할까요?`)) return;
+    setMessage("");
+    setBusy(true);
+    try {
+      await api(base + "/deprecate", {});
+      notify(`${profile?.profile_name} 프로파일을 폐기했습니다.`);
+      changed();
+    } catch (failure) {
+      setMessage(errorMessage(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function runReparse(mode: "rematch" | "fill") {
+    // 편집기에 저장하지 않은 편집이 있으면 먼저 묻는다 — 재파싱이 정의를 다시 읽어 편집을 덮어쓴다.
+    if (dirtyRef.current && !window.confirm("저장하지 않은 정의 편집이 있습니다. 편집을 버리고 재파싱할까요?")) return;
     setMessage("");
     const job = await reparse.run(base + "/reparse", { mode });
     if (!job) return;
@@ -92,7 +109,7 @@ export default function ProfileDetail({ profileId }: { profileId: string }) {
     else notify(`재파싱(${mode})이 작업 내역에서 계속 진행됩니다.`);
   }
 
-  // 새 리비전 저장(규칙 폼·JSON 탭 공용). 성공하면 true.
+  // 새 리비전 저장. 성공하면 true.
   async function saveDefinition(next: ProfileDefinition): Promise<boolean> {
     setSaveError("");
     try {
@@ -117,9 +134,12 @@ export default function ProfileDetail({ profileId }: { profileId: string }) {
             <div className="app-inline">
               <h2>{profileLabel({ profile_name: profile.profile_name, rev: profile.current_rev })}</h2>
               <ProfileStatusChip status={profile.status} />
-              <span className="app-muted app-small">{schemaLabel({ name: profile.schema?.name || "-" })}</span>
             </div>
-            <div className="app-inline">
+            <div className="app-inline app-popover-anchor">
+              <button type="button" className="small" aria-expanded={popover === "test"} onClick={() => setPopover(popover === "test" ? "" : "test")}>
+                테스트
+              </button>
+              {popover === "test" && <TestPopover profileId={profileId} documents={documents} onClose={() => setPopover("")} />}
               <button
                 type="button"
                 className="small"
@@ -138,8 +158,28 @@ export default function ProfileDetail({ profileId }: { profileId: string }) {
               >
                 재파싱(fill)
               </button>
+              <ExportButton base={base} profile={profile} />
+              {profile.status !== "deprecated" && (
+                <button
+                  type="button"
+                  className="small"
+                  disabled={busy}
+                  title="더 이상 이 프로파일을 새 문서에 붙이지 않습니다. 이미 적용된 문서와 추출값은 그대로 둡니다."
+                  onClick={deprecate}
+                >
+                  폐기
+                </button>
+              )}
+              {/* 적용된 문서가 없을 때만 지울 수 있다(§4.2.1) — 언제나 실패하는 버튼은 두지 않는다. */}
+              {profile.document_count === 0 && (
+                <button type="button" className="small danger" disabled={busy} onClick={() => setDeleting(true)}>
+                  삭제
+                </button>
+              )}
             </div>
           </div>
+          {profile.description && <p className="app-muted app-small">{profile.description}</p>}
+          <SummaryBar profile={profile} detail={detail} documents={documents} base={base} popover={popover} onPopover={setPopover} />
           {(reparse.error || message || saveError) && (
             <div className="app-error" role="alert">
               <span>{reparse.error || message || saveError}</span>
@@ -150,57 +190,151 @@ export default function ProfileDetail({ profileId }: { profileId: string }) {
               재파싱 진행 중…
             </p>
           )}
-          <Tabs tabs={TABS} value={tab} onChange={(id) => go({ tab: id, rev: "" })} label="프로파일 상세 탭" />
-          {tab === "info" && <InfoTab profile={profile} detail={detail} documents={documents} base={base} />}
-          {tab === "rules" && (
-            <ProfileRules profile={profile} definition={definition} onSave={saveDefinition} />
-          )}
-          {tab === "mapping" && <MappingTab profile={profile} />}
-          {tab === "test" && <TestTab profileId={profileId} documents={documents} />}
-          {tab === "json" && (
-            <JsonTab
-              profile={profile}
-              definition={definition}
-              viewingRev={viewingRev}
-              documents={documents}
-              onSave={saveDefinition}
-              base={base}
+          {deleting && (
+            <DeleteDialog
+              label="프로파일 삭제"
+              message={`'${profile.profile_name}'과(와) 규칙 ${profile.rules?.length ?? 0}개를 지웁니다. 되돌릴 수 없습니다.`}
+              busyLabel="프로파일을 지우는 중…"
+              onCancel={() => setDeleting(false)}
+              onShowBlocker={() => setDeleting(false)}
+              onConfirm={async () => {
+                await api(base, undefined, { method: "DELETE" });
+                setDeleting(false);
+                notify(`'${profile.profile_name}' 프로파일을 지웠습니다.`);
+                go({ profile: "" });
+                changed();
+              }}
             />
           )}
-          {tab === "history" && <HistoryTab base={base} currentRev={profile.current_rev} />}
+          <DefinitionEditor profile={profile} definition={definition} viewingRev={viewingRev} onSave={saveDefinition} onDirty={markDirty} />
+          <History base={base} currentRev={profile.current_rev} />
         </>
       )}
     </section>
   );
 }
 
-// ---------------------------------------------------------------- 기본 정보
+// ---------------------------------------------------------------- 요약줄(+ 대표 문서 지정 · 테스트 팝오버)
 
-function InfoTab({
+function SummaryBar({
   profile,
   detail,
   documents,
   base,
+  popover,
+  onPopover,
 }: {
   profile: ProfileDetailData;
   detail: Resource<ProfileDetailData>;
   documents: PageResource<ProfileDocumentRow>;
   base: string;
+  popover: "" | "reference" | "test";
+  onPopover: (next: "" | "reference" | "test") => void;
 }) {
   const { go } = useNavigation();
+  return (
+    <dl className="app-kv app-summary-bar" aria-label="프로파일 요약">
+      <dt>연결 스키마</dt>
+      <dd>{profile.schema?.name || "-"}</dd>
+      <dt>대표 문서</dt>
+      <dd>
+        <span className="app-inline app-popover-anchor">
+          {profile.reference ? (
+            <>
+              <span>
+                {profile.reference.document_name} r{profile.reference.snapshot.revision_no}
+              </span>
+              <span className="app-muted app-small">승인 {formatDateTime(profile.reference.approved_at)} · 기준 v{profile.reference.profile_rev}</span>
+              {profile.auto_approval_active && <Chip kind="ok">자동 승인</Chip>}
+              <button type="button" className="link small" onClick={() => go(reviewRoute({ application_id: profile.reference!.application_id }))}>
+                Source Review 열기
+              </button>
+            </>
+          ) : (
+            <span className="app-muted">없음</span>
+          )}
+          <button type="button" className="small" aria-expanded={popover === "reference"} onClick={() => onPopover(popover === "reference" ? "" : "reference")}>
+            대표 문서 지정
+          </button>
+          {popover === "reference" && (
+            <ReferencePopover profile={profile} detail={detail} documents={documents} base={base} onClose={() => onPopover("")} />
+          )}
+        </span>
+      </dd>
+      <dt>적용 문서</dt>
+      <dd>{profile.document_count}개</dd>
+    </dl>
+  );
+}
+
+// 팝오버 틀: 바깥 클릭·Escape로 닫힌다.
+function Popover({ label, onClose, align = "left", children }: { label: string; onClose: () => void; align?: "left" | "right"; children: React.ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const away = (e: MouseEvent) => {
+      const anchor = box.current?.parentElement;
+      if (anchor && !anchor.contains(e.target as Node)) onClose();
+    };
+    // 여는 버튼에 초점이 남아 있는 동안에도 Escape로 닫히게 문서에서 받는다(아래 onKeyDown은 팝오버 안쪽용).
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [onClose]);
+  return (
+    <div
+      className={"app-popover " + align}
+      role="group"
+      aria-label={label}
+      ref={box}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <div className="app-popover-head">
+        <strong>{label}</strong>
+        <button type="button" className="app-popover-close" aria-label="닫기" onClick={onClose}>
+          ×
+        </button>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// §4.8 프로파일 승인 진입점: 매핑을 모두 승인한 적용 건만 보여 준다.
+function ReferencePopover({
+  profile,
+  detail,
+  documents,
+  base,
+  onClose,
+}: {
+  profile: ProfileDetailData;
+  detail: Resource<ProfileDetailData>;
+  documents: PageResource<ProfileDocumentRow>;
+  base: string;
+  onClose: () => void;
+}) {
   const { notify } = useToast();
   const [error, setError] = useState("");
   const [pending, setPending] = useState("");
-  const rows = documents.items;
-  const candidates = rows.filter((r) => r.heads_total > 0 && r.heads_approved === r.heads_total);
-  const roles = Object.entries(profile.sheet_roles || {});
+  const rows = documents.items.filter((row) => isApprovable(row) && !row.is_reference);
 
   async function approve(row: ProfileDocumentRow) {
     setError("");
     setPending(row.application_id);
     const previousDetail = detail.data;
     const previousDocuments = documents.data;
-    // 낙관적 갱신: 상태 칩·대표 문서·대표 표시를 먼저 바꾸고 실패하면 되돌린다.
+    // 낙관적 갱신: 상태 칩·대표 문서를 먼저 바꾸고 실패하면 되돌린다.
     detail.setData((current) =>
       current
         ? {
@@ -236,6 +370,7 @@ function InfoTab({
             : current,
         );
       notify(`${row.document_name}을(를) 대표 문서로 승인했습니다. 재파싱(rematch)이 이어서 진행됩니다.`);
+      onClose();
     } catch (failure) {
       detail.setData(previousDetail);
       documents.setData(previousDocuments);
@@ -246,224 +381,58 @@ function InfoTab({
   }
 
   return (
-    <div className="app-stack">
-      {profile.description && <p>{profile.description}</p>}
-      <dl className="app-kv">
-        <dt>상태</dt>
-        <dd>
-          <ProfileStatusChip status={profile.status} />
-        </dd>
-        <dt>연결 스키마</dt>
-        <dd>{profile.schema?.name || "-"}</dd>
-        <dt>대표 문서</dt>
-        <dd>
-          {profile.reference ? (
-            <span className="app-inline">
-              <span>
-                {profile.reference.document_name} r{profile.reference.snapshot.revision_no}
-              </span>
-              <span className="app-muted app-small">승인 {formatDateTime(profile.reference.approved_at)} · 기준 v{profile.reference.profile_rev}</span>
-              <button type="button" className="link small" onClick={() => go(reviewRoute({ application_id: profile.reference!.application_id }))}>
-                Source Review 열기
-              </button>
-            </span>
-          ) : (
-            "없음"
-          )}
-        </dd>
-        <dt>자동 승인</dt>
-        <dd>
-          {profile.auto_approval_active ? (
-            <span>
-              <Chip kind="ok">활성</Chip> <span className="app-muted app-small">대표 문서와 동일한 구조의 문서는 사람 개입 없이 승인·추출됩니다.</span>
-            </span>
-          ) : (
-            <span>
-              <Chip kind="muted">비활성</Chip>{" "}
-              <span className="app-muted app-small">
-                {profile.status !== "approved"
-                  ? "프로파일을 승인하면 활성화됩니다."
-                  : "새 리비전 저장 뒤에는 대표 문서를 다시 승인하거나 재파싱(rematch)을 실행해야 재개됩니다."}
-              </span>
-            </span>
-          )}
-        </dd>
-        <dt>적용 문서</dt>
-        <dd>
-          {profile.document_count}개{profile.success_rate !== null && profile.success_rate !== undefined ? ` · 성공률 ${Math.round(profile.success_rate * 100)}%` : ""}
-        </dd>
-        <dt>최근 수정</dt>
-        <dd>{formatDateTime(profile.updated_at)}</dd>
-      </dl>
-      <h3>시트 역할 ({roles.length})</h3>
-      {roles.length === 0 ? (
-        <p className="app-muted">시트 역할이 없습니다.</p>
-      ) : (
-        <ul className="app-list" aria-label="시트 역할">
-          {roles.map(([role, spec]) => (
-            <li className="app-list-item" key={role}>
-              <span>
-                <strong>{role}</strong>
-                <small>{sheetRoleSummary(spec)}</small>
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <h3>적용 문서</h3>
+    <Popover label="대표 문서 지정" onClose={onClose}>
       {error && (
         <div className="app-error" role="alert">
           <span>{error}</span>
         </div>
       )}
-      <State resource={documents} empty="이 프로파일이 적용된 문서가 없습니다. 문서 화면에서 '다른 프로파일로 파싱'으로 적용해 보세요." />
+      <State
+        resource={documents}
+        isEmpty={!documents.loading && !documents.error && rows.length === 0}
+        empty="승인할 수 있는 적용 건이 없습니다 — 문서를 검수해 매핑을 모두 승인한 뒤 다시 시도하세요."
+      />
       {rows.length > 0 && (
-        <>
-          {candidates.length === 0 && profile.status !== "approved" && (
-            <p className="app-note">승인 후보가 없습니다. Source Review에서 매핑을 모두 승인한 문서가 있어야 '이 문서로 승인'할 수 있습니다.</p>
-          )}
-          <div className="app-table-wrap">
-            <table className="app-table" aria-label="적용 문서">
-              <thead>
-                <tr>
-                  <th scope="col">문서명</th>
-                  <th scope="col">Snapshot</th>
-                  <th scope="col">호환</th>
-                  <th scope="col">검수</th>
-                  <th scope="col">발행</th>
-                  <th scope="col">대표</th>
-                  <th scope="col">상태</th>
-                  <th scope="col">행동</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => {
-                  const approvable = row.heads_total > 0 && row.heads_approved === row.heads_total;
-                  return (
-                    <tr key={row.application_id} className={row.is_reference ? "selected" : undefined}>
-                      <td>{row.document_name}</td>
-                      <td>{snapshotLabel(row.snapshot, { history: true })}</td>
-                      <td>{compatibilityLabel(row.compatibility)}</td>
-                      <td className="num">
-                        {row.heads_approved}/{row.heads_total}
-                      </td>
-                      <td>{row.published ? <Chip kind="ok">발행됨</Chip> : <Chip kind="muted">미발행</Chip>}</td>
-                      <td>{row.is_reference ? <Chip kind="blue">대표</Chip> : <span className="app-muted">-</span>}</td>
-                      <td>
-                        <StatusChip status={row.document_status || row.status || "-"} />
-                      </td>
-                      <td>
-                        <span className="app-inline">
-                          <button type="button" className="small" onClick={() => go(reviewRoute({ application_id: row.application_id }))}>
-                            Source Review 열기
-                          </button>
-                          {approvable && !row.is_reference && (
-                            <button
-                              type="button"
-                              className="small primary"
-                              disabled={pending === row.application_id}
-                              onClick={() => approve(row)}
-                            >
-                              이 문서로 승인
-                            </button>
-                          )}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <Pager page={documents} />
-        </>
+        <div className="app-list" aria-label="승인 가능한 적용 건">
+          {rows.map((row) => (
+            <div className="app-list-item" key={row.application_id}>
+              <span>
+                <strong>{row.document_name}</strong>
+                <small>
+                  {snapshotLabel(row.snapshot, { history: true })} · {compatibilityLabel(row.compatibility)} · 검수 {row.heads_approved}/{row.heads_total}
+                </small>
+              </span>
+              <button type="button" className="small primary" disabled={pending === row.application_id || profile.status === "deprecated"} onClick={() => approve(row)}>
+                이 문서로 승인
+              </button>
+            </div>
+          ))}
+        </div>
       )}
-    </div>
+    </Popover>
   );
 }
-
-// ---------------------------------------------------------------- 필드 매핑
-
-function MappingTab({ profile }: { profile: ProfileDetailData }) {
-  const unmapped = profile.rules.filter((r) => !r.field).length;
-  return (
-    <div className="app-stack">
-      {unmapped > 0 ? (
-        <p className="app-note" role="status">
-          필드가 지정되지 않은 파싱 규칙 {unmapped}개 — 규칙 탭에서 필드를 연결해야 승인·추출할 수 있습니다.
-        </p>
-      ) : (
-        <p className="app-muted app-small" role="status">
-          모든 파싱 규칙이 필드에 연결되어 있습니다.
-        </p>
-      )}
-      <div className="app-table-wrap">
-        <table className="app-table" aria-label="필드 매핑">
-          <thead>
-            <tr>
-              <th scope="col">파싱 규칙</th>
-              <th scope="col">필드</th>
-              <th scope="col">타입</th>
-              <th scope="col">단위</th>
-              <th scope="col">상태</th>
-            </tr>
-          </thead>
-          <tbody>
-            {profile.rules.map((rule) => (
-              <tr key={rule.rule_key} className={rule.field ? undefined : "app-unmapped"} data-unmapped={rule.field ? undefined : "true"}>
-                <td>
-                  <strong>{rule.rule_name}</strong> <code>{rule.rule_key}</code>
-                </td>
-                <td>
-                  {rule.field ? (
-                    <span>
-                      {rule.field.name} <code>{rule.field.key}</code>
-                    </span>
-                  ) : (
-                    <Chip kind="warn">미지정</Chip>
-                  )}
-                </td>
-                <td>{rule.field?.type || String(rule.value_spec?.type || "-")}</td>
-                <td>{rule.field?.unit || String(rule.value_spec?.unit || "-")}</td>
-                <td>{rule.status || "-"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------- 테스트
 
 type DocumentChoice = { snapshot_id: string; document_name: string; document_id: string };
 
-function TestTab({ profileId, documents }: { profileId: string; documents: PageResource<ProfileDocumentRow> }) {
+// 저장된 현재 리비전을 고른 문서에 적용해 본다(?test=<profile_id>&snapshot=<sid> → Source Review 테스트 모드).
+function TestPopover({ profileId, documents, onClose }: { profileId: string; documents: PageResource<ProfileDocumentRow>; onClose: () => void }) {
   const { go } = useNavigation();
   const [query, setQuery] = useState("");
   const q = useDebounced(query.trim(), 250);
-  const search = usePage<DocumentRow>(q ? withQuery("/documents", { q }) : null);
-  const [choice, setChoice] = useState<DocumentChoice | null>(null);
   const applied: DocumentChoice[] = documents.items.map((r) => ({ snapshot_id: r.snapshot.snapshot_id, document_name: r.document_name, document_id: r.document_id }));
-  const found: DocumentChoice[] = q
-    ? search.items
-        .filter((d) => d.current_snapshot && !applied.some((a) => a.document_id === d.document_id))
-        .map((d) => ({ snapshot_id: d.current_snapshot!.snapshot_id, document_name: d.document_name, document_id: d.document_id }))
-    : [];
-  const run = () => {
-    if (!choice) return;
-    go({ test: profileId, snapshot: choice.snapshot_id, review: "", rule: "", range: "", sheet: "" });
-  };
+  // 적용 문서가 없으면 문서 목록 첫 페이지를 후보로 쓴다(검색하면 그 결과로 바뀐다).
+  const noneApplied = !documents.loading && !documents.error && applied.length === 0;
+  const search = usePage<DocumentRow>(q ? withQuery("/documents", { q }) : noneApplied ? "/documents" : null);
+  const [choice, setChoice] = useState<DocumentChoice | null>(null);
+  const found: DocumentChoice[] = (q || noneApplied
+    ? search.items.filter((d) => d.current_snapshot && !applied.some((a) => a.document_id === d.document_id))
+    : []
+  ).map((d) => ({ snapshot_id: d.current_snapshot!.snapshot_id, document_name: d.document_name, document_id: d.document_id }));
+  const empty = noneApplied && !q && !search.loading && !search.error && found.length === 0;
   const option = (doc: DocumentChoice, hint: string) => (
     <label className="app-check app-list-item" key={doc.document_id}>
-      <input
-        type="radio"
-        name="test-document"
-        aria-label={doc.document_name}
-        checked={choice?.document_id === doc.document_id}
-        onChange={() => setChoice(doc)}
-      />
+      <input type="radio" name="test-document" aria-label={doc.document_name} checked={choice?.document_id === doc.document_id} onChange={() => setChoice(doc)} />
       <span>
         <strong>{doc.document_name}</strong>
         <small>{hint}</small>
@@ -471,111 +440,155 @@ function TestTab({ profileId, documents }: { profileId: string; documents: PageR
     </label>
   );
   return (
-    <div className="app-stack">
-      <p className="app-muted app-small">문서를 고르고 테스트를 실행하면 저장 없이 현재 리비전을 적용한 결과를 Source Review에서 확인합니다.</p>
+    <Popover label="테스트 문서 고르기" align="right" onClose={onClose}>
+      <p className="app-muted app-small">문서를 고르면 저장된 현재 리비전을 적용한 결과를 Source Review에서 확인합니다(저장하지 않습니다).</p>
       <div className="app-toolbar">
         <label className="app-grow">
           문서 검색
           <input placeholder="다른 문서를 찾으려면 문서명 입력" value={query} onChange={(e) => setQuery(e.target.value)} />
         </label>
-        <button type="button" className="primary" disabled={!choice} onClick={run}>
+        <button
+          type="button"
+          className="primary"
+          disabled={!choice}
+          onClick={() => {
+            if (!choice) return;
+            onClose();
+            go({ test: profileId, snapshot: choice.snapshot_id, review: "", rule: "", range: "", sheet: "" });
+          }}
+        >
           테스트 실행
         </button>
       </div>
-      <h3>적용 문서</h3>
-      <State resource={documents} empty="적용된 문서가 없습니다. 위에서 문서를 검색해 선택하세요." />
+      {empty && <p className="app-empty">테스트할 문서가 없습니다. 먼저 문서를 등록하세요.</p>}
       {applied.length > 0 && (
         <div className="app-list" role="radiogroup" aria-label="적용 문서">
           {applied.map((doc) => option(doc, "이 프로파일이 적용된 문서"))}
         </div>
       )}
-      {q && (
-        <>
-          <h3>검색 결과</h3>
-          <State resource={search} empty="조건에 맞는 문서가 없습니다." isEmpty={!search.loading && !search.error && found.length === 0} />
-          {found.length > 0 && (
-            <div className="app-list" role="radiogroup" aria-label="검색 결과">
-              {found.map((doc) => option(doc, "검색된 문서"))}
-            </div>
-          )}
-        </>
+      {found.length > 0 && (
+        <div className="app-list" role="radiogroup" aria-label={q ? "검색 결과" : "등록된 문서"}>
+          {found.map((doc) => option(doc, q ? "검색된 문서" : "등록된 문서"))}
+        </div>
       )}
-    </div>
+      {q && <State resource={search} empty="조건에 맞는 문서가 없습니다." isEmpty={!search.loading && !search.error && found.length === 0} />}
+    </Popover>
   );
 }
 
-// ---------------------------------------------------------------- JSON
+// 현재 리비전 정의를 파일로 내려받는다(GET /profiles/{id}/export).
+function ExportButton({ base, profile }: { base: string; profile: ProfileDetailData }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return (
+    <>
+      <button
+        type="button"
+        className="small"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setError("");
+          try {
+            await downloadFile(base + "/export", `${profile.profile_name}_v${profile.current_rev}.json`);
+          } catch (failure) {
+            setError(errorMessage(failure));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        내보내기
+      </button>
+      {error && (
+        <span className="app-error" role="alert">
+          {error}
+        </span>
+      )}
+    </>
+  );
+}
 
-function JsonTab({
+// ---------------------------------------------------------------- 정의 JSON 편집기
+
+function DefinitionEditor({
   profile,
   definition,
   viewingRev,
-  documents,
   onSave,
-  base,
+  onDirty,
 }: {
   profile: ProfileDetailData;
   definition: Resource<ProfileDefinition>;
   viewingRev: string;
-  documents: PageResource<ProfileDocumentRow>;
   onSave: (next: ProfileDefinition) => Promise<boolean>;
-  base: string;
+  onDirty: (dirty: boolean) => void;
 }) {
   const { go } = useNavigation();
   const [text, setText] = useState("");
+  // 편집기를 채운 기준 텍스트. `loaded`와 따로 두는 이유: 정의가 도착한 렌더와 편집기에 반영되는 렌더 사이에
+  // `text !== loaded`인 한 순간이 있고, 그 한 순간을 '저장 안 한 편집'으로 보면 재파싱이 헛되이 되묻는다.
+  const [baseText, setBaseText] = useState("");
   const [preview, setPreview] = useState<ProfileImportPreview | null>(null);
-  const [busy, setBusy] = useState<"" | "check" | "save" | "export">("");
+  const [checking, setChecking] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [testSnapshot, setTestSnapshot] = useState("");
   const loaded = definition.data ? pretty(definition.data) : "";
   useEffect(() => {
+    // 다시 읽는 동안 loaded가 잠깐 ""로 떨어진다(useData가 새로 읽기 시작할 때). 그때 편집기를 비우면
+    // 저장하지 않은 편집이 경고 없이 사라진다 — 빈 값으로 가는 전이는 무시하고 실제 값이 올 때만 채운다.
+    if (!loaded) return;
     setText(loaded);
+    setBaseText(loaded);
     setPreview(null);
   }, [loaded]);
   const parsed = useMemo(() => parseDefinition(text), [text]);
-  const dirty = !!loaded && text !== loaded;
+  const dirty = !!baseText && text !== baseText;
+  useEffect(() => {
+    onDirty(dirty);
+  }, [dirty, onDirty]);
   const readOnly = !!viewingRev;
-  const candidates = documents.items;
-  const snapshotId = testSnapshot || profile.reference?.snapshot.snapshot_id || candidates[0]?.snapshot.snapshot_id || "";
-
-  async function check() {
-    if (!parsed.definition) return;
-    setBusy("check");
-    setError("");
-    try {
-      setPreview(await api<ProfileImportPreview>("/profiles/import-preview", { schema_key: profile.schema.key, definition: parsed.definition }));
-    } catch (failure) {
-      setError(errorMessage(failure));
-    } finally {
-      setBusy("");
+  const debounced = useDebounced(text, 400);
+  // 입력 즉시 JSON 구문 검사, 400ms 뒤 검증(오류·경고)을 자동으로 받아 온다(§7 — 따로 누를 '검증' 버튼은 없다).
+  useEffect(() => {
+    const { definition: parsedDefinition } = parseDefinition(debounced);
+    if (readOnly || !parsedDefinition) {
+      setPreview(null);
+      return;
     }
-  }
-  async function save() {
-    if (!parsed.definition) return;
-    setBusy("save");
-    await onSave(parsed.definition);
-    setBusy("");
-  }
-  async function exportJson() {
-    setBusy("export");
+    let cancelled = false;
+    setChecking(true);
     setError("");
-    try {
-      await downloadFile(base + "/export", `${profile.profile_name}_v${profile.current_rev}.json`);
-    } catch (failure) {
-      setError(errorMessage(failure));
-    } finally {
-      setBusy("");
-    }
-  }
-  function testDraft() {
-    if (!parsed.definition || !snapshotId) return;
-    setProfileDraft({ schema_key: profile.schema.key, definition: parsed.definition, profile_name: profile.profile_name });
-    go({ test: "draft", snapshot: snapshotId, review: "", rule: "", range: "", sheet: "" });
-  }
+    api<ProfileImportPreview>("/profiles/import-preview", { schema_key: profile.schema.key, definition: parsedDefinition })
+      .then((result) => {
+        if (!cancelled) setPreview(result);
+      })
+      .catch((failure) => {
+        if (!cancelled) {
+          setPreview(null);
+          setError(errorMessage(failure));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setChecking(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [debounced, profile.schema.key, readOnly]);
   const errors: Problem[] = (preview?.errors as Problem[] | undefined) || [];
   const warnings: Problem[] = (preview?.warnings as Problem[] | undefined) || [];
+
+  async function save() {
+    if (!parsed.definition) return;
+    setSaving(true);
+    await onSave(parsed.definition);
+    setSaving(false);
+  }
+
   return (
     <div className="app-stack">
+      <h3>정의 JSON</h3>
       {readOnly && (
         <p className="app-note" role="status">
           리비전 v{viewingRev}을(를) 읽기 전용으로 보고 있습니다.{" "}
@@ -585,7 +598,8 @@ function JsonTab({
         </p>
       )}
       <State resource={definition} />
-      {definition.data && (
+      {/* 다시 읽는 동안에도 편집기를 언마운트하지 않는다 — 언마운트하면 편집 중인 text가 사라진다. */}
+      {(definition.data || text) && (
         <>
           <label>
             프로파일 JSON
@@ -596,10 +610,7 @@ function JsonTab({
               readOnly={readOnly}
               aria-invalid={parsed.error ? true : undefined}
               value={text}
-              onChange={(e) => {
-                setText(e.target.value);
-                setPreview(null);
-              }}
+              onChange={(e) => setText(e.target.value)}
             />
           </label>
           {parsed.error ? (
@@ -609,6 +620,7 @@ function JsonTab({
           ) : (
             <p className="app-muted app-small" role="status">
               {dirty ? "저장되지 않은 변경이 있습니다." : `현재 리비전 v${viewingRev || profile.current_rev}과 같습니다.`}
+              {checking ? " · 검증하는 중…" : ""}
             </p>
           )}
           {error && (
@@ -642,36 +654,12 @@ function JsonTab({
             </div>
           )}
           <div className="app-toolbar">
-            <button type="button" disabled={!parsed.definition || !!busy} onClick={check}>
-              검증
+            <button type="button" className="primary" disabled={!parsed.definition || readOnly || saving || errors.length > 0} onClick={save}>
+              저장(새 리비전)
             </button>
-            <button type="button" className="primary" disabled={!parsed.definition || readOnly || !!busy} onClick={save}>
-              새 리비전 저장
+            <button type="button" disabled={!dirty || saving} onClick={() => setText(baseText)}>
+              되돌리기
             </button>
-            <button type="button" disabled={!!busy} onClick={exportJson}>
-              내보내기
-            </button>
-            <span className="app-toolbar-end app-inline">
-              <label>
-                테스트 문서
-                <select value={snapshotId} onChange={(e) => setTestSnapshot(e.target.value)} disabled={candidates.length === 0}>
-                  {candidates.length === 0 && <option value="">적용 문서 없음</option>}
-                  {candidates.map((row) => (
-                    <option key={row.application_id} value={row.snapshot.snapshot_id}>
-                      {row.document_name} r{row.snapshot.revision_no}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                disabled={!parsed.definition || !snapshotId}
-                title={!snapshotId ? "테스트할 문서가 없습니다. 테스트 탭에서 문서를 검색하세요." : "저장하지 않은 정의를 선택한 문서에 적용해 봅니다."}
-                onClick={testDraft}
-              >
-                미저장 정의로 테스트
-              </button>
-            </span>
           </div>
         </>
       )}
@@ -681,11 +669,12 @@ function JsonTab({
 
 // ---------------------------------------------------------------- 변경 이력
 
-function HistoryTab({ base, currentRev }: { base: string; currentRev: number }) {
+function History({ base, currentRev }: { base: string; currentRev: number }) {
   const { go } = useNavigation();
   const revisions = usePage<RevisionRow>(base + "/revisions");
   return (
     <div className="app-stack">
+      <h3>변경 이력</h3>
       <State resource={revisions} empty="변경 이력이 없습니다." />
       {revisions.items.length > 0 && (
         <div className="app-table-wrap">
@@ -694,8 +683,7 @@ function HistoryTab({ base, currentRev }: { base: string; currentRev: number }) 
               <tr>
                 <th scope="col">리비전</th>
                 <th scope="col">시각</th>
-                <th scope="col">작성자</th>
-                <th scope="col">요약</th>
+                <th scope="col">규칙</th>
                 <th scope="col">행동</th>
               </tr>
             </thead>
@@ -706,10 +694,9 @@ function HistoryTab({ base, currentRev }: { base: string; currentRev: number }) 
                     r{row.rev} {row.rev === currentRev && <Chip kind="blue">현재</Chip>}
                   </td>
                   <td>{formatDateTime(row.created_at)}</td>
-                  <td>{row.created_by || "-"}</td>
-                  <td className="app-wrap">{row.summary || row.format_detected || "-"}</td>
+                  <td>규칙 {row.rule_count ?? 0}개</td>
                   <td>
-                    <button type="button" className="small" onClick={() => go({ tab: "json", rev: String(row.rev) })}>
+                    <button type="button" className="small" onClick={() => go({ rev: row.rev === currentRev ? "" : String(row.rev) })}>
                       이 리비전 보기
                     </button>
                   </td>

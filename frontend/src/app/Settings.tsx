@@ -1,8 +1,7 @@
 // 설정 화면(§7 Settings · §6 GET /settings · GET /normalization-presets): 읽기 전용 카드(렌더 서버 · Reader · 한도 · 작업 공간 —
-// 절대 경로가 보여도 되는 유일한 화면) + 정규화 프리셋 표 + 서버 접근 토큰(localStorage 'schema.token').
-import { Fragment, useState } from "react";
-import type { FormEvent } from "react";
-import { State, TOKEN_KEY, getToken, invalidateCache, setToken, useData, useToast } from "./client";
+// 절대 경로가 보여도 되는 유일한 화면) + 정규화 프리셋 표. 사용자 접근 토큰은 없다(메인 API는 인증하지 않는다).
+import { Fragment } from "react";
+import { State, useData } from "./client";
 import type { NormalizationPreset, Page, SettingsResponse } from "./types";
 import { Chip, Heading } from "./ui";
 
@@ -22,8 +21,13 @@ const LIMIT_LABELS: Record<string, string> = {
   max_bytes_mb: "렌더 직렬화 상한(MB)",
   reader_timeout_s: "Reader 시간 제한(초)",
   wait_max_s: "작업 대기 상한(초)",
+  version: "API 버전",
+  principal: "실행 계정",
+  engine_version: "엔진 버전",
+  renderer_version: "렌더러 버전",
 };
-const KNOWN_KEYS = new Set(["workspace", "render", "reader_factory", "limits"]);
+// 카드가 직접 그리는 최상위 키(나머지는 '작업 공간' 카드에 붙는다).
+const KNOWN_KEYS = new Set(["workspace", "render", "reader", "reader_factory", "limits", "paths"]);
 
 const labelOf = (key: string) => LIMIT_LABELS[key] || key;
 const text = (value: unknown) => (value === null || value === undefined || value === "" ? "-" : typeof value === "object" ? JSON.stringify(value) : String(value));
@@ -71,7 +75,6 @@ export default function Settings() {
           </div>
         )}
       </section>
-      <TokenCard />
     </>
   );
 }
@@ -79,6 +82,9 @@ export default function Settings() {
 function SettingsCards({ data, extras }: { data: SettingsResponse; extras: [string, unknown][] }) {
   const render = data.render || { mode: "-", url: null };
   const limits = Object.entries(data.limits || {});
+  const reader = data.reader || { factory: (data.reader_factory as string | null) ?? null };
+  const drm = reader.drm;
+  const paths = Object.entries(data.paths || {});
   return (
     <div className="app-settings-grid">
       <section className="app-card" aria-label="렌더 서버">
@@ -91,15 +97,52 @@ function SettingsCards({ data, extras }: { data: SettingsResponse; extras: [stri
           <dt>URL</dt>
           <dd>{render.url || "사용 안 함"}</dd>
           <dt>렌더러 버전</dt>
-          <dd>{text(render.renderer_version)}</dd>
+          <dd>{text(render.renderer_version ?? data.renderer_version)}</dd>
         </dl>
       </section>
       <section className="app-card" aria-label="Reader">
-        <h2>Reader</h2>
+        <div className="app-card-head">
+          <h2>Reader</h2>
+          <Chip kind={drm?.available ? "ok" : "muted"}>{drm?.available ? "연결됨" : "연결 안 됨"}</Chip>
+        </div>
         <dl className="app-kv">
           <dt>Reader factory</dt>
-          <dd>{data.reader_factory || "기본(XLSX)"}</dd>
+          <dd>{reader.factory || "기본(XLSX)"}</dd>
+          {reader.revision !== undefined && reader.revision !== null && (
+            <>
+              <dt>Reader 리비전</dt>
+              <dd>{text(reader.revision)}</dd>
+            </>
+          )}
+          {reader.timeout_seconds !== undefined && (
+            <>
+              <dt>열기 시간 제한(초)</dt>
+              <dd>{text(reader.timeout_seconds)}</dd>
+            </>
+          )}
+          {reader.memory_mb !== undefined && (
+            <>
+              <dt>메모리 상한(MB)</dt>
+              <dd>{text(reader.memory_mb)}</dd>
+            </>
+          )}
+          {drm && (
+            <>
+              <dt>임시 폴더</dt>
+              <dd>{drm.temp_dir_ok ? <Chip kind="ok">정상</Chip> : <Chip kind="err">작업 공간 밖 폴더가 필요합니다</Chip>}</dd>
+              <dt>해제본 보관(초)</dt>
+              <dd>{text(drm.ttl_seconds)}</dd>
+              <dt>해제본 캐시(MB)</dt>
+              <dd>{text(drm.cache_mb)}</dd>
+              <dt>등록된 보호 문서 시그니처</dt>
+              <dd>{drm.magics ?? 0}개</dd>
+            </>
+          )}
         </dl>
+        {!drm?.available && (
+          <p className="app-muted app-small">보호된 문서를 읽으려면 서버에 SCHEMA_READER_FACTORY를 설정하고 python -m schema drm-probe로 확인하세요.</p>
+        )}
+        <p className="app-muted app-small">이 서버는 기본으로 127.0.0.1에만 열립니다.</p>
       </section>
       <section className="app-card" aria-label="한도">
         <h2>한도</h2>
@@ -123,6 +166,14 @@ function SettingsCards({ data, extras }: { data: SettingsResponse; extras: [stri
           <dd>
             <code>{data.workspace || "-"}</code>
           </dd>
+          {paths.map(([key, value]) => (
+            <Fragment key={key}>
+              <dt>{labelOf(key)}</dt>
+              <dd>
+                <code>{text(value)}</code>
+              </dd>
+            </Fragment>
+          ))}
           {extras.map(([key, value]) => (
             <Fragment key={key}>
               <dt>{labelOf(key)}</dt>
@@ -132,53 +183,5 @@ function SettingsCards({ data, extras }: { data: SettingsResponse; extras: [stri
         </dl>
       </section>
     </div>
-  );
-}
-
-// 서버 접근 토큰: 이 브라우저(localStorage 'schema.token')에만 저장된다. 저장·삭제 뒤 응답 캐시를 비운다.
-function TokenCard() {
-  const { notify } = useToast();
-  const [value, setValue] = useState("");
-  const [saved, setSaved] = useState(() => !!getToken());
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    const next = value.trim();
-    if (!next) return;
-    setToken(next);
-    invalidateCache();
-    setSaved(true);
-    setValue("");
-    notify("서버 접근 토큰을 저장했습니다.");
-  }
-  function clear() {
-    setToken("");
-    invalidateCache();
-    setSaved(false);
-    notify("서버 접근 토큰을 지웠습니다.");
-  }
-  return (
-    <section className="app-card" aria-label="서버 접근">
-      <div className="app-card-head">
-        <h2>서버 접근</h2>
-        <Chip kind={saved ? "ok" : "muted"}>{saved ? "토큰 저장됨" : "토큰 없음"}</Chip>
-      </div>
-      <form className="app-form" onSubmit={submit}>
-        <label>
-          서버 접근 토큰
-          <input type="password" autoComplete="off" value={value} placeholder={saved ? "새 토큰으로 바꾸려면 입력" : "서버에 설정된 접근 토큰"} onChange={(e) => setValue(e.target.value)} />
-        </label>
-        <p className="app-muted app-small">
-          이 브라우저에만 저장됩니다(키 <code>{TOKEN_KEY}</code>). 서버로는 요청 헤더로만 전달됩니다.
-        </p>
-        <div className="app-inline">
-          <button type="submit" className="primary" disabled={!value.trim()}>
-            저장
-          </button>
-          <button type="button" className="secondary" disabled={!saved} onClick={clear}>
-            지우기
-          </button>
-        </div>
-      </form>
-    </section>
   );
 }

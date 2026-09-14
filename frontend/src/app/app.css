@@ -1144,14 +1144,14 @@
   color: #fff;
 }
 
-/* 토큰 프롬프트·폼 */
+/* 연결 오류 카드·폼 */
 .app-form {
   display: flex;
   flex-direction: column;
   gap: 12px;
   max-width: 420px;
 }
-.app-token-card {
+.app-connect-card {
   max-width: 460px;
   margin: 60px auto;
 }
@@ -1236,12 +1236,49 @@
   padding: 8px;
 }
 
-/* 파싱 프로파일 상세(규칙 카드 · 규칙 폼 · JSON 편집기 · 필드 매핑 미지정 행) */
-.app-rule-card .app-card-head {
-  margin-bottom: 4px;
+/* 파싱 프로파일 상세(요약줄 · 팝오버 · JSON 편집기) */
+.app-summary-bar {
+  border: 1px solid var(--app-line);
+  border-radius: 6px;
+  padding: 10px 12px;
 }
-.app-rule-card dl.app-kv {
-  font-size: 12px;
+.app-popover-anchor {
+  position: relative;
+}
+.app-popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 320px;
+  max-width: min(520px, 90vw);
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--app-panel);
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.app-popover.right {
+  left: auto;
+  right: 0;
+}
+.app-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.app button.app-popover-close {
+  border: 0;
+  background: none;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
 }
 .app-form-grid {
   display: grid;
@@ -1281,10 +1318,6 @@
 .app-problems ul li {
   margin: 2px 0;
 }
-.app-table tr.app-unmapped td {
-  background: var(--app-warn);
-}
-
 /* 파싱 스키마: 트리 보기 · 그래프 보기 · 필드 상세 최근 값 (Schema/SchemaTree/SchemaGraph/FieldDetail) */
 .app-tree-root {
   display: flex;

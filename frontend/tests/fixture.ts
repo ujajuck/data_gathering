@@ -433,7 +433,6 @@ export function appFixture() {
   clearBuildDraft();
   reloadBuildDraft();
   const state = {
-    requireToken: false,
     running: [] as JobResponse[],
     jobsRunning: 0,
     documents: documentRows(),
@@ -444,7 +443,21 @@ export function appFixture() {
   const routes: [string, RegExp, Handler][] = [
     ["GET", /^\/status$/, () => ({ version: "3", workspace: "/tmp/ws", render: { mode: "inprocess", url: null, queue_depth: 0, rendering: 0 }, counts: { documents: state.documents.length, profiles: 2, schemas: 1, jobs_running: state.jobsRunning, review: 2 } })],
     ["GET", /^\/search$/, (_, call) => page(searchHits(call.url.searchParams.get("q") || ""))],
-    ["GET", /^\/settings$/, () => ({ workspace: "/tmp/ws", render: { mode: "inprocess", url: null, renderer_version: "test-1" }, reader_factory: null, limits: { render_queue: 32, body_mb: 2 } })],
+    [
+      "GET",
+      /^\/settings$/,
+      () => ({
+        version: "3",
+        workspace: "/tmp/ws",
+        principal: "local",
+        engine_version: "test-1",
+        renderer_version: "test-1",
+        render: { mode: "inprocess", url: null, renderer_version: "test-1" },
+        reader: { factory: null, revision: null, timeout_seconds: 60, memory_mb: 512, drm: { available: false, temp_dir_ok: true, ttl_seconds: 900, cache_mb: 2048, magics: 0 } },
+        limits: { render_queue: 32, body_mb: 2 },
+        paths: { sources: "/tmp/ws/sources" },
+      }),
+    ],
     ["GET", /^\/normalization-presets$/, () => page([{ id: "identity", label: "원값 유지", normalization: { operation: "identity" } }])],
     ["GET", /^\/sources$/, () => page([{ name: "샘플.xlsx", source_ref: "샘플.xlsx", directory: false }])],
     ["POST", /^\/documents\/register$/, (_, call) => job({ kind: "register", label: "문서 등록", result: { documents: (call.body?.source_refs || []).map((ref: string, i: number) => ({ document_id: uuid(50 + i, "0d0c"), document_name: ref, snapshot: null, status: "normal", applied: [] })) } })],
@@ -480,7 +493,16 @@ export function appFixture() {
     }],
     ["GET", /^\/profiles\/([^/]+)$/, (m) => profileDetail(m[1])],
     ["GET", /^\/profiles\/([^/]+)\/documents$/, () => page([{ document_id: ids.document(1), document_name: DOCUMENT_NAMES[0], snapshot: { snapshot_id: ids.snapshot, revision_no: 2 }, application_id: ids.application, profile_rev: 2, compatibility: "identical", heads_approved: 2, heads_total: 2, published: true, is_reference: true, status: "normal" }])],
-    ["GET", /^\/profiles\/([^/]+)\/revisions$/, () => page([{ rev: 2, created_at: iso(120), summary: "규칙 추가" }, { rev: 1, created_at: iso(3000), summary: "최초" }])],
+    // 서버가 정의 파일에서 만들어 주는 값만 담는다(§7) — 작성자·요약은 파일에 없으므로 응답에도 없다.
+    [
+      "GET",
+      /^\/profiles\/([^/]+)\/revisions$/,
+      () =>
+        page([
+          { rev: 2, current: true, created_at: iso(120), byte_size: 2048, rule_count: 4 },
+          { rev: 1, current: false, created_at: iso(3000), byte_size: 1024, rule_count: 2 },
+        ]),
+    ],
     ["GET", /^\/schemas$/, () => page(schemaRows)],
     ["GET", /^\/schemas\/([^/]+)$/, (m) => schemaRows.find((s) => s.schema_key === m[1]) || reply(404, errorBody("NOT_FOUND", "스키마를 찾을 수 없습니다."))],
     ["GET", /^\/schemas\/([^/]+)\/tree$/, () => schemaTree],
@@ -522,6 +544,9 @@ export function appFixture() {
       };
       return result;
     }],
+    // 내려받기는 파일 본문이다 — downloadFile이 상태를 먼저 확인하므로 라우트가 있어야 한다.
+    ["GET", /^\/builds\/([^/]+)\/download$/, () => "id,value\n1,2\n"],
+    ["GET", /^\/profiles\/([^/]+)\/export$/, () => ({ format: "parsing-profile", rules: [] })],
     ["POST", /^\/builds\/preview$/, (_, call) => ({ columns: call.body?.columns || [], rows: [], row_count: 0, excluded: [], conflicts: [] })],
     ["POST", /^\/builds$/, () => ({ build_key: "abcdef0123456789", download_url: "/api/builds/abcdef0123456789/download", manifest: { build_key: "abcdef0123456789", created_at: iso(0), schema: { key: SCHEMA.schema_key, rev: 3 }, sources: [], columns: [], row_mode: "record", row_count: 0, excluded: [], conflicts: [] } })],
   ];
@@ -529,7 +554,6 @@ export function appFixture() {
   function answer(call: Call): unknown {
     const override = overrides.get(call.method + " " + call.path);
     if (override) return override(call);
-    if (state.requireToken && !call.headers.authorization) return reply(401, errorBody("UNAUTHORIZED", "접근 토큰이 필요합니다."));
     for (const [method, pattern, handler] of routes) {
       if (method !== call.method) continue;
       const match = call.path.match(pattern);

@@ -1,5 +1,5 @@
 // API 클라이언트와 공용 훅(§7 client.ts).
-// - api(): JSON, /api 접두, bearer 토큰(localStorage 'schema.token'), 오류 봉투 → ApiError
+// - api(): JSON, /api 접두, 오류 봉투 → ApiError. 메인 API는 사용자 인증을 쓰지 않는다(127.0.0.1 바인딩 전제).
 // - GET은 같은 URL의 진행 중 요청을 공유하고 60초 메모리 캐시를 쓴다. 쓰기(GET 이외)는 캐시 전체를 비운다.
 import {
   createContext,
@@ -12,34 +12,11 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { ReactNode } from "react";
-import type { ApiErrorBody, JobResponse, Page } from "./types";
+import type { ApiErrorBody, ApiErrorDetail, JobResponse, Page } from "./types";
 
 export const API_PREFIX = "/api";
-export const TOKEN_KEY = "schema.token";
 export const PAGE_LIMIT = 50;
 export const CACHE_TTL_MS = 60_000;
-
-// ---------------------------------------------------------------- 토큰
-
-export function getToken(): string {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || "";
-  } catch {
-    return "";
-  }
-}
-
-export function setToken(value: string) {
-  try {
-    if (value) localStorage.setItem(TOKEN_KEY, value);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    // 저장소를 쓸 수 없으면 이 세션에서만 유지된다.
-  }
-  memoryToken = value;
-}
-let memoryToken = "";
-const token = () => memoryToken || getToken();
 
 // ---------------------------------------------------------------- 오류
 
@@ -47,12 +24,15 @@ export class ApiError extends Error {
   code: string;
   status: number;
   fields: Record<string, unknown> | string[] | undefined;
-  constructor(status: number, code: string, message: string, fields?: ApiError["fields"]) {
+  // 409 SCHEMA_IN_USE · FIELD_IN_USE · FIELD_HAS_CHILDREN이 무엇이 쓰는지 함께 준다(§6 오류 객체 detail).
+  detail: ApiErrorDetail | undefined;
+  constructor(status: number, code: string, message: string, fields?: ApiError["fields"], detail?: ApiErrorDetail) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.fields = fields;
+    this.detail = detail;
   }
 }
 
@@ -69,14 +49,8 @@ function toApiError(status: number, data: unknown): ApiError {
   const message =
     envelope?.message ||
     (Array.isArray(detail) ? detail[0]?.msg : typeof detail === "string" ? detail : "") ||
-    (status === 401
-      ? "서버 접근 토큰이 필요합니다."
-      : status === 404
-        ? "찾을 수 없습니다."
-        : status === 503
-          ? "서버에 연결할 수 없습니다."
-          : "요청을 처리하지 못했습니다.");
-  return new ApiError(status, envelope?.code || `HTTP_${status}`, message, envelope?.fields);
+    (status === 404 ? "찾을 수 없습니다." : status === 503 ? "서버에 연결할 수 없습니다." : "요청을 처리하지 못했습니다.");
+  return new ApiError(status, envelope?.code || `HTTP_${status}`, message, envelope?.fields, envelope?.detail);
 }
 
 // ---------------------------------------------------------------- 요청·캐시·중복 제거
@@ -110,7 +84,6 @@ export function resetClient() {
   cache.clear();
   inflight.clear();
   writeSeq = 0;
-  memoryToken = "";
 }
 
 export function subscribeWrites(listener: () => void): () => void {
@@ -143,14 +116,12 @@ async function request<T>(
   body: unknown,
   init?: ApiInit,
 ): Promise<RawResponse<T>> {
-  const bearer = token();
   const response = await fetch(url, {
     method,
     signal: init?.signal,
     headers: {
       Accept: "application/json",
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-      ...(bearer ? { Authorization: "Bearer " + bearer } : {}),
       ...(init?.headers || {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -221,31 +192,24 @@ export const withQuery = (path: string, params: Record<string, string | number |
 
 export async function downloadFile(path: string, filename: string) {
   const url = path.startsWith("/api/") ? path : API_PREFIX + path;
-  const bearer = token();
-  if (!bearer) {
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    link.click();
-    return;
-  }
-  const response = await fetch(url, { headers: { Authorization: "Bearer " + bearer }, cache: "no-store" });
+  // 상태를 먼저 확인한다 — 링크만 누르면 실패 응답(JSON 오류)이 정상 파일 이름으로 저장되고 화면에는 아무 말도 없다.
+  const response = await fetch(url, { headers: { Accept: "application/json, */*" } });
   if (!response.ok) {
-    let data: unknown = null;
+    let body: unknown = null;
     try {
-      data = await response.json();
+      body = await response.json();
     } catch {
-      data = null;
+      body = null;
     }
-    throw toApiError(response.status, data);
+    throw toApiError(response.status, body);
   }
   const blob = await response.blob();
-  const objectUrl = URL.createObjectURL(blob);
+  const href = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.href = objectUrl;
+  link.href = href;
   link.download = filename;
   link.click();
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  URL.revokeObjectURL(href);
 }
 
 // ---------------------------------------------------------------- useData / usePage

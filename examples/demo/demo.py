@@ -212,7 +212,7 @@ def build_other_workbook(path: Path):
 
 
 def build_locked_file(path: Path):
-    # ZIP 매직(PK)이 아닌 첫 바이트 → 기본 Reader가 DRM_READER_REQUIRED(403)로 거부한다.
+    # OLE2 매직 → 보호 문서로 판별된다(§3.5(1)). 보안 읽기 어댑터가 없으면 DRM_READER_REQUIRED(403)로 잠긴다.
     path.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"encrypted-workbook" * 8)
     return path
 
@@ -313,7 +313,7 @@ def seed(root: Path, principal="demo-user"):
         first["applied"] = [{"application_id": application["application_id"], "profile_name": profile["profile_name"], "compatibility": "manual", "state": "published"}]
         return {
             "workspace": str(root),
-            "schema": {"schema_key": schema["schema_key"], "current_rev": schema["current_rev"], "fields": schema["fields"]},
+            "schema": {"schema_key": schema["schema_key"], "current_rev": schema["current_rev"], "fields": schema["fields"]["total"]},
             "profile": {
                 "profile_id": profile["profile_id"],
                 "profile_name": profile["profile_name"],

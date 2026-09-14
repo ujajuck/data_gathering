@@ -1,17 +1,23 @@
-import { screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { TOKEN_KEY } from "../src/app/client";
 import { UUID_RE, page, appFixture } from "./fixture";
 
 describe("설정 화면", () => {
   it("읽기 전용 카드(렌더 서버 · Reader · 한도 · 작업 공간)와 정규화 프리셋 표를 보여준다", async () => {
     const f = appFixture();
     f.overrides.set("GET /settings", () => ({
+      version: "3",
       workspace: "/srv/workspaces/plant-a",
       render: { mode: "http", url: "http://render.internal:8811", renderer_version: "r-2026.09" },
-      reader_factory: "plugins.drm:make_reader",
+      reader: {
+        factory: "plugins.drm:make_reader",
+        revision: "r7",
+        timeout_seconds: 60,
+        memory_mb: 512,
+        drm: { available: true, temp_dir_ok: true, ttl_seconds: 900, cache_mb: 2048, magics: 1 },
+      },
       limits: { render_queue: 32, body_mb: 2, custom_limit: "7일" },
+      paths: { sources: "/srv/workspaces/plant-a/sources" },
       principal: "ops@plant-a",
     }));
     f.overrides.set("GET /normalization-presets", () =>
@@ -25,7 +31,14 @@ describe("설정 화면", () => {
     expect(render.textContent).toContain("외부 서버(HTTP)");
     expect(render.textContent).toContain("http://render.internal:8811");
     expect(render.textContent).toContain("r-2026.09");
-    expect(screen.getByRole("region", { name: "Reader" }).textContent).toContain("plugins.drm:make_reader");
+    const reader = screen.getByRole("region", { name: "Reader" });
+    expect(reader.textContent).toContain("plugins.drm:make_reader");
+    expect(within(reader).getByText("연결됨", { selector: ".app-chip" })).toBeTruthy();
+    expect(reader.textContent).toContain("등록된 보호 문서 시그니처");
+    expect(reader.textContent).toContain("1개");
+    // 어댑터가 연결돼 있으면 "설정하세요" 안내는 띄우지 않는다.
+    expect(reader.textContent).not.toContain("SCHEMA_READER_FACTORY를 설정하고");
+    expect(reader.textContent).toContain("이 서버는 기본으로 127.0.0.1에만 열립니다.");
     const limits = screen.getByRole("region", { name: "한도" });
     expect(limits.textContent).toContain("렌더 큐 상한");
     expect(limits.textContent).toContain("32");
@@ -35,7 +48,12 @@ describe("설정 화면", () => {
     // 작업 공간 경로는 설정 화면에서만 절대 경로로 보인다; 알 수 없는 최상위 키도 여기 붙는다
     const workspace = screen.getByRole("region", { name: "작업 공간" });
     expect(workspace.textContent).toContain("/srv/workspaces/plant-a");
+    expect(workspace.textContent).toContain("/srv/workspaces/plant-a/sources");
     expect(workspace.textContent).toContain("ops@plant-a");
+    // 서버 접근 토큰 영역은 사라졌다(메인 API는 인증하지 않는다).
+    expect(screen.queryByRole("region", { name: "서버 접근" })).toBeNull();
+    expect(screen.queryByLabelText("서버 접근 토큰")).toBeNull();
+    expect(f.calls.filter((c) => c.headers.authorization)).toHaveLength(0);
     const table = screen.getByRole("table", { name: "정규화 프리셋 목록" });
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["이름", "키", "정의"]);
     const rows = within(table).getAllByRole("row").slice(1);
@@ -57,37 +75,13 @@ describe("설정 화면", () => {
     const render = await screen.findByRole("region", { name: "렌더 서버" });
     expect(render.textContent).toContain("내장(in-process)");
     expect(render.textContent).toContain("사용 안 함");
-    expect(screen.getByRole("region", { name: "Reader" }).textContent).toContain("기본(XLSX)");
+    const reader = screen.getByRole("region", { name: "Reader" });
+    expect(reader.textContent).toContain("기본(XLSX)");
+    expect(within(reader).getByText("연결 안 됨", { selector: ".app-chip" })).toBeTruthy();
+    // 연결 안 됨일 때만 무엇을 설정해야 하는지 안내한다.
+    expect(reader.textContent).toContain("SCHEMA_READER_FACTORY를 설정하고");
     await screen.findByText("프리셋이 없습니다.");
     expect(screen.queryByRole("table", { name: "정규화 프리셋 목록" })).toBeNull();
   });
 
-  it("서버 접근 토큰은 localStorage 'schema.token'에 저장되고 다음 요청부터 헤더로 전달되며, 지우기로 삭제된다", async () => {
-    const f = appFixture();
-    f.renderApp("?screen=settings");
-    const card = await screen.findByRole("region", { name: "서버 접근" });
-    expect(card.textContent).toContain("토큰 없음");
-    const user = userEvent.setup();
-    const save = within(card).getByRole("button", { name: "저장" });
-    expect(save.hasAttribute("disabled")).toBe(true);
-    await user.type(within(card).getByLabelText("서버 접근 토큰"), "  secret-token ");
-    await user.click(save);
-    expect(localStorage.getItem(TOKEN_KEY)).toBe("secret-token");
-    expect(card.textContent).toContain("토큰 저장됨");
-    expect((within(card).getByLabelText("서버 접근 토큰") as HTMLInputElement).value).toBe("");
-    await screen.findByText("서버 접근 토큰을 저장했습니다.");
-    // 저장 뒤 응답 캐시가 비워져 다음 화면 진입은 토큰을 붙여 다시 요청한다
-    await user.click(screen.getByRole("button", { name: "작업 내역" }));
-    await waitFor(() => {
-      const withToken = f.calls.filter((c) => c.headers.authorization === "Bearer secret-token");
-      expect(withToken.length).toBeGreaterThan(0);
-    });
-    await user.click(screen.getByRole("button", { name: "설정" }));
-    const again = await screen.findByRole("region", { name: "서버 접근" });
-    expect(again.textContent).toContain("토큰 저장됨");
-    await user.click(within(again).getByRole("button", { name: "지우기" }));
-    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
-    expect(again.textContent).toContain("토큰 없음");
-    expect(within(again).getByRole("button", { name: "지우기" }).hasAttribute("disabled")).toBe(true);
-  });
 });

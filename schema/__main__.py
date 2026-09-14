@@ -2,6 +2,7 @@
 python -m schema render-serve --ws <ws> --port 8032 [--host 127.0.0.1]
 python -m schema watch --ws <ws> [--raw DIR] [--interval 2] [--once] [--no-recursive] [--provider local-xlsx]
 python -m schema register --ws <ws> --directory <raw 기준 폴더> [--include-unchanged] [--provider local-xlsx]
+python -m schema drm-probe --ws <ws> [--source <raw 기준 상대경로> | --directory <raw 기준 폴더>] [--unlock] [--json]
 python -m schema import-schema --ws <ws> --file schema.json
 python -m schema import-profile --ws <ws> --schema <schema_key> --file profile.json [--format auto] [--name NAME] [--profile PROFILE_ID]
 python -m schema build --ws <ws> --schema <schema_key> --documents <id> ... [--columns field_key[=header[:unit]] ...] [--row-mode record] --format xlsx --out DIR
@@ -20,7 +21,7 @@ from pathlib import Path
 from .db import Problem
 from .env import load_env, warn_legacy_env
 
-COMMANDS = ("serve", "render-serve", "watch", "register", "import-schema", "import-profile", "build", "seed-demo")
+COMMANDS = ("serve", "render-serve", "watch", "register", "drm-probe", "import-schema", "import-profile", "build", "seed-demo")
 # 폴더 일괄 등록은 워커 스레드 없이 같은 프로세스에서 돌린다(jobs.wait → run_one). 큰 폴더도 끝까지 기다린다.
 REGISTER_WAIT = 24 * 3600
 
@@ -52,6 +53,13 @@ def build_parser():
     register.add_argument("--directory", default="", help="data/raw 기준 상대 폴더(생략하면 최상위 전체)")
     register.add_argument("--include-unchanged", dest="include_unchanged", action="store_true", help="변경 없는 문서·잠긴 문서도 다시 읽는다")
     register.add_argument("--provider", default="local-xlsx")
+
+    probe = sub.add_parser("drm-probe", help="보호 문서 접근 점검(계약 §3.5(7))")
+    probe.add_argument("--ws", type=Path, required=True)
+    probe.add_argument("--source", default=None, help="data/raw 기준 상대 경로(파일 하나)")
+    probe.add_argument("--directory", default=None, help="data/raw 기준 폴더(생략하면 전체)")
+    probe.add_argument("--unlock", action="store_true", help="보호 문서마다 실제로 한 번 해제해 소요 시간을 재고 그 자리에서 지운다")
+    probe.add_argument("--json", dest="as_json", action="store_true")
 
     schema = sub.add_parser("import-schema", help="파싱 스키마 정의 파일 가져오기(새 리비전)")
     schema.add_argument("--ws", type=Path, required=True)
@@ -170,15 +178,49 @@ def run_register(args) -> int:
     return 1 if (result.get("summary") or {}).get("failed") else 0
 
 
+def run_drm_probe(args) -> int:
+    """§3.5(7) 보호 문서 점검. 원본 내용·셀 값·자격 증명·해제본 경로를 출력하지 않는다."""
+    from . import drm
+
+    report = drm.probe(args.ws, source=args.source, directory=args.directory, unlock=args.unlock)
+    if args.as_json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print("\n".join(drm.probe_lines(report)))
+    return drm.probe_exit_code(report)
+
+
 def main(argv=None):
     args = parse(argv)
     load_env(getattr(args, "ws", None) or getattr(args, "workspace", None) or ".", ".")
     warn_legacy_env()  # 옛 접두(KG_*) 값은 읽지 않는다 — 조용히 기본값으로 떨어지지 않게 한 번 알린다.
+    if args.command in ("serve", "render-serve"):
+        from . import drm
+
+        try:
+            # 해제본 임시 폴더가 작업 공간 안을 가리키면 시작하지 않는다(§3.5(3)).
+            drm.temp_dir(args.ws, create=True)
+        except Problem as exc:
+            print(json.dumps({"error": {"code": exc.code, "message": exc.message}}, ensure_ascii=False), file=sys.stderr)
+            return 2
+        # 서버가 시작할 때 지난 해제본을 치운다. 임시 폴더는 메인·렌더 서버가 함께 쓰므로
+        # **살아 있는 프로세스가 붙잡고 있지 않은** 항목만 지운다(진행 중인 해제의 부분 파일·잠금은 남긴다, §3.5(3)).
+        drm.purge_all(args.ws)
     if args.command == "serve":
         import uvicorn
 
         from .api import create_app
 
+        if args.host not in ("127.0.0.1", "localhost", "::1"):
+            # 메인 API에는 사용자 인증이 없다(계약 §6 공통). 루프백 밖으로 여는 것은 운영자 결정이고, 앞단 인증은 운영자 책임이다.
+            # /api/*는 Host 허용 목록으로 막혀 있으므로 그 주소로 쓰려면 SCHEMA_ALLOWED_HOSTS도 함께 설정해야 한다.
+            print(
+                f"[경고] 메인 API를 {args.host}에 엽니다. 이 서버에는 사용자 인증이 없습니다 — "
+                "앞단(리버스 프록시 등)에서 접근을 막으세요. 기본값은 127.0.0.1입니다. "
+                "그 주소로 화면을 쓰려면 SCHEMA_ALLOWED_HOSTS에 그 호스트 이름을 함께 적으세요"
+                "(적지 않으면 /api/* 요청이 400 HOST_NOT_ALLOWED로 끊깁니다).",
+                file=sys.stderr,
+            )
         uvicorn.run(create_app(args.ws), host=args.host, port=args.port)
         return 0
     if args.command == "render-serve":
@@ -195,6 +237,12 @@ def main(argv=None):
         return run(args.ws, args.raw, provider=args.provider, interval=args.interval, once=args.once, recursive=not args.no_recursive)
     if args.command == "register":
         return run_register(args)
+    if args.command == "drm-probe":
+        try:
+            return run_drm_probe(args)
+        except Problem as exc:
+            print(json.dumps({"error": {"code": exc.code, "message": exc.message}}, ensure_ascii=False), file=sys.stderr)
+            return 1
     try:
         if args.command == "seed-demo":
             from examples.demo.demo import seed

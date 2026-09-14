@@ -1,14 +1,18 @@
-"""Reader 계약(§3.2). 원본을 수정하거나 해제본을 만들지 않고, 경로는 Reader 안에서만 해석한다.
+"""Reader 계약(§3.2). 원본을 수정하지 않고, 경로는 Reader 안에서만 해석한다.
 
-`XlsxReader`는 로컬 XLSX 전용 기본 Reader다(권한 판정·원본 토큰 검증·구조 서명·매치·추출·렌더).
-DRM 제공자는 운영자가 승인한 factory(`SCHEMA_READER_FACTORY`)로 등록한다.
+`XlsxReader`는 **평문 OOXML** 전용 기본 Reader다(권한 판정·원본 토큰 검증·구조 서명·매치·추출·렌더).
+보호 문서는 운영자가 승인한 factory(`SCHEMA_READER_FACTORY`)의 Reader가 맡고, 그 Reader는 §3.5 해제 세션에서 얻은
+평문 파일을 `plain_path`로 돌려주기만 하면 나머지 연산을 이 클래스에 그대로 위임할 수 있다.
+
+컨테이너 판별은 `make_reader` **한 곳**에서만 한다(§3.5(2)) — `authorize`는 더 이상 `PK`를 보고 잠그지 않는다.
+두 곳에서 판정하면 어댑터를 붙여도 계속 잠기는 화면이 남는다.
 """
 
 from __future__ import annotations
 
 import hashlib
-import importlib
 import re
+import sys
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,19 +21,42 @@ from openpyxl import load_workbook
 
 from . import engine
 from .db import Problem, norm
-from .jobs import env
 from .spec import decimal
 
 
-def make_reader(root, provider, principal):
+def make_reader(root, provider, principal, source_ref=None):
+    """컨테이너를 먼저 보고 Reader를 고른다(§3.5(2)).
+
+    1. `provider != 'local-xlsx'` → 언제나 DRM Reader(어댑터). 없으면 403 `DRM_READER_REQUIRED`.
+    2. `local-xlsx` + 평문 OOXML → `XlsxReader`.
+    3. `local-xlsx` + 보호 문서 → DRM Reader. 없으면 403(문구가 무엇을 설정해야 하는지 말한다).
+    4. `source_ref`가 없는 호출(방어) → `XlsxReader`.
+    """
+    from . import drm  # readers → drm 방향은 지연 import다(drm이 XlsxReader를 상속한다)
+
+    root = Path(root)
     if provider == "local-xlsx":
-        return XlsxReader(Path(root), principal)
-    factory = env("READER_FACTORY", "")
-    if not factory or ":" not in factory:
-        raise Problem("DRM_READER_REQUIRED", "이 문서의 보안 읽기 어댑터가 연결되지 않았습니다.", 403)
-    module, function = factory.split(":", 1)
-    # factory는 서버 설정만 읽는다. 요청 본문에서 모듈/함수 이름을 받지 않는다.
-    return getattr(importlib.import_module(module), function)(root=Path(root), provider=provider, principal=principal)
+        path = drm.source_path(root, source_ref) if source_ref is not None else None
+        if path is None:
+            # source_ref가 없거나 허용된 폴더에 그 파일이 없는 경우 — XlsxReader가 SOURCE_NOT_FOUND(404)로 말한다.
+            return XlsxReader(root, principal)
+        sniff = drm.sniff_path(path)
+        if not sniff["protected"]:
+            return XlsxReader(root, principal)
+        if not drm.available():
+            raise drm.reader_required(sniff["container"], source_ref)
+    # 어댑터는 서버 설정만 읽는다. 요청 본문에서 모듈/함수 이름을 받지 않는다.
+    return drm.load_factory()(root=root, provider=provider, principal=principal)
+
+
+def release_sessions():
+    """이 연산이 만든 해제본을 **연산이 끝나는 자리에서** 지운다(§3.5(3)).
+
+    프로세스 종료(`atexit`)에 맡기면 forkserver 자식(`os._exit`)과 SIGTERM으로 죽는 경로에서 평문이 남는다.
+    보호 문서를 한 번도 열지 않았으면 `schema.drm`이 아직 import되지도 않았으므로 아무 일도 하지 않는다."""
+    module = sys.modules.get(__name__.rsplit(".", 1)[0] + ".drm")
+    if module is not None:
+        module.SESSIONS.release_all()
 
 
 def file_hash(path):
@@ -152,6 +179,7 @@ class XlsxReader:
         self.principal = principal
 
     def path(self, source_ref):
+        """원본 경로. 토큰·크기 판정의 기준이고, 보호 문서라도 **원본**을 가리킨다."""
         path = (self.raw / source_ref).resolve()
         if not path.is_relative_to(self.raw) or not path.is_file():
             raise Problem(
@@ -159,22 +187,12 @@ class XlsxReader:
             )
         return path
 
+    def plain_path(self, source_ref, token):
+        """평문으로 열 파일. 기본 Reader는 원본 그대로이고, DRM Reader가 해제본 경로로 덮어쓴다(§3.5(3))."""
+        return self.path(source_ref)
+
     def authorize(self, source_ref, required="view"):
-        path = self.path(source_ref)
-        with path.open("rb") as source:
-            magic = source.read(4)
-        if magic[:2] != b"PK":
-            # 구형 .xls(OLE2)와 암호화된 OOXML은 매직이 같아 구분되지 않는다(둘 다 PK가 아니다).
-            # 코드·상태는 계약 §4.1 그대로 두고(잠김), 문구만 두 경우를 모두 알려 사용자가 헤매지 않게 한다.
-            raise Problem(
-                "DRM_READER_REQUIRED",
-                (
-                    "구형 .xls 형식이거나 암호화된 문서입니다. .xlsx로 저장한 뒤 등록하거나, 암호화 문서는 승인된 보안 읽기 어댑터로 접근하세요."
-                    if source_ref.lower().endswith(".xls")
-                    else "암호화 문서는 승인된 보안 읽기 어댑터로 접근해야 합니다."
-                ),
-                403,
-            )
+        self.path(source_ref)
         return {
             "can_view": True,
             "can_extract": True,
@@ -187,7 +205,10 @@ class XlsxReader:
             "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
         }
 
-    def _check(self, source_ref, expected_token=None):
+    def _verify(self, source_ref, expected_token=None):
+        """권한 재확인 + **원본** 해시. 연산 시작과 끝에 부른다(도중에 원본이 바뀌면 409).
+
+        보호 문서도 토큰은 원본 해시다 — 해제본은 snapshot마다 달라질 수 있어 버전 기준이 될 수 없다."""
         self.authorize(source_ref)
         path = self.path(source_ref)
         if path.stat().st_size > 256 * 1024 * 1024:
@@ -196,6 +217,19 @@ class XlsxReader:
                 "기본 Reader의 256MB 원본 한도를 초과했습니다.",
                 413,
             )
+        token = file_hash(path)
+        if expected_token is not None and token != expected_token:
+            raise Problem(
+                "SOURCE_VERSION_CHANGED",
+                "원본이 변경되었습니다. 새 버전을 등록하세요.",
+                409,
+            )
+        return token
+
+    def _check(self, source_ref, expected_token=None):
+        """(열어 읽을 파일, 원본 토큰). 보호 문서면 해제 세션의 평문 파일이 나온다(같은 snapshot은 한 번만 해제)."""
+        token = self._verify(source_ref, expected_token)
+        path = self.plain_path(source_ref, token)
         with zipfile.ZipFile(path) as archive:
             entries = archive.infolist()
             if (
@@ -207,19 +241,19 @@ class XlsxReader:
                     "압축 해제 예상 크기가 Reader 한도를 초과했습니다.",
                     413,
                 )
-        token = file_hash(path)
-        if expected_token is not None and token != expected_token:
-            raise Problem(
-                "SOURCE_VERSION_CHANGED",
-                "원본이 변경되었습니다. 새 버전을 등록하세요.",
-                409,
-            )
         return path, token
 
 
     def describe(self, source_ref, profiles=()):
         """문서 메타·시트 목록·구조 서명(+ profiles가 있으면 matches[]). 워크북은 한 번만 열고 해시는 시작·끝 두 번만 계산한다."""
+        try:
+            return self._describe(source_ref, profiles)
+        finally:
+            release_sessions()
+
+    def _describe(self, source_ref, profiles=()):
         path, token = self._check(source_ref)
+        origin = self.path(source_ref)  # 이름·크기는 언제나 원본 기준(해제본 이름은 해시라 문서 이름이 아니다)
         capabilities = self.authorize(source_ref, "extract")
         wb = load_workbook(path, data_only=True, keep_links=False)
         try:
@@ -237,11 +271,11 @@ class XlsxReader:
                 raise Problem("SHEET_LIMIT", "시트 수가 Reader 한도를 초과했습니다.", 413)
             result = {
                 "token": token,
-                "filename": path.name,
+                "filename": origin.name,
                 "author": wb.properties.creator,
                 "authored_at": wb.properties.created.isoformat() if wb.properties.created else None,
                 "excel_date_system": "1904" if wb.epoch.year == 1904 else "1900",
-                "byte_size": path.stat().st_size,
+                "byte_size": origin.stat().st_size,
                 "sheets": sheets,
                 # 등록 경로가 별도 authorize 호출 없이 재사용할 수 있도록 추출 권한 기준으로 돌려준다.
                 "capabilities": capabilities,
@@ -255,7 +289,7 @@ class XlsxReader:
                 result["matches"] = self._matches(wb, profiles)
         finally:
             wb.close()
-        if file_hash(path) != token:
+        if file_hash(origin) != token:
             raise Problem("SOURCE_VERSION_CHANGED", "읽는 동안 원본이 변경되었습니다.", 409)
         return result
 
@@ -302,38 +336,51 @@ class XlsxReader:
         return out
 
     def match(self, source_ref, expected_token, profiles):
-        path, token = self._check(source_ref, expected_token)
-        matches = self._matches(path, profiles)
-        self._check(source_ref, token)
-        return matches
+        try:
+            path, token = self._check(source_ref, expected_token)
+            matches = self._matches(path, profiles)
+            self._verify(source_ref, token)
+            return matches
+        finally:
+            release_sessions()
 
     def match_specs(self, source_ref, expected_token, specs, bindings_hint):
-        path, token = self._check(source_ref, expected_token)
-        wb = load_workbook(path, data_only=True, keep_links=False)
         try:
-            result = engine.match_specs(specs, wb, _sheets_of(wb), bindings_hint)
+            path, token = self._check(source_ref, expected_token)
+            wb = load_workbook(path, data_only=True, keep_links=False)
+            try:
+                result = engine.match_specs(specs, wb, _sheets_of(wb), bindings_hint)
+            finally:
+                wb.close()
+            self._verify(source_ref, token)
+            return result
         finally:
-            wb.close()
-        self._check(source_ref, token)
-        return result
+            release_sessions()
 
     def extract(self, source_ref, expected_token, specs, bindings):
-        path, token = self._check(source_ref, expected_token)
-        raw = load_workbook(path, data_only=False, keep_links=False)
-        cached = load_workbook(path, data_only=True, keep_links=False)
+        # 스트림 연산의 finally는 소비자가 중간에 끊어도(GeneratorExit) 돈다 — 해제본이 남지 않는다.
         try:
-            yield from engine.extract(raw, cached, bindings, specs)
+            path, token = self._check(source_ref, expected_token)
+            raw = load_workbook(path, data_only=False, keep_links=False)
+            cached = load_workbook(path, data_only=True, keep_links=False)
+            try:
+                yield from engine.extract(raw, cached, bindings, specs)
+            finally:
+                raw.close()
+                cached.close()
+            self._verify(source_ref, token)
+            yield {"type": "verified", "token": token}
         finally:
-            raw.close()
-            cached.close()
-        self._check(source_ref, token)
-        yield {"type": "verified", "token": token}
+            release_sessions()
 
     def render(self, source_ref, expected_token, sheet_name, r1=1, c1=1, rows=2000, cols=200):
-        path, token = self._check(source_ref, expected_token)
-        # 렌더러는 별도 모듈(schema/render/renderer.py)이며 여기서 경로를 넘긴다(호출자는 경로를 모른다).
-        from .render.renderer import render_events
+        try:
+            path, token = self._check(source_ref, expected_token)
+            # 렌더러는 별도 모듈(schema/render/renderer.py)이며 여기서 경로를 넘긴다(호출자는 경로를 모른다).
+            from .render.renderer import render_events
 
-        yield from render_events(path, sheet_name, token, r1, c1, rows, cols)
-        self._check(source_ref, token)
-        yield {"type": "verified", "token": token}
+            yield from render_events(path, sheet_name, token, r1, c1, rows, cols)
+            self._verify(source_ref, token)
+            yield {"type": "verified", "token": token}
+        finally:
+            release_sessions()

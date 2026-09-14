@@ -170,7 +170,7 @@ def approved(world):
 def test_schema_import_projection_and_reimport_deprecates(world):
     s = world.service
     first = s.import_schema(SCHEMA)
-    assert first["current_rev"] == 1 and first["fields"] == 5 and first["deprecated"] == 0
+    assert first["current_rev"] == 1 and first["fields"] == {"total": 5, "added": 5, "updated": 0, "deprecated": 0}
     fields = s.schema_fields("process_standard")
     assert fields["temperature"]["aliases"] == ["온도값", "Temp"] and fields["process"]["value_type"] == "group"
     assert (world.root / "schemas/process_standard/r0001.json").is_file() and (world.root / "schemas/process_standard/current.json").is_file()
@@ -183,7 +183,7 @@ def test_schema_import_projection_and_reimport_deprecates(world):
     smaller["fields"][2].pop("related")
     smaller["fields"][2]["aliases"] = ["온도값"]
     second = s.import_schema(smaller)
-    assert second["current_rev"] == 2 and second["deprecated"] == 1
+    assert second["current_rev"] == 2 and second["fields"] == {"total": 4, "added": 0, "updated": 4, "deprecated": 1}
     fields = s.schema_fields("process_standard")
     assert fields["pressure"]["status"] == "deprecated" and fields["temperature"]["aliases"] == ["온도값"]
     with s.db.connect() as conn:
@@ -195,6 +195,60 @@ def test_schema_import_projection_and_reimport_deprecates(world):
     assert exc.value.code == "INVALID_SCHEMA"
     patched = s.patch_field("process_standard", "lot", aliases=["로트"], description="배치 식별자")
     assert patched["current_rev"] == 3 and s.schema_fields("process_standard")["lot"]["aliases"] == ["로트"]
+
+
+def test_import_schema_modes_and_delete_paths(world):
+    """§4.2 create/revision 구분 · §4.2.1 스키마 삭제 · §4.2.2 필드 삭제(참조 검사·새 리비전)."""
+    s = world.service
+    created = s.import_schema(SCHEMA, mode="create")
+    assert created["current_rev"] == 1 and created["schema_name"] == "공정 데이터 표준"
+
+    # 같은 키 create → 409, 파일도 리비전도 늘지 않는다.
+    with pytest.raises(Problem) as exc:
+        s.import_schema(SCHEMA, mode="create")
+    assert exc.value.code == "SCHEMA_EXISTS" and exc.value.status == 409
+    assert sorted(p.name for p in (world.root / "schemas/process_standard").iterdir()) == ["current.json", "r0001.json"]
+
+    # 없는 키 revision → 404, 폴더를 만들지 않는다.
+    absent = copy.deepcopy(SCHEMA)
+    absent["schema_key"], absent["schema_name"] = "absent", "없는 스키마"
+    with pytest.raises(Problem) as exc:
+        s.import_schema(absent, mode="revision")
+    assert exc.value.code == "UNKNOWN_SCHEMA" and exc.value.status == 404
+    assert not (world.root / "schemas/absent").exists()
+
+    # 필드 추가 → 새 리비전, 삭제 → 그 필드를 뺀 새 리비전 + projection 행 제거.
+    s.create_field("process_standard", "note2", "비고2", parent_field_key="process")
+    assert s.schema_fields("process_standard")["note2"]["field_id"]
+    removed = s.delete_field("process_standard", "note2")
+    assert removed == {"schema_key": "process_standard", "field_key": "note2", "name": "비고2", "current_rev": 3, "fields_remaining": 5}
+    assert "note2" not in s.schema_fields("process_standard")
+    assert [f["field_key"] for f in s.schema_definition("process_standard")["fields"]] == ["process", "lot", "temperature", "pressure", "note"]
+
+    # 자식이 있는 필드는 거부.
+    with pytest.raises(Problem) as exc:
+        s.delete_field("process_standard", "process")
+    assert exc.value.code == "FIELD_HAS_CHILDREN" and exc.value.detail["count"] == 3
+
+    # 프로파일이 쓰면 스키마 삭제 거부, 지우고 나면 폴더까지 사라진다.
+    s.import_profile("process_standard", profile_definition())
+    with pytest.raises(Problem) as exc:
+        s.delete_schema("process_standard")
+    assert exc.value.code == "SCHEMA_IN_USE" and exc.value.detail["profile_count"] == 1 and exc.value.detail["document_count"] == 0
+    assert (world.root / "schemas/process_standard").is_dir()
+
+    # 아무도 쓰지 않는 스키마는 행과 정의 폴더가 함께 사라진다.
+    other = {**copy.deepcopy(SCHEMA), "schema_key": "spare", "schema_name": "여분 스키마"}
+    s.import_schema(other, mode="create")
+    assert s.delete_schema("spare") == {
+        "schema_key": "spare",
+        "schema_name": "여분 스키마",
+        "deleted": {"fields": 5, "aliases": 4, "edges": 4, "revisions": 1},
+    }
+    assert not (world.root / "schemas/spare").exists()
+    with pytest.raises(Problem) as exc:
+        s.delete_schema("spare")
+    assert exc.value.status == 404
 
 
 def test_profile_import_30_and_v2_format_and_rule_projection(world):

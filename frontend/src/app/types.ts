@@ -7,11 +7,24 @@ export type Page<T> = {
   next_cursor: string | null;
 };
 
+// 409 SCHEMA_IN_USE · FIELD_IN_USE · FIELD_HAS_CHILDREN이 함께 주는 근거(§6). 화면은 detail 없이 message만으로도 뜻이 통해야 한다.
+export type ApiErrorDetail = {
+  profiles?: { profile_id: string; profile_name: string; current_rev?: number; status?: string; document_count?: number; rule_keys?: string[] }[];
+  profile_count?: number;
+  document_count?: number;
+  application_count?: number;
+  children?: { field_key: string; name: string }[];
+  count?: number;
+  value_count?: number;
+  mapping_count?: number;
+};
+
 export type ApiErrorBody = {
   error: {
     code: string;
     message: string;
     fields?: Record<string, unknown> | string[];
+    detail?: ApiErrorDetail;
   };
 };
 
@@ -294,12 +307,17 @@ export type ProfileDocumentRow = {
 };
 
 // 정의 파일 리비전(프로파일·스키마 변경 이력).
+// GET /schemas/{key}/revisions · GET /profiles/{id}/revisions — 정의 파일 목록(§7).
+// 작성자·요약은 정의 파일에 없으므로 서버가 보내지 않는다. 화면도 그 열을 두지 않는다.
 export type RevisionRow = {
   rev: number;
+  current?: boolean;
   created_at: string;
-  created_by?: string | null;
-  summary?: string | null;
-  format_detected?: string | null;
+  byte_size?: number;
+  rule_count?: number;
+  field_count?: number;
+  description?: string | null;
+  profile_name?: string | null;
 };
 
 export type ProfileImportPreview = {
@@ -340,10 +358,39 @@ export type SchemaRow = {
   field_count: number;
   profile_count: number;
   document_count: number;
+  // 적용 기록 수 — 스키마 삭제가 막히는 기준(§4.2.1). 목록 응답에는 없고 상세에만 있다.
+  application_count?: number;
   updated_at?: string;
 };
 
 export type SchemaDetail = SchemaRow & { description?: string | null };
+
+// POST /schemas 201 · PUT /schemas/{key} 200 (§6 B).
+export type SchemaSaveResult = {
+  schema_key: string;
+  schema_name: string;
+  current_rev: number;
+  unchanged: boolean;
+  fields: { total: number; added: number; updated: number; deprecated: number };
+};
+
+// DELETE /schemas/{key} 200.
+export type SchemaDeleteResult = {
+  schema_key: string;
+  schema_name: string;
+  deleted: { fields: number; aliases: number; edges: number; revisions: number };
+  // 정의 파일을 지우지 못했을 때만 온다(작업 공간의 schemas/<key>/에는 이미 없다).
+  leftover_path?: string;
+};
+
+// DELETE /schemas/{key}/fields/{field_key} 200.
+export type FieldDeleteResult = {
+  schema_key: string;
+  field_key: string;
+  name: string;
+  current_rev: number;
+  fields_remaining: number;
+};
 
 export type SchemaTreeNode = {
   field_key: string;
@@ -387,6 +434,8 @@ export type FieldDetail = {
   profile_count: number;
   document_count: number;
   status: string;
+  // POST·PATCH·GET 필드 상세 공용: 저장 뒤 rev는 스키마의 current_rev다(§6 B).
+  schema?: { key: string; name: string; rev: number };
 };
 
 export type FieldValueRow = {
@@ -792,11 +841,33 @@ export type StatusResponse = {
   };
 };
 
+// GET /settings (§6 B) — 사용자 접근 토큰 관련 키는 없다(메인 API는 인증하지 않는다).
+export type ReaderDrmSettings = {
+  available: boolean;
+  temp_dir_ok?: boolean;
+  ttl_seconds?: number;
+  cache_mb?: number;
+  magics?: number;
+};
+
+export type ReaderSettings = {
+  factory: string | null;
+  revision?: string | null;
+  timeout_seconds?: number;
+  memory_mb?: number;
+  drm?: ReaderDrmSettings;
+};
+
 export type SettingsResponse = {
+  version?: string;
   workspace: string;
+  principal?: string | null;
+  engine_version?: string;
+  renderer_version?: string;
   render: { mode: string; url: string | null; renderer_version?: string };
-  reader_factory: string | null;
+  reader?: ReaderSettings;
   limits: Record<string, number | string>;
+  paths?: Record<string, string>;
   [key: string]: unknown;
 };
 

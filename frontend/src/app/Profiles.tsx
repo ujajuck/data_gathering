@@ -1,13 +1,12 @@
-// 파싱 프로파일 화면(§7 Profiles): 목록(검색 250ms · 상태 필터 · 외부 Profile Import · 새 프로파일) → 상세(?profile=)는
-// ProfileDetail, 가져오기 대화상자는 ProfileImport. 상세를 열면 목록은 왼쪽의 좁은 목록으로 접힌다.
+// 파싱 프로파일 화면(§7 Profiles): 목록(검색 250ms · 상태 필터 · `+ 새 프로파일` 하나) → 상세(?profile=)는 ProfileDetail,
+// 만들기 대화상자는 ProfileNew(빈 골격·붙여넣기·파일 올리기). 상세를 열면 목록은 왼쪽의 좁은 목록으로 접힌다.
 import { useEffect, useState } from "react";
 import { Pager, State, formatDateTime, relativeTime, useDebounced, useNavigation, usePage, useToast, withQuery } from "./client";
 import type { ProfileRow, ProfileStatus } from "./types";
 import { PROFILE_STATUS_LABELS } from "./types";
 import { Heading, ProfileStatusChip } from "./ui";
 import ProfileDetail from "./ProfileDetail";
-import ProfileImport from "./ProfileImport";
-import type { ImportMode } from "./ProfileImport";
+import ProfileNew from "./ProfileNew";
 
 const PROFILE_STATUSES: ProfileStatus[] = ["draft", "approved", "deprecated"];
 const isProfileStatus = (value: string | undefined): value is ProfileStatus =>
@@ -16,9 +15,8 @@ const isProfileStatus = (value: string | undefined): value is ProfileStatus =>
 export default function Profiles() {
   const { route, go, replace, refresh } = useNavigation();
   const { notify } = useToast();
-  // 작업 내역의 '프로파일 만들기'는 ?screen=profiles&import=1&snapshot=<sid>로 들어온다(§7 큐 행동).
+  // 작업 내역의 '프로파일 만들기'는 ?screen=profiles&import=1로 들어온다(§7 큐 행동).
   const importRequested = route.import === "1";
-  const importSnapshot = importRequested ? route.snapshot || "" : "";
   const [query, setQuery] = useState("");
   const q = useDebounced(query.trim(), 250);
   // 문서 화면의 status(문서 상태)가 남아 있어도 프로파일 상태가 아니면 무시한다.
@@ -26,15 +24,15 @@ export default function Profiles() {
   const profiles = usePage<ProfileRow>(withQuery("/profiles", { q, status, schema_key: route.schema_key }), refresh);
   const items = profiles.items;
   const selected = route.profile || "";
-  const [dialog, setDialog] = useState<ImportMode | null>(importRequested ? "import" : null);
+  const [dialog, setDialog] = useState(importRequested);
   useEffect(() => {
-    if (importRequested) setDialog("import");
+    if (importRequested) setDialog(true);
   }, [importRequested]);
   const open = (id: string) => go({ profile: id, tab: "", rev: "" });
   const closeDialog = () => {
-    setDialog(null);
-    // URL로 열린 대화상자는 닫을 때 import·snapshot을 지워 새로고침해도 다시 열리지 않게 한다.
-    if (importRequested) replace({ import: "", snapshot: "" });
+    setDialog(false);
+    // URL로 열린 대화상자는 닫을 때 import를 지워 새로고침해도 다시 열리지 않게 한다.
+    if (importRequested) replace({ import: "" });
   };
   return (
     <>
@@ -43,14 +41,9 @@ export default function Profiles() {
           title="파싱 프로파일"
           description="문서 양식에서 데이터를 찾는 규칙을 관리하고 실제 파일에 적용해 검증합니다."
           actions={
-            <>
-              <button type="button" onClick={() => setDialog("import")}>
-                외부 Profile Import
-              </button>
-              <button type="button" className="primary" onClick={() => setDialog("new")}>
-                새 프로파일
-              </button>
-            </>
+            <button type="button" className="primary" onClick={() => setDialog(true)}>
+              + 새 프로파일
+            </button>
           }
         />
         <div className={selected ? "app-split two" : ""}>
@@ -81,8 +74,8 @@ export default function Profiles() {
               resource={profiles}
               empty={q || status ? "조건에 맞는 파싱 프로파일이 없습니다." : "아직 파싱 프로파일이 없습니다. 외부 JSON을 가져오거나 새로 만드세요."}
               action={
-                <button type="button" className="primary" onClick={() => setDialog("new")}>
-                  새 프로파일
+                <button type="button" className="primary" onClick={() => setDialog(true)}>
+                  + 새 프로파일
                 </button>
               }
             />
@@ -93,9 +86,7 @@ export default function Profiles() {
         </div>
       </div>
       {dialog && (
-        <ProfileImport
-          mode={dialog}
-          initialSnapshot={importSnapshot || undefined}
+        <ProfileNew
           onClose={closeDialog}
           onSaved={(profile) => {
             closeDialog();

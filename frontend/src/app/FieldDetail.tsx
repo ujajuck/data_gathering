@@ -1,6 +1,7 @@
 // 파싱 스키마 > 필드 상세(§7 FieldDetail). 선택 시 GET /schemas/{key}/fields/{field_key} + 최근 값(…/values?limit=5) 2회.
 // 필드명·영문명·설명·타입·단위·alias·상태·부모/자식/관련 링크·'사용 프로파일 N개 보기 ›'·'연관 문서 N개 보기 ›'·
-// 'Source Review 열기'(최신 값의 application/rule/sheet/range; 값 없으면 비활성+힌트)·최근 값 목록(원본 보기)·편집(PATCH).
+// 'Source Review 열기'(최신 값의 application/rule/sheet/range; 값 없으면 비활성+힌트)·최근 값 목록(원본 보기)·
+// 편집(PATCH — 응답이 곧 필드 상세라 화면을 그대로 갱신한다)·삭제(확인 대화상자는 Schema가 연다).
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { State, api, errorMessage, formatDateTime, regionLabel, relativeTime, reviewRoute, useData, useNavigation, withQuery } from "./client";
@@ -39,6 +40,7 @@ export default function FieldDetail({
   names,
   onOpenTab,
   onSaved,
+  onDelete,
 }: {
   schemaKey: string;
   fieldKey: string;
@@ -46,6 +48,8 @@ export default function FieldDetail({
   names: Map<string, string>;
   onOpenTab: (tab: "profiles" | "documents", fieldKey: string) => void;
   onSaved: (field: FieldDetailData) => void;
+  // 삭제 확인 대화상자는 Schema가 연다(뒤 화면 inert를 한 곳에서 관리한다).
+  onDelete: () => void;
 }) {
   const { go } = useNavigation();
   const base = `/schemas/${encodeURIComponent(schemaKey)}/fields/${encodeURIComponent(fieldKey)}`;
@@ -64,9 +68,14 @@ export default function FieldDetail({
       <div className="app-card-head">
         <h3>필드 상세</h3>
         {data && !editing && (
-          <button type="button" className="small" onClick={() => setEditing(true)}>
-            편집
-          </button>
+          <span className="app-inline">
+            <button type="button" className="small" onClick={() => setEditing(true)}>
+              편집
+            </button>
+            <button type="button" className="small danger" onClick={onDelete}>
+              삭제
+            </button>
+          </span>
         )}
       </div>
       <State resource={field} isEmpty={false} />
@@ -216,8 +225,13 @@ function FieldEditForm({ field, path, onCancel, onSaved }: { field: FieldDetailD
     setSaving(true);
     setError("");
     try {
+      // §6 B: PATCH 응답은 GET과 같은 필드 상세다. 응답을 그대로 화면 값으로 쓴다(가져오기 요약이면 낙관적 병합으로 되돌린다).
       const saved = await api<FieldDetailData | null>(path, patch, { method: "PATCH" });
-      onSaved({ ...field, ...patch, ...(saved && typeof saved === "object" ? saved : {}) });
+      const next =
+        saved && typeof saved === "object" && typeof (saved as FieldDetailData).field_key === "string"
+          ? (saved as FieldDetailData)
+          : { ...field, ...patch };
+      onSaved(next);
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {

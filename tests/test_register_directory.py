@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from schema import __main__ as cli
+from schema import drm
 from schema import jobs as jobs_module
 from schema import service as service_module
 from schema.api import create_app
@@ -169,7 +170,7 @@ def test_scan_skips_names_that_normalization_would_move(ws):
 
 
 def test_legacy_xls_message_names_the_format(ws):
-    """.xls(OLE2)는 암호화 문서와 매직이 같다 — 코드·상태는 §4.1 그대로 잠김이지만 문구가 두 경우를 모두 알려 준다."""
+    """.xls(OLE2)는 보호 문서와 매직이 같다 — 어댑터가 없으면 둘 다 잠김이고, 문구가 무엇을 설정해야 하는지 말한다(§3.5(2))."""
     (ws.raw / "일괄/구형.xls").write_bytes(LOCKED_BYTES)
     job = ws.register_directory("일괄", wait=120)
     assert job["state"] == "succeeded", job
@@ -178,9 +179,13 @@ def test_legacy_xls_message_names_the_format(ws):
     assert (legacy["error"]["code"], legacy["status"]) == ("DRM_READER_REQUIRED", "locked")
     assert "구형 .xls 형식" in legacy["error"]["message"]
     assert ".xlsx로 저장" in legacy["error"]["message"]
-    # 확장자가 .xlsx인 암호화 문서의 문구는 그대로다.
-    assert rows["일괄/잠김.xlsx"]["error"]["message"] == "암호화 문서는 승인된 보안 읽기 어댑터로 접근해야 합니다."
+    assert "SCHEMA_READER_FACTORY" in legacy["error"]["message"]
+    # 확장자가 .xlsx인 보호 문서는 기본 문구 — 설정할 것(SCHEMA_READER_FACTORY)을 알려 준다.
+    assert rows["일괄/잠김.xlsx"]["error"]["message"] == drm.READER_REQUIRED_MESSAGE
+    assert "SCHEMA_READER_FACTORY" in drm.READER_REQUIRED_MESSAGE
     assert job["result"]["summary"]["locked"] == 2
+    # §3.5(4): 잠긴 접근도 작업 결과의 해제 비용에 남는다.
+    assert job["result"]["drm"] == {"unlocked": 0, "reused": 0, "failed": 2}
 
 
 def test_unknown_provider_is_rejected_before_the_job(ws, monkeypatch):
@@ -338,7 +343,7 @@ def client(tmp_path):
     (root / "data/raw").mkdir(parents=True)
     make_tree(root)
     app = create_app(root, start_worker=False)
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="http://127.0.0.1") as test_client:
         app.state.service._render = types.SimpleNamespace(
             invalidate=lambda *_: None, close=lambda: None, mode="inprocess", url=None, status=lambda: {}
         )

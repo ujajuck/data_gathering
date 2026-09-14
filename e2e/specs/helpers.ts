@@ -17,6 +17,11 @@ export const API_PREFIX = "/api";
 export const SCREEN_LABELS = ["문서", "파싱 프로파일", "파싱 스키마", "데이터 빌드", "작업 내역"] as const;
 export type ScreenLabel = (typeof SCREEN_LABELS)[number] | "설정";
 
+// 보호 문서를 넘길 Reader가 없을 때의 `DRM_READER_REQUIRED` 문구(계약 §3.5(2) · §C).
+// 잠겼다고만 말하지 않고 무엇을 설정해야 하는지 말한다 — 문서/작업 내역/Source Review 세 스펙이 같은 문구를 본다.
+export const DRM_MESSAGE =
+  "보호된 문서입니다. 서버에 보안 읽기 어댑터(SCHEMA_READER_FACTORY)를 설정하면 읽을 수 있습니다 — 설정 화면의 Reader 카드에서 연결 상태를 확인하세요.";
+
 // pageerror + console.error(favicon 제외)를 모아 마지막에 비어 있음을 단언한다.
 export function collectErrors(page: Page): { errors: string[]; assertClean: () => void } {
   const errors: string[] = [];

@@ -125,18 +125,13 @@ export function SchemaDocumentsTab({ schemaKey, fieldKey }: { schemaKey: string;
   );
 }
 
-export function SchemaHistoryTab({ schemaKey, currentRev, onNewRevision, version = 0 }: { schemaKey: string; currentRev: number; onNewRevision: () => void; version?: number }) {
+export function SchemaHistoryTab({ schemaKey, currentRev, version = 0 }: { schemaKey: string; currentRev: number; version?: number }) {
   // version은 쓰기(필드 편집·새 리비전) 뒤 다시 읽기 위한 카운터.
   const revisions = useData<Page<RevisionRow>>(`/schemas/${encodeURIComponent(schemaKey)}/revisions`, version);
   const items = revisions.data?.items ?? [];
   return (
     <>
-      <div className="app-toolbar">
-        <span className="app-muted app-small app-grow">정의 파일 리비전. 필드 편집도 새 리비전을 만듭니다.</span>
-        <button type="button" className="small" onClick={onNewRevision}>
-          새 리비전 가져오기
-        </button>
-      </div>
+      <p className="app-muted app-small">정의 파일 리비전. 필드 편집·필드 삭제도 새 리비전을 만듭니다. 새 리비전은 위 '새 리비전' 버튼으로 올립니다.</p>
       <State resource={revisions} empty="변경 이력이 없습니다." />
       {items.length > 0 && (
         <div className="app-table-wrap">
@@ -145,8 +140,7 @@ export function SchemaHistoryTab({ schemaKey, currentRev, onNewRevision, version
               <tr>
                 <th scope="col">버전</th>
                 <th scope="col">일시</th>
-                <th scope="col">작성자</th>
-                <th scope="col">요약</th>
+                <th scope="col">필드</th>
               </tr>
             </thead>
             <tbody>
@@ -156,8 +150,7 @@ export function SchemaHistoryTab({ schemaKey, currentRev, onNewRevision, version
                     v{r.rev} {r.rev === currentRev && <Chip kind="blue">현재</Chip>}
                   </td>
                   <td>{formatDateTime(r.created_at)}</td>
-                  <td>{r.created_by || <span className="app-muted">-</span>}</td>
-                  <td className="app-wrap">{r.summary || <span className="app-muted">-</span>}</td>
+                  <td>필드 {r.field_count ?? 0}개</td>
                 </tr>
               ))}
             </tbody>

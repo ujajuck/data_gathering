@@ -10,7 +10,7 @@ def test_parse_env_handles_comments_quotes_and_export():
 # comment
 SCHEMA_READER_TIMEOUT_SECONDS=120
 SCHEMA_PRINCIPAL= # 비어 있음
-export SCHEMA_ACCESS_TOKEN="secret # not a comment"
+export SCHEMA_RENDER_TOKEN="secret # not a comment"
 SCHEMA_READER_FACTORY='pkg.reader:factory'
 BAD LINE
 1BAD=x
@@ -18,7 +18,7 @@ BAD LINE
     assert parse_env(text) == {
         "SCHEMA_READER_TIMEOUT_SECONDS": "120",
         "SCHEMA_PRINCIPAL": "",
-        "SCHEMA_ACCESS_TOKEN": "secret # not a comment",
+        "SCHEMA_RENDER_TOKEN": "secret # not a comment",
         "SCHEMA_READER_FACTORY": "pkg.reader:factory",
     }
 
@@ -39,14 +39,32 @@ def test_load_env_prefers_existing_values_and_workspace_first(tmp_path):
 def test_legacy_env_prefixes_are_reported_not_used():
     """옛 이름만 설정돼 있으면 조용히 기본값으로 떨어지지 않게 시작 시 한 번 알린다(폴백은 없다)."""
     out = io.StringIO()
-    env = {"KG_V3_ACCESS_TOKEN": "s3cret", "KG_E2E_PORT": "8031", "SCHEMA_PRINCIPAL": "local"}
-    assert warn_legacy_env(env, stream=out) == ["KG_E2E_PORT", "KG_V3_ACCESS_TOKEN"]
+    env = {"KG_V3_RENDER_URL": "http://old", "KG_E2E_PORT": "8031", "SCHEMA_PRINCIPAL": "local"}
+    assert warn_legacy_env(env, stream=out) == ["KG_E2E_PORT", "KG_V3_RENDER_URL"]
     message = out.getvalue()
-    assert "KG_V3_ACCESS_TOKEN → SCHEMA_ACCESS_TOKEN" in message
+    assert "KG_V3_RENDER_URL → SCHEMA_RENDER_URL" in message
     assert "KG_E2E_PORT → SCHEMA_E2E_PORT" in message
-    assert "s3cret" not in message  # 값은 출력하지 않는다
+    assert "http://old" not in message  # 값은 출력하지 않는다
     # 옛 이름만 있는 상태에서 SCHEMA_ 조회는 여전히 비어 있다 — 폴백을 만들지 않았다.
-    assert env.get("SCHEMA_ACCESS_TOKEN") is None
+    assert env.get("SCHEMA_RENDER_URL") is None
     quiet = io.StringIO()
-    assert warn_legacy_env({"SCHEMA_ACCESS_TOKEN": "s3cret"}, stream=quiet) == []
+    assert warn_legacy_env({"SCHEMA_RENDER_URL": "http://new"}, stream=quiet) == []
     assert quiet.getvalue() == ""
+
+
+def test_renamed_keys_fall_back_once_with_a_warning():
+    """`SCHEMA_ACCESS_TOKEN` → `SCHEMA_RENDER_TOKEN` 개명: 옛 이름만 있으면 그 값을 쓰고 경고한다.
+
+    폴백이 없으면 기존 배포가 업그레이드하자마자 렌더 서버 인증을 조용히 잃는다(§5)."""
+    out = io.StringIO()
+    env = {"SCHEMA_ACCESS_TOKEN": "s3cret"}
+    assert warn_legacy_env(env, stream=out) == []
+    assert env["SCHEMA_RENDER_TOKEN"] == "s3cret"
+    message = out.getvalue()
+    assert "SCHEMA_ACCESS_TOKEN → SCHEMA_RENDER_TOKEN" in message
+    assert "s3cret" not in message  # 값은 출력하지 않는다
+    # 새 이름이 이미 있으면 덮어쓰지 않고 아무 말도 하지 않는다.
+    quiet = io.StringIO()
+    both = {"SCHEMA_ACCESS_TOKEN": "old", "SCHEMA_RENDER_TOKEN": "new"}
+    warn_legacy_env(both, stream=quiet)
+    assert both["SCHEMA_RENDER_TOKEN"] == "new" and quiet.getvalue() == ""

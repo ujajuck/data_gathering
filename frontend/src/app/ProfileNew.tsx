@@ -1,50 +1,34 @@
-// 외부 Profile Import / 새 프로파일 대화상자(§7 Profiles): 붙여넣기·업로드 → 형식 자동 판별(POST /profiles/import-preview
-// {schema_key, definition, format:'auto'}) → canonical 미리보기 + 경고·오류 → '대표 문서로 테스트'(?test=draft) → 저장(POST /profiles).
-import { useEffect, useMemo, useRef, useState } from "react";
-import { State, api, errorMessage, useData, useDebounced, useNavigation, usePage } from "./client";
-import type { DocumentRow, Page, ProfileImportPreview, ProfileSaveResult, SchemaRow } from "./types";
+// 새 프로파일 대화상자(§7 Profiles). 버튼은 목록의 `+ 새 프로파일` 하나뿐이고, 시작 방법을 라디오로 고른다:
+// 빈 골격으로 시작(기본) · 정의 붙여넣기 또는 파일 업로드. 붙여넣은 JSON은 POST /profiles/import-preview
+// {schema_key, definition, format:'auto'}로 형식을 자동 판별해 canonical 미리보기와 경고·오류를 보여 준다.
+// 저장은 POST /profiles. 저장 전에는 리비전이 없어 테스트할 수 없다 — 테스트는 저장 뒤 상세 화면에서 한다.
+import { useEffect, useMemo, useState } from "react";
+import { State, api, errorMessage, useData, useDebounced } from "./client";
+import type { Page, ProfileImportPreview, ProfileSaveResult, SchemaRow } from "./types";
 import { Chip, Modal } from "./ui";
 import { newProfileSkeleton, parseDefinition, pretty, problemText } from "./profileModel";
 import type { Problem } from "./profileModel";
-import { setProfileDraft } from "./profileDraft";
 
-export type ImportMode = "import" | "new";
-
-export default function ProfileImport({
-  mode,
-  initialSnapshot,
-  onClose,
-  onSaved,
-}: {
-  mode: ImportMode;
-  // 작업 내역 큐(?import=1&snapshot=)에서 열릴 때 '테스트 문서'로 미리 고를 snapshot.
-  initialSnapshot?: string;
-  onClose: () => void;
-  onSaved: (profile: ProfileSaveResult) => void;
-}) {
-  const { go } = useNavigation();
-  const title = mode === "new" ? "새 프로파일" : "외부 Profile Import";
+export default function ProfileNew({ onClose, onSaved }: { onClose: () => void; onSaved: (profile: ProfileSaveResult) => void }) {
+  const title = "새 프로파일";
   const schemas = useData<Page<SchemaRow>>("/schemas");
   const schemaList = schemas.data?.items ?? [];
   const [schemaKey, setSchemaKey] = useState("");
   const [name, setName] = useState("");
+  const [start, setStart] = useState<"skeleton" | "paste">("skeleton");
   const [text, setText] = useState("");
   const [preview, setPreview] = useState<ProfileImportPreview | null>(null);
   const [previewError, setPreviewError] = useState("");
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const [testSnapshot, setTestSnapshot] = useState(initialSnapshot || "");
-  const seeded = useRef(false);
   useEffect(() => {
     if (!schemaKey && schemaList.length) setSchemaKey(schemaList[0].schema_key);
   }, [schemaKey, schemaList]);
+  // 빈 골격으로 시작: 고른 스키마의 canonical 3.0 골격을 채워 둔다. 붙여넣기로 바꾸면 비운다.
   useEffect(() => {
-    if (mode === "new" && schemaKey && !seeded.current) {
-      seeded.current = true;
-      setText(pretty(newProfileSkeleton(schemaKey)));
-    }
-  }, [mode, schemaKey]);
+    if (start === "skeleton" && schemaKey) setText(pretty(newProfileSkeleton(schemaKey)));
+  }, [start, schemaKey]);
   const parsed = useMemo(() => parseDefinition(text), [text]);
   const debouncedText = useDebounced(text, 400);
   // 형식 자동 판별: 붙여넣은 JSON이 파싱되면 400ms 뒤 미리보기를 요청한다.
@@ -76,26 +60,17 @@ export default function ProfileImport({
   }, [debouncedText, schemaKey]);
   const errors: Problem[] = (preview?.errors as Problem[] | undefined) || [];
   const warnings: Problem[] = (preview?.warnings as Problem[] | undefined) || [];
-  const valid = !!preview && errors.length === 0 && !!parsed.definition;
-  const documents = usePage<DocumentRow>(valid ? "/documents" : null);
-  const candidates = documents.items.filter((d) => d.current_snapshot);
-  const snapshotId = testSnapshot || candidates[0]?.current_snapshot?.snapshot_id || "";
-  // 큐에서 넘어온 snapshot이 첫 페이지 문서 목록에 없으면 별도 항목으로 보여 준다(ID는 값으로만 쓴다).
-  const snapshotListed = !snapshotId || candidates.some((d) => d.current_snapshot?.snapshot_id === snapshotId);
   const canonicalName = preview?.canonical && typeof preview.canonical.profile_name === "string" ? preview.canonical.profile_name : "";
 
   function upload(file: File | undefined) {
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => setText(String(reader.result || ""));
+    reader.onload = () => {
+      setStart("paste");
+      setText(String(reader.result || ""));
+    };
     reader.readAsText(file);
     if (!name && file.name) setName(file.name.replace(/\.json$/i, ""));
-  }
-  function testDraft() {
-    if (!preview || !snapshotId) return;
-    setProfileDraft({ schema_key: schemaKey, definition: preview.canonical, profile_name: name || canonicalName || undefined, format: preview.format_detected });
-    onClose();
-    go({ test: "draft", snapshot: snapshotId, review: "", rule: "", range: "", sheet: "" });
   }
   async function save() {
     if (!parsed.definition || !schemaKey) return;
@@ -122,14 +97,6 @@ export default function ProfileImport({
           <button type="button" onClick={onClose} disabled={saving}>
             취소
           </button>
-          <button
-            type="button"
-            disabled={!valid || !snapshotId || saving}
-            title={!valid ? "오류 없는 미리보기가 있어야 테스트할 수 있습니다." : !snapshotId ? "테스트할 문서가 없습니다." : "저장하지 않고 선택한 문서에 적용해 봅니다."}
-            onClick={testDraft}
-          >
-            대표 문서로 테스트
-          </button>
           <button type="button" className="primary" disabled={!parsed.definition || !schemaKey || saving || errors.length > 0} onClick={save}>
             저장
           </button>
@@ -138,10 +105,9 @@ export default function ProfileImport({
     >
       <div className="app-stack">
         <p className="app-muted app-small">
-          {mode === "new"
-            ? "canonical 3.0 형식의 기본 골격을 채워 두었습니다. 규칙을 고친 뒤 저장하면 초안 프로파일이 만들어집니다."
-            : "예전 양식 정의나 key-value JSON을 붙여넣으면 형식을 판별해 canonical 3.0으로 변환한 결과를 미리 보여줍니다."}
+          시작 방법을 고르세요. 붙여넣거나 올린 정의는 형식을 자동으로 판별해 canonical 3.0으로 바꿔 보여 줍니다.
         </p>
+        <p className="app-muted app-small">저장한 뒤 상세 화면에서 문서를 골라 테스트하세요.</p>
         <div className="app-form-grid">
           <label>
             파싱 스키마
@@ -164,6 +130,40 @@ export default function ProfileImport({
           </label>
         </div>
         <State resource={schemas} isEmpty={false} />
+        <div className="app-list" role="radiogroup" aria-label="시작 방법">
+          <label className="app-check app-list-item">
+            <input
+              type="radio"
+              name="profile-start"
+              aria-label="빈 골격으로 시작"
+              checked={start === "skeleton"}
+              onChange={() => {
+                setStart("skeleton");
+                if (schemaKey) setText(pretty(newProfileSkeleton(schemaKey)));
+              }}
+            />
+            <span>
+              <strong>빈 골격으로 시작</strong>
+              <small>canonical 3.0 기본 골격을 채워 둡니다.</small>
+            </span>
+          </label>
+          <label className="app-check app-list-item">
+            <input
+              type="radio"
+              name="profile-start"
+              aria-label="정의 붙여넣기 또는 파일 업로드"
+              checked={start === "paste"}
+              onChange={() => {
+                setStart("paste");
+                setText("");
+              }}
+            />
+            <span>
+              <strong>정의 붙여넣기 또는 파일 업로드</strong>
+              <small>예전 양식 정의나 key-value JSON도 형식을 판별합니다.</small>
+            </span>
+          </label>
+        </div>
         <label>
           정의 JSON
           <textarea
@@ -218,20 +218,6 @@ export default function ProfileImport({
               canonical 미리보기
               <textarea className="app-json-editor" rows={10} readOnly spellCheck={false} value={pretty(preview.canonical)} />
             </label>
-            {valid && (
-              <label>
-                테스트 문서
-                <select value={snapshotId} onChange={(e) => setTestSnapshot(e.target.value)} disabled={candidates.length === 0 && snapshotListed}>
-                  {candidates.length === 0 && snapshotListed && <option value="">{documents.loading ? "불러오는 중…" : "문서 없음"}</option>}
-                  {!snapshotListed && <option value={snapshotId}>작업 내역에서 고른 문서</option>}
-                  {candidates.map((d) => (
-                    <option key={d.document_id} value={d.current_snapshot!.snapshot_id}>
-                      {d.document_name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
           </section>
         )}
         {saveError && (

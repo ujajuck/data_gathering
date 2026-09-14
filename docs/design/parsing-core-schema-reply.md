@@ -2,8 +2,11 @@
 
 작성일: 2026-09-11
 대상: [`parsing-core-schema.md`](parsing-core-schema.md) (커밋 `07b5de0`)
-근거: `db/v2/schema_sqlite.sql`, `kg/v2/spec.py`·`build.py`·`features.py`·`graph.py`·`api.py`·`recrawl.py`, [`db-schema-v2.md`](db-schema-v2.md) §8.
+근거: `db/v2/schema_sqlite.sql`, `kg/v2/spec.py`·`build.py`·`features.py`·`graph.py`·`api.py`·`recrawl.py`, `db-schema-v2.md` §8.
 아래 파일:줄 표기는 이 커밋 기준이다.
+
+> 이 문서는 2026-09-11 시점의 검토 기록이다. 여기서 가리키는 이전 세대 코드(`kg/v2/`·`db/v2/`)와 문서(`db-schema-v2.md`·`v2-restoration.md`)는
+> 이후 저장소에서 삭제됐다([decisions.md §12](decisions.md)) — 이름은 당시 근거를 밝히기 위해 그대로 두고 링크만 풀었다. 현행 계약은 [contracts.md](contracts.md)다.
 
 ## 결론
 
@@ -23,7 +26,7 @@
 **값을 어떻게 읽고 변환하는지**는 어디에도 고정되지 않는다.
 
 v2는 `mapping_revision.effective_spec_json`에 셀렉터·값 타입·`normalization`(identity/trim/affine/pipeline)을 함께 저장하고,
-`spec.py:244-256`이 리비전 저장 시 이를 검증한다. 프리셋은 이름이 아니라 연산 배열로 고정된다([복원 기록 §전처리](v2-restoration.md)).
+`spec.py:244-256`이 리비전 저장 시 이를 검증한다. 프리셋은 이름이 아니라 연산 배열로 고정된다(복원 기록 `v2-restoration.md` §전처리).
 
 초안대로면 `parsing_rule.value_spec`(현재 projection)이나 `normalizers.yaml`을 바꾸는 순간 과거 추출의 의미가 바뀐다.
 답장 §1이 지적한 "어제 B3→온도, 오늘 B3→압력"과 같은 종류의 문제가 값 변환 축에서 되풀이된다.

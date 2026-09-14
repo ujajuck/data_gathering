@@ -28,15 +28,16 @@ npm test
 | 스펙 | 검증 |
 |---|---|
 | `specs/documents.spec.ts` | 등록 대화상자 · 7개 상태 칩 · 정렬/필터 · 드로어 4탭(파일 보기 202 폴링) · 문서→프로파일→스키마 관계 |
-| `specs/profiles.spec.ts` | 목록·6탭 · JSON 검증 · 이전 세대 정의 Import 미리보기 경고 · 테스트 → Source Review overlay · 승인 · 재파싱 |
-| `specs/schema.spec.ts` | 트리/그래프 토글 · 필드 상세 · 사용 프로파일/연관 문서 탭 · 필드에서 Source Review |
+| `specs/profiles.spec.ts` | 목록 · 탭 없는 단일 상세(요약줄 · 정의 JSON 편집기 · 테스트 팝오버 · 변경 이력) · `+ 새 프로파일` 하나(빈 골격/붙여넣기, 이전 세대 정의 형식 판별과 경고) · 정의 편집 → 새 리비전 → Source Review 테스트 모드 · 대표 문서 지정 · 재파싱 |
+| `specs/schema.spec.ts` | 트리/그래프 토글 · 필드 상세 · 사용 프로파일/연관 문서 탭 · 필드에서 Source Review · 필드 편집(PATCH → 필드 상세) · 새 스키마 만들기(생성 전용, 같은 키 409) · 필드 추가/삭제 · 사용 중 필드·스키마 삭제 거부(409) · 빈 스키마 삭제 |
 | `specs/build.spec.ts` | 문서 3개 인계 · candidates · 헤더 중복 오류 · 순서 변경 · 미리보기 원본 보기 · CSV/XLSX/SQLite 내용 · manifest |
 | `specs/jobs.spec.ts` | 요약 카드 · 묶음 행 · approve_all 1클릭 · 실패 이동 · 작업 목록 |
 | `specs/source-review.spec.ts` | 실제 셀·overlay · 드래그 재지정 · 승인→추출 요청 1회 · 역방향 조회 · 잠긴 문서 실패 표시 |
 | `specs/render-isolation.spec.ts` | 렌더 중 문서 API 응답 시간 · 캐시 재접근 < 1초 · 304 |
 | `specs/register-directory.spec.ts` | 폴더 일괄 등록(§4.1.1) — 루트 폴더 하나 지정 → 하위 폴더까지 4개 등록 · 재스캔 `변경 없음`(재실행이 싸다) · 값 바뀐 파일만 `변경 감지` · 폴더 경로 422/404 · 작업 라벨 |
 
-공용 도우미는 `specs/helpers.ts`(오류 수집·작업 공간 리셋·API 호출·다운로드 검사)에 있다. API 접두는 `/api`다.
+공용 도우미는 `specs/helpers.ts`(오류 수집·작업 공간 리셋·API 호출·다운로드 검사·보호 문서 문구 `DRM_MESSAGE`)에 있다. API 접두는 `/api`다.
+스펙 8개 · test() 22개. 메인 API는 사용자 인증이 없다 — 어떤 스펙도 토큰을 보내지 않는다.
 
 ## 환경변수
 
@@ -59,4 +60,5 @@ SCHEMA_E2E_CHROMIUM_PATH=/usr/bin/chromium SCHEMA_E2E_PYTHON=python3 npm test
 
 결과와 완료 조건 대조표는 [docs/e2e-results.md](../docs/e2e-results.md). 실패 보고서는 `e2e/playwright-report`,
 trace·다운로드·스크린샷은 `e2e/test-results`에 남으며 Git에서는 제외한다.
+Playwright는 시작할 때 `test-results`를 비우므로 list reporter 로그(`test-results/run.log`)는 실행이 **끝난 뒤** 옮긴다.
 `.github/workflows/ci.yml`이 백엔드·컴포넌트·빌드·브라우저 검사를 push/PR마다 실행한다.

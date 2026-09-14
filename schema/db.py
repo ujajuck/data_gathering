@@ -73,11 +73,15 @@ CREATE INDEX IF NOT EXISTS document_by_status ON document(status, document_id);
 
 
 class Problem(Exception):
-    """API 오류. code는 안정 식별자, status는 HTTP 상태."""
+    """API 오류. code는 안정 식별자, status는 HTTP 상태.
 
-    def __init__(self, code: str, message: str, status: int = 422, fields=None):
+    detail은 §6의 구조화 본문(SCHEMA_IN_USE·FIELD_IN_USE·FIELD_HAS_CHILDREN에서만 쓴다).
+    화면은 detail 없이 message만으로도 뜻이 통해야 한다.
+    """
+
+    def __init__(self, code: str, message: str, status: int = 422, fields=None, detail=None):
         super().__init__(message)
-        self.code, self.message, self.status, self.fields = code, message, status, fields
+        self.code, self.message, self.status, self.fields, self.detail = code, message, status, fields, detail
 
 
 def now() -> str:

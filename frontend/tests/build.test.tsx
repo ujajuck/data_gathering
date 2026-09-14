@@ -225,7 +225,8 @@ describe("데이터 빌드 화면", () => {
     });
     await user.click(within(card).getByRole("button", { name: "다운로드" }));
     await waitFor(() => expect(clicked).toHaveLength(1));
-    expect(clicked[0].href).toContain(`/api/builds/${BUILD_KEY}/download`);
+    // 먼저 상태를 확인하고(실패면 화면에 오류가 뜬다) 받은 본문을 파일로 저장한다.
+    expect(f.callsTo(new RegExp(`^/builds/${BUILD_KEY}/download$`))).toHaveLength(1);
     expect(clicked[0].download).toBe("data.csv");
 
     // manifest 요약

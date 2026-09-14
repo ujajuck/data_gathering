@@ -166,7 +166,6 @@ export function sourceReviewFixture() {
   };
   f.overrides.set("POST /profiles/" + ids.profile + "/test", runTest);
   f.overrides.set("POST /profiles/" + ids.profile2 + "/test", runTest);
-  f.overrides.set("POST /profiles/test", runTest);
 
   return { ...f, review, reviewUrl: (extra = "") => `?screen=documents&review=${ids.application}${extra}` };
 }

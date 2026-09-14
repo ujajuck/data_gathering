@@ -278,7 +278,7 @@ def test_source_ref_is_normalized(world):
 
 class AppTransport(httpx.BaseTransport):
     def __init__(self, app):
-        self.client = TestClient(app)
+        self.client = TestClient(app, base_url="http://127.0.0.1")
 
     def handle_request(self, request):
         request.read()
@@ -286,11 +286,12 @@ class AppTransport(httpx.BaseTransport):
         return httpx.Response(response.status_code, headers=response.headers, content=response.content)
 
 
-def test_render_server_requires_access_token(tmp_path, monkeypatch):
-    monkeypatch.setenv("SCHEMA_ACCESS_TOKEN", "secret")
+def test_render_server_requires_internal_token(tmp_path, monkeypatch):
+    """렌더 서버의 bearer는 서버 대 서버 내부 토큰(SCHEMA_RENDER_TOKEN)이다 — 사용자 접근 토큰이 아니다(계약 §5)."""
+    monkeypatch.setenv("SCHEMA_RENDER_TOKEN", "secret")
     worker = RenderWorker(tmp_path, event_source=lambda *a, **k: iter([]))
     app = create_render_app(tmp_path, worker=worker)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         assert client.get("/render/status").status_code == 401
         assert client.get("/render/status", headers={"Authorization": "Bearer wrong"}).status_code == 401
         assert client.get("/render/status", headers={"Authorization": "Bearer secret"}).status_code == 200
@@ -332,7 +333,7 @@ def test_profile_documents_paging(world):
 
 def test_validation_errors_are_korean(tmp_path):
     app = create_app(tmp_path / "ws", start_worker=False)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         body = client.get("/api/documents?limit=500").json()["error"]
         assert body["code"] == "VALIDATION_ERROR" and "200 이하" in body["message"] and body["fields"][0]["detail"].startswith("Input should")
         body = client.get("/api/documents?status=bogus").json()["error"]

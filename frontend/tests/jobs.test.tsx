@@ -119,7 +119,7 @@ describe("작업 내역 화면", () => {
     expect(container.textContent).not.toMatch(SHA_RE);
   });
 
-  it("프로파일 만들기는 ?screen=profiles&import=1&snapshot=으로, 재파싱은 방식(mode)을 골라 보낸다", async () => {
+  it("프로파일 만들기는 ?screen=profiles&import=1로, 재파싱은 방식(mode)을 골라 보낸다", async () => {
     const f = jobsFixture();
     f.renderApp("?screen=jobs&queue=failed");
     await screen.findByRole("table", { name: "파싱 실패 묶음" });
@@ -136,7 +136,8 @@ describe("작업 내역 화면", () => {
     await user.click(screen.getByRole("button", { name: "프로파일 만들기" }));
     expect(route().get("screen")).toBe("profiles");
     expect(route().get("import")).toBe("1");
-    expect(route().get("snapshot")).toBe(f.groups.unmatched[0].representative.snapshot_id);
+    // 대화상자에서 테스트하지 않으므로 snapshot은 싣지 않는다.
+    expect(route().get("snapshot")).toBeNull();
   });
 
   it("묶음 행을 펼치면 멤버(문서명 · Snapshot · 상태 · 원본 보기)를 한 번만 불러온다", async () => {

@@ -56,7 +56,7 @@ def world(tmp_path, seeded):
     root = tmp_path / "ws"
     shutil.copytree(source, root)
     app = create_app(root, start_worker=False)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         service = app.state.service
         service._render = RenderClient(root, event_source=inprocess_source)
         yield Env(client, root, copy.deepcopy(summary), service)
@@ -103,9 +103,13 @@ def test_status_search_settings_presets(world):
     assert world.get("/search?q=")["items"] == []
     settings = world.get("/settings")
     assert settings["render"]["mode"] == "inprocess" and settings["reader"]["timeout_seconds"] > 0 and settings["limits"]["wait_seconds"] == 60
-    assert settings["workspace"] == world.root.name and not settings["access_token_required"] and settings["limits"]["profile"]["rules"] == 200
+    # 사용자 접근 토큰은 메인 API에서 사라졌다(§6) — 설정 응답에도 그 키가 없다.
+    assert settings["workspace"] == world.root.name and "access_token_required" not in settings and settings["limits"]["profile"]["rules"] == 200
     # §4.1.1 폴더 일괄 등록 한도(프런트 미리보기 안내 문구가 읽는다)
     assert settings["limits"]["register_directory_files"] == 10000
+    # §3.5 Reader 카드의 보호 문서 줄. 이 블록이 빠지면 설정 화면이 늘 '보안 읽기 없음'만 보여 준다.
+    assert set(settings["reader"]["drm"]) == {"available", "temp_dir_ok", "ttl_seconds", "cache_mb", "magics"}
+    assert settings["reader"]["drm"]["available"] is False and settings["reader"]["drm"]["ttl_seconds"] > 0
     presets = world.get("/normalization-presets")
     assert {p["id"] for p in presets["items"]} >= {"identity", "automatic"}
     response = world.client.get("/api/status")
@@ -373,8 +377,8 @@ def test_profile_import_preview_create_update_and_test(world):
     assert groups["temperature"]["count"] == demo.LOT_COUNT and groups["temperature"]["values"][0]["range"] == "C9" and groups["temperature"]["field"]["key"] == "temperature"
     job = world.get(f"/jobs/{tested['job_id']}")
     assert job["kind"] == "test" and job["state"] == "succeeded" and job["result"] == {"errors": 0, "groups": 11, "compatibility": "identical"}
-    draft_test = world.post("/profiles/test", {"schema_key": "process_standard", "definition": V2_TEMPLATE, "snapshot_id": sid})
-    assert draft_test["compatibility"] in ("compatible", "incompatible") and {g["rule_key"] for g in draft_test["groups"]} >= {"temp"}
+    # 저장 전 정의를 본문으로 받는 POST /profiles/test는 없앴다(저장된 리비전만 테스트한다).
+    assert world.client.post("/api/profiles/test", json={"schema_key": "process_standard", "definition": V2_TEMPLATE, "snapshot_id": sid}).status_code == 405
     assert world.post(f"/profiles/{world.profile_id}/test", {"snapshot_id": "nope"}, expect=404)["error"]["code"] == "NOT_FOUND"
     assert world.post(f"/profiles/{world.profile_id}/approve", {"application_id": world.application_id(demo.SHIFTED_DOCUMENT)}, expect=422)["error"]["code"] == "REVIEW_REQUIRED"
     assert world.post(f"/profiles/{created['profile_id']}/approve", {"application_id": world.application_id(demo.REFERENCE_DOCUMENT)}, expect=422)["error"]["code"] == "INVALID_APPLICATION"
@@ -424,10 +428,12 @@ def test_schemas_list_detail_tree_graph_fields_and_edit(world):
     assert len(values) == 5 and values[0]["sheet_name"] == demo.MAIN_SHEET and values[0]["range"].startswith("C") and values[0]["document_name"] in demo.IDENTICAL_DOCUMENTS
     assert values[0]["created_at"] >= values[-1]["created_at"] and values[0]["rule_key"] == "temperature" and values[0]["text"]
     assert world.get("/schemas/process_standard/fields/basic/values")["items"] == []
+    # PATCH 응답은 가져오기 요약이 아니라 필드 상세다(화면이 이 응답만으로 갱신한다).
     patched = world.client.patch("/api/schemas/process_standard/fields/temperature", json={"aliases": ["온도값", "Temp", "설정온도"], "description": "설정 온도"}).json()
-    assert patched["current_rev"] == 2 and not patched["unchanged"]
+    assert patched["field_key"] == "temperature" and patched["schema"] == {"key": "process_standard", "name": "공정 데이터 표준", "rev": 2}
+    assert patched["aliases"] == ["온도값", "Temp", "설정온도"] and patched["description"] == "설정 온도" and patched["profile_count"] == 1
     field = world.get("/schemas/process_standard/fields/temperature")
-    assert field["aliases"] == ["온도값", "Temp", "설정온도"] and field["description"] == "설정 온도"
+    assert field == patched
     assert [r["rev"] for r in world.get("/schemas/process_standard/revisions")["items"]] == [2, 1]
     assert world.client.patch("/api/schemas/process_standard/fields/nope", json={"name": "x"}).status_code == 404
     assert world.client.patch("/api/schemas/process_standard/fields/temperature", json={"status": "gone"}).json()["error"]["code"] == "VALIDATION_ERROR"
@@ -436,8 +442,17 @@ def test_schemas_list_detail_tree_graph_fields_and_edit(world):
     mismatch = world.client.put("/api/schemas/other_key", json={"definition": definition})
     assert mismatch.status_code == 422 and mismatch.json()["error"]["code"] == "SCHEMA_KEY_MISMATCH"
     updated = world.client.put("/api/schemas/process_standard", json={"definition": definition}).json()
-    assert updated["current_rev"] == 3 and updated["added"] == 1
+    assert updated["current_rev"] == 3 and updated["fields"] == {"total": 15, "added": 1, "updated": 14, "deprecated": 0}
     assert world.get("/schemas")["items"][0]["field_count"] == 15
+    # 같은 정의를 다시 PUT하면 리비전을 올리지 않는다.
+    same = world.client.put("/api/schemas/process_standard", json={"definition": definition}).json()
+    assert same["unchanged"] is True and same["current_rev"] == 3
+    # PUT은 새 리비전 전용 — 없는 키는 404.
+    missing = world.client.put("/api/schemas/nope", json={"definition": {**definition, "schema_key": "nope"}})
+    assert missing.status_code == 404 and missing.json()["error"]["code"] == "UNKNOWN_SCHEMA"
+    assert world.get("/schemas/process_standard/revisions/1")["schema_key"] == "process_standard"
+    assert len(world.get("/schemas/process_standard/revisions/1")["fields"]) == 14
+    assert world.get("/schemas/process_standard/revisions/99", expect=404)["error"]["code"] == "DEFINITION_MISSING"
     invalid = world.post("/schemas", {"definition": {"schema_key": "bad key!", "schema_name": "x", "fields": []}}, expect=422)
     assert invalid["error"]["code"] == "INVALID_SCHEMA"
     assert world.get("/schemas/nope/tree", expect=404)["error"]["code"] == "NOT_FOUND"
@@ -528,16 +543,13 @@ def test_jobs_list_filters_cursor_and_auth(world, monkeypatch):
     assert world.get("/jobs/nope", expect=404)["error"]["code"] == "NOT_FOUND"
     assert world.post("/jobs/nope/cancel", expect=404)["error"]["code"] == "NOT_FOUND"
 
-    monkeypatch.setenv("SCHEMA_ACCESS_TOKEN", "secret")
-    denied = world.client.get("/api/status")
-    assert denied.status_code == 401 and denied.json()["error"]["code"] == "AUTH_REQUIRED"
-    assert world.client.get("/api/status", headers={"Authorization": "Bearer wrong"}).status_code == 401
-    assert world.client.get("/api/status", headers={"Authorization": "Bearer secret"}).status_code == 200
-    assert world.client.get("/api/settings", headers={"Authorization": "Bearer secret"}).json()["access_token_required"]
-    # 토큰을 설정하지 않으면 공개다(대체 환경변수는 없다).
-    monkeypatch.delenv("SCHEMA_ACCESS_TOKEN")
+    # 메인 API는 사용자 토큰을 검사하지 않는다 — 렌더 서버 내부 bearer가 설정돼 있어도 인증 없이 그대로 동작한다.
+    monkeypatch.setenv("SCHEMA_RENDER_TOKEN", "secret")
     assert world.client.get("/api/status").status_code == 200
-    assert not world.client.get("/api/settings").json()["access_token_required"]
+    assert world.client.get("/api/status", headers={"Authorization": "Bearer wrong"}).status_code == 200
+    assert "access_token_required" not in world.client.get("/api/settings").json()
+    monkeypatch.delenv("SCHEMA_RENDER_TOKEN")
+    assert world.client.get("/api/status").status_code == 200
 
 
 def test_body_limit_and_validation_shapes(world):
@@ -546,3 +558,33 @@ def test_body_limit_and_validation_shapes(world):
     broken = world.client.post("/api/profiles/import-preview", content=b"{not json", headers={"content-type": "application/json"})
     assert broken.status_code == 422 and broken.json()["error"]["code"] == "VALIDATION_ERROR"
     assert world.post("/profiles", {"schema_key": "process_standard"}, expect=422)["error"]["fields"][0]["field"].endswith("definition")
+
+
+# ---------------------------------------------------------------------------- 출처 방어(§6 공통)
+
+
+def test_host_and_origin_guard_blocks_dns_rebinding(world, monkeypatch):
+    """메인 API에는 사용자 인증이 없다 — 대신 Host/Origin으로 루프백 밖 출처를 끊는다.
+
+    DNS 리바인딩은 동일 출처 정책을 우회한다(공격자 도메인이 127.0.0.1을 가리키게 바꾸면 그 페이지에게
+    `/api/*`는 동일 출처가 된다). Host 허용 목록이 그 경로를 막는 유일한 방어다."""
+    # 루프백 호스트는 그대로 통과한다(포트가 붙어도).
+    assert world.client.get("/api/schemas", headers={"Host": "127.0.0.1:8031"}).status_code == 200
+    assert world.client.get("/api/schemas", headers={"Host": "localhost"}).status_code == 200
+    # 리바인딩된 출처는 읽기도 막힌다.
+    denied = world.client.get("/api/schemas", headers={"Host": "evil.example:8031"})
+    assert denied.status_code == 400 and denied.json()["error"]["code"] == "HOST_NOT_ALLOWED"
+    # 운영자가 허용하면 열린다.
+    monkeypatch.setenv("SCHEMA_ALLOWED_HOSTS", "plant-a.internal")
+    assert world.client.get("/api/schemas", headers={"Host": "plant-a.internal"}).status_code == 200
+    monkeypatch.delenv("SCHEMA_ALLOWED_HOSTS")
+    # 교차 출처 쓰기는 Host가 루프백이어도 거부한다.
+    cross = world.client.delete("/api/schemas/none", headers={"Sec-Fetch-Site": "cross-site"})
+    assert cross.status_code == 403 and cross.json()["error"]["code"] == "CROSS_ORIGIN_DENIED"
+    cross2 = world.client.post("/api/schemas", json={"definition": {}}, headers={"Origin": "http://evil.example"})
+    assert cross2.status_code == 403 and cross2.json()["error"]["code"] == "CROSS_ORIGIN_DENIED"
+    # 같은 출처에서 온 쓰기는 통과한다(브라우저가 붙이는 same-origin 표식).
+    same = world.client.post("/api/schemas", json={"definition": {}}, headers={"Sec-Fetch-Site": "same-origin"})
+    assert same.status_code == 422 and same.json()["error"]["code"] == "INVALID_SCHEMA"
+    # 화면 자체(정적 파일)는 이 검사와 무관하다.
+    assert world.client.get("/", headers={"Host": "evil.example"}).status_code in (200, 404)

@@ -3,8 +3,11 @@
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
-data/exports/
-data/render-cache/
+# 앞의 `/` 없이 적어 저장소 루트뿐 아니라 작업 공간 폴더(<ws>/data/...)에도 걸리게 한다.
+**/data/exports/
+**/data/render-cache/
+# 보호 문서 접근 감사 기록(<ws>/data/audit/drm-*.jsonl) — 원본 경로·사용자 이름이 들어 있어 저장소에 넣지 않는다
+**/data/audit/
 
 # Virtual environment
 .venv/

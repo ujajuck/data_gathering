@@ -4,7 +4,7 @@
 // 2번은 60행·26열을 넘는 문서를 등록해 뷰어가 두 번째 창을 요청하는지 본다. 3번은 잠긴 문서와 DRM 실패 상태(다시 시도)를 본다.
 import { test, expect } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
-import { api, collectErrors, openDocument, openScreen, registerViaApi, resetWorkspace, runPython, waitForJobs, workspaceRoot } from "./helpers";
+import { DRM_MESSAGE, api, collectErrors, openDocument, openScreen, registerViaApi, resetWorkspace, runPython, waitForJobs, workspaceRoot } from "./helpers";
 
 const SHIFTED = "공정데이터_2024_04_양식이동.xlsx";
 const LOCKED = "공정데이터_2024_06_잠김.xlsx";
@@ -14,7 +14,6 @@ const PROFILE_V1 = "공정데이터_A양식 v1";
 const SCHEMA_V1 = "공정 데이터 표준 v1";
 const MAIN_SHEET = "공정 기록";
 const COMMON_SHEET = "공통 정보";
-const DRM_MESSAGE = "암호화 문서는 승인된 보안 읽기 어댑터로 접근해야 합니다.";
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
 type Region = { role: string; sheet_id: string; sheet_name: string; range: string };
@@ -466,9 +465,16 @@ test("잠긴 문서: 드로어 파일 보기는 Snapshot 없음 안내, 등록 �
   const snapshotId = swappedDocument.current_snapshot.snapshot_id as string;
   const sheets = await api(page, "GET", `/snapshots/${snapshotId}/sheets`);
   const mainSheet = sheets.json.items.find((s: { sheet_name: string }) => s.sheet_name === MAIN_SHEET);
-  const denied = await page.request.get(`/api/snapshots/${snapshotId}/sheets/${mainSheet.sheet_id}/render?range=A1:Z60`);
-  expect(denied.status()).toBe(403);
-  expect(await denied.json()).toEqual({ error: { code: "DRM_READER_REQUIRED", message: DRM_MESSAGE } });
+  // 렌더는 비동기다 — 첫 요청은 202(렌더링 중)로 돌아오고, 보안 읽기 어댑터가 없으면 그 다음 폴링에서 403으로 확정된다.
+  const renderPath = `/api/snapshots/${snapshotId}/sheets/${mainSheet.sheet_id}/render?range=A1:Z60`;
+  let denied = await page.request.get(renderPath);
+  for (let i = 0; i < 120 && denied.status() === 202; i++) {
+    await page.waitForTimeout(500);
+    denied = await page.request.get(renderPath);
+  }
+  expect(denied.status(), "잠긴 원본 렌더는 403 DRM_READER_REQUIRED로 끝나야 한다").toBe(403);
+  // 프록시는 렌더 서버의 failed 본문을 그대로 전달한다(계약 §5: `{status:'failed', error{code,message}, retry_after}`).
+  expect(await denied.json()).toEqual({ status: "failed", error: { code: "DRM_READER_REQUIRED", message: DRM_MESSAGE }, retry_after: 60 });
 
   const detail = await openDocument(page, SWAPPED);
   const sheetList = detail.locator(".app-side-list");

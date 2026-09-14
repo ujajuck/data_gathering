@@ -336,12 +336,22 @@ class CoreSchemaTests(unittest.TestCase):
         self.conn.execute("UPDATE parsing_application SET match_signature_json='{}' WHERE application_id='app-1'")
 
     # --- projection / 스키마 규칙 ---------------------------------------------------------------
-    def test_projection_delete_is_forbidden_but_deprecate_works(self):
-        self.assertRejected("projection", self.conn.execute, "DELETE FROM parsing_field WHERE field_id='field-note'")
-        self.assertRejected("projection", self.conn.execute, "DELETE FROM parsing_rule WHERE rule_id='rule-lot'")
-        self.conn.execute("UPDATE parsing_field SET status='deprecated', updated_at=? WHERE field_id='field-note'", (AT,))
+    def test_field_delete_needs_no_references_and_deprecate_works(self):
+        """§1.2 parsing_field_in_use_no_delete: 참조가 있으면 거부, 없으면 통과(§4.2.1·§4.2.2 삭제 경로)."""
+        # 규칙(default_field_id)·매핑 리비전·추출값이 가리키는 필드.
+        self.assertRejected("in use", self.conn.execute, "DELETE FROM parsing_field WHERE field_id='field-temp'")
+        # 자식 parent_of 간선이 있는 필드.
+        self.assertRejected("in use", self.conn.execute, "DELETE FROM parsing_field WHERE field_id='field-process'")
+        # parsing_rule도 매핑이 가리키는 동안에는 금지(§4.2.1 프로파일 삭제에서만 실제로 지운다).
+        self.assertRejected("in use", self.conn.execute, "DELETE FROM parsing_rule WHERE rule_id='rule-lot'")
+        # 참조가 없는 필드는 간선·alias를 먼저 지우면 실제로 사라진다.
+        self.conn.execute("DELETE FROM parsing_field_edge WHERE from_field_id='field-note' OR to_field_id='field-note'")
+        self.conn.execute("DELETE FROM parsing_field WHERE field_id='field-note'")
+        self.assertEqual(self.scalar("SELECT count(*) FROM parsing_field WHERE field_key='note'"), 0)
+        # deprecate 경로는 그대로다.
+        self.conn.execute("UPDATE parsing_field SET status='deprecated', updated_at=? WHERE field_id='field-temp'", (AT,))
         self.conn.execute("UPDATE parsing_rule SET status='deprecated' WHERE rule_id='rule-lot'")
-        self.assertEqual(self.scalar("SELECT status FROM parsing_field WHERE field_id='field-note'"), "deprecated")
+        self.assertEqual(self.scalar("SELECT status FROM parsing_field WHERE field_id='field-temp'"), "deprecated")
         self.assertEqual(self.scalar("SELECT status FROM parsing_rule WHERE rule_id='rule-lot'"), "deprecated")
 
     def test_group_field_cannot_be_mapping_target(self):

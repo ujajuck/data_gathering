@@ -45,8 +45,8 @@ class RenderClient:
         self.http = None
         self.worker = None
         if self.mode == "http":
-            # 렌더 서버도 같은 접근 토큰을 요구하므로 매 요청에 실어 보낸다.
-            token = env("ACCESS_TOKEN", "")
+            # 렌더 서버가 요구하는 **서버 대 서버 내부 bearer**(§5). 사용자 토큰이 아니다 — 브라우저는 언제나 메인 API 프록시를 거친다.
+            token = env("RENDER_TOKEN", "")
             headers = {"Authorization": "Bearer " + token} if token else None
             self.http = httpx.Client(base_url=self.url, timeout=TIMEOUT, transport=transport, headers=headers)
         else:
@@ -147,10 +147,7 @@ class RenderClient:
             if response.status_code != 200:
                 return None
             return response.content, response.headers.get("content-type", "application/octet-stream"), response.headers.get("ETag")
-        path = self.worker.cache.asset_path(snapshot_id, asset_id)
-        if path is None:
-            return None
-        return path.read_bytes(), self.worker.cache.media_type(asset_id), f'"{asset_id}"'
+        return self.worker.asset(snapshot_id, asset_id)
 
     def invalidate(self, snapshot_id):
         if self.mode == "http":

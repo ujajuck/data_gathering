@@ -1,6 +1,7 @@
 // 파싱 스키마 화면 E2E(계약 §8 schema.spec): 목록 → 상세 헤더 → 구조 보기(트리/그래프 토글) → 필드 상세 → 사용 프로파일·연관 문서 탭 추적
-// → 필드에서 Source Review → 필드 편집(alias PATCH) → 변경 이력. 두 test()는 같은 작업 공간을 순서대로 쓴다(fullyParallel=false):
-// 1번은 읽기만 하고 2번이 PATCH로 새 리비전(r2)을 만든다. 모든 단언은 실제 표시 문구(한국어 라벨·셀 텍스트)를 본다.
+// → 필드에서 Source Review → 필드 편집(alias PATCH) → 변경 이력 → 생성·삭제(§4.2.1·§4.2.2).
+// 세 test()는 같은 작업 공간을 순서대로 쓴다(fullyParallel=false): 1번은 읽기만 하고, 2번이 PATCH로 새 리비전(r2)을 만들며,
+// 3번이 임시 스키마를 만들었다 지우고 사용 중인 필드·스키마 삭제가 409로 막히는지 본다. 모든 단언은 실제 표시 문구를 본다.
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { api, collectErrors, openScreen, resetWorkspace } from "./helpers";
@@ -16,6 +17,24 @@ const SHIFTED = "공정데이터_2024_04_양식이동.xlsx";
 const LATEST_DOCUMENT = "공정데이터_2024_03.xlsx"; // 마지막으로 발행된 실행 → 필드 '최근 값'은 모두 이 문서에서 온다.
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const SHA256 = /[0-9a-f]{64}/i;
+
+// 3번 test가 만들고 지우는 임시 스키마. 이름은 시드 스키마(공정 데이터 표준) 뒤에 오게 두어 목록 기본 선택이 흔들리지 않게 한다.
+const NEW_SCHEMA_KEY = "e2e_temp";
+const NEW_SCHEMA_NAME = "임시 검증 스키마";
+const NEW_SCHEMA = {
+  format: "parsing-schema",
+  schema_version: "3.0",
+  schema_key: NEW_SCHEMA_KEY,
+  schema_name: NEW_SCHEMA_NAME,
+  description: "E2E가 만들고 지우는 임시 스키마",
+  fields: [
+    { field_key: "sample_group", name: "표본 그룹", type: "group", level: 1 },
+    { field_key: "sample_value", name: "표본 값", type: "decimal", unit: "mm", level: 2, parents: ["sample_group"] },
+  ],
+};
+const TEMP_FIELD_KEY = "sample_extra";
+const TEMP_FIELD_NAME = "임시 필드";
+const SCHEMA_EXISTS_MESSAGE = "이미 있는 스키마 키입니다. 새 리비전으로 저장하려면 스키마를 열어 '새 리비전'을 쓰세요.";
 
 const schemaList = (page: Page) => page.getByRole("region", { name: "스키마 목록" });
 const schemaDetail = (page: Page) => page.getByRole("region", { name: "스키마 상세" });
@@ -349,10 +368,14 @@ test("필드 편집(alias 추가 → PATCH → 새 리비전) · 변경 이력",
   await gotoSchema(page, "&field_key=temperature&tab=history");
   const detail = schemaDetail(page);
   await expect(tabs(page).getByRole("tab", { name: "변경 이력" })).toHaveAttribute("aria-selected", "true");
-  await expect(detail.getByText("정의 파일 리비전. 필드 편집도 새 리비전을 만듭니다.")).toBeVisible();
-  await expect(detail.getByRole("button", { name: "새 리비전 가져오기" })).toBeVisible();
+  await expect(detail.getByText("정의 파일 리비전. 필드 편집·필드 삭제도 새 리비전을 만듭니다. 새 리비전은 위 '새 리비전' 버튼으로 올립니다.")).toBeVisible();
+  // 쓰기 버튼은 상세 머리에 모여 있다(새 리비전 · 이름 바꾸기). '삭제'는 쓰는 프로파일·적용 기록이 있으면
+  // 아예 그리지 않는다 — 서버가 반드시 409로 막으므로 언제나 실패하는 버튼이 되기 때문이다(§4.2.1).
+  await expect(detail.locator(".app-card-head").getByRole("button", { name: "새 리비전", exact: true })).toBeVisible();
+  await expect(detail.locator(".app-card-head").getByRole("button", { name: "이름 바꾸기" })).toBeVisible();
+  await expect(detail.locator(".app-card-head").getByRole("button", { name: "삭제" })).toHaveCount(0);
   const history = detail.getByRole("table", { name: "변경 이력" });
-  await expect(history.getByRole("columnheader")).toHaveText(["버전", "일시", "작성자", "요약"]);
+  await expect(history.getByRole("columnheader")).toHaveText(["버전", "일시", "필드"]);
   await expect(history.locator("tbody tr")).toHaveCount(1);
   await expect(history.locator("tbody tr").first().getByRole("cell").nth(0)).toContainText("v1");
   await expect(history.locator("tbody tr").first().locator(".app-chip")).toHaveText("현재");
@@ -395,7 +418,18 @@ test("필드 편집(alias 추가 → PATCH → 새 리비전) · 변경 이력",
   expect(request.postDataJSON()).toEqual({ aliases: ["온도값", "Temp", "온도값2"] });
   const response = await patchResponse;
   expect(response.status()).toBe(200);
-  expect(await response.json()).toMatchObject({ schema_key: SCHEMA_KEY, current_rev: 2, unchanged: false });
+  // §6 B: PATCH 응답은 GET과 같은 필드 상세다(가져오기 요약이 아니다) — 화면은 이 응답만으로 갱신한다.
+  expect(await response.json()).toMatchObject({
+    field_key: "temperature",
+    name: "온도",
+    type: "decimal",
+    unit: "°C",
+    aliases: ["온도값", "Temp", "온도값2"],
+    parents: ["process"],
+    related: ["pressure"],
+    status: "active",
+    schema: { key: SCHEMA_KEY, name: SCHEMA_NAME, rev: 2 },
+  });
   await expect(page.locator(".app-toast").filter({ hasText: "온도 필드 저장됨" })).toBeVisible();
   await expect(form).toHaveCount(0);
   await expect(field.getByLabel("Alias").locator(".app-chip")).toHaveText(["온도값", "Temp", "온도값2"]);
@@ -435,5 +469,188 @@ test("필드 편집(alias 추가 → PATCH → 새 리비전) · 변경 이력",
   await expect(fieldDetail(page).getByLabel("Alias").locator(".app-chip")).toHaveText(["온도값", "Temp", "온도값2"]);
   const mainText = await page.locator("main").innerText();
   expect(mainText).not.toMatch(UUID);
+  errors.assertClean();
+});
+
+test("새 스키마 생성(생성 전용) · 같은 키 재생성 거부 · 필드 추가/삭제 · 사용 중 필드·스키마 삭제 거부", async ({ page }) => {
+  const errors = collectErrors(page);
+  await gotoSchema(page);
+  const detail = schemaDetail(page);
+  const list = schemaList(page);
+
+  // ---- 새 스키마(생성 전용): 정의 JSON을 붙여넣어 만든다.
+  await page.getByRole("button", { name: "새 스키마", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "새 스키마" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveAttribute("aria-modal", "true");
+  // 대화상자가 열린 동안 뒤 화면은 inert(스키마 화면은 main 안쪽 래퍼에 건다).
+  await expect(page.locator("main [inert]")).toHaveCount(1);
+  await expect(dialog).toContainText("이미 있는 스키마 키는 만들 수 없습니다 — 그 스키마를 열어 '새 리비전'을 쓰세요.");
+  const definition = dialog.getByLabel("정의 JSON");
+  // 깨진 JSON은 저장 불가.
+  await definition.fill("{ nope");
+  await expect(dialog.getByRole("alert")).toHaveText("JSON을 해석할 수 없습니다.");
+  await expect(dialog.getByRole("button", { name: "가져오기" })).toBeDisabled();
+  await definition.fill(JSON.stringify(NEW_SCHEMA, null, 2));
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await expect(dialog.getByLabel("정의 요약")).toHaveText(`${NEW_SCHEMA_NAME} (${NEW_SCHEMA_KEY}) · 필드 2`);
+  const createRequest = page.waitForRequest((r) => r.method() === "POST" && /\/api\/schemas$/.test(r.url()));
+  await dialog.getByRole("button", { name: "가져오기" }).click();
+  expect((await createRequest).postDataJSON()).toEqual({ definition: NEW_SCHEMA });
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator(".app-toast").filter({ hasText: `${NEW_SCHEMA_NAME} v1 저장됨` })).toBeVisible();
+  // 목록 2건 · 새 스키마가 선택되고 트리에 필드 2개.
+  await expect(list.getByRole("heading", { level: 3 })).toHaveText("스키마 목록 (2)");
+  await expect(page).toHaveURL(new RegExp(`schema=${NEW_SCHEMA_KEY}`));
+  await expect(detail.getByRole("heading", { level: 2 })).toContainText(`${NEW_SCHEMA_NAME} v1`);
+  await expect(detail.locator(".app-card-head .app-muted")).toHaveText("필드 2 · 프로파일 0 · 문서 0");
+  await expect(tree(page).locator('[role="treeitem"]')).toHaveCount(2);
+  await expect(tree(page).locator('[role="treeitem"] .app-tree-name')).toHaveText(["표본 그룹", "표본 값"]);
+
+  // ---- 같은 키로 다시 만들면 409 SCHEMA_EXISTS: 대화상자에 서버 문구가 그대로 뜨고 아무것도 쓰이지 않는다.
+  await page.getByRole("button", { name: "새 스키마", exact: true }).click();
+  const again = page.getByRole("dialog", { name: "새 스키마" });
+  await again.getByLabel("정의 JSON").fill(JSON.stringify({ ...NEW_SCHEMA, schema_name: "이름만 바꾼 정의" }, null, 2));
+  const conflict = page.waitForResponse((r) => r.request().method() === "POST" && /\/api\/schemas$/.test(r.url()));
+  await again.getByRole("button", { name: "가져오기" }).click();
+  const conflictResponse = await conflict;
+  expect(conflictResponse.status()).toBe(409);
+  expect((await conflictResponse.json()).error.code).toBe("SCHEMA_EXISTS");
+  await expect(again.getByRole("alert")).toHaveText(SCHEMA_EXISTS_MESSAGE);
+  await expect(again).toBeVisible();
+  await again.getByRole("button", { name: "취소" }).click();
+  await expect(again).toHaveCount(0);
+  // 거부된 생성은 리비전도 이름도 바꾸지 않았다.
+  const untouched = await api(page, "GET", `/schemas/${NEW_SCHEMA_KEY}`);
+  expect(untouched.json).toMatchObject({ schema_name: NEW_SCHEMA_NAME, current_rev: 1, field_count: 2 });
+  expect((await api(page, "GET", `/schemas/${NEW_SCHEMA_KEY}/revisions`)).json.items).toHaveLength(1);
+
+  // ---- 필드 추가(= 새 리비전): 타입 목록은 계약의 어휘(text/decimal/…)와 같다.
+  await detail.getByRole("button", { name: "+ 필드 추가" }).click();
+  const fieldDialog = page.getByRole("dialog", { name: "필드 추가" });
+  await expect(fieldDialog.getByLabel("타입").locator("option")).toHaveText(["text", "decimal", "boolean", "date", "datetime", "group"]);
+  await fieldDialog.getByLabel("영문 키").fill(TEMP_FIELD_KEY);
+  await fieldDialog.getByLabel("필드명").fill(TEMP_FIELD_NAME);
+  await fieldDialog.getByLabel("타입").selectOption("decimal");
+  await fieldDialog.getByLabel("단위").fill("mm");
+  await fieldDialog.getByLabel("상위 필드").selectOption("sample_group");
+  const createField = page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith(`/api/schemas/${NEW_SCHEMA_KEY}/fields`));
+  await fieldDialog.getByRole("button", { name: "추가" }).click();
+  const createdField = await createField;
+  expect(createdField.status()).toBe(201);
+  // §6 B: 생성 응답도 필드 상세다(저장 뒤 rev).
+  expect(await createdField.json()).toMatchObject({ field_key: TEMP_FIELD_KEY, name: TEMP_FIELD_NAME, type: "decimal", unit: "mm", parents: ["sample_group"], schema: { key: NEW_SCHEMA_KEY, rev: 2 } });
+  await expect(fieldDialog).toHaveCount(0);
+  await expect(page.locator(".app-toast").filter({ hasText: `${TEMP_FIELD_NAME} 필드 저장됨` })).toBeVisible();
+  await expect(detail.getByRole("heading", { level: 2 })).toContainText(`${NEW_SCHEMA_NAME} v2`);
+  await expect(tree(page).locator('[role="treeitem"]')).toHaveCount(3);
+  await expect(page).toHaveURL(new RegExp(`field_key=${TEMP_FIELD_KEY}`));
+  await expect(kv(page, "필드명").locator("strong")).toHaveText(TEMP_FIELD_NAME);
+
+  // ---- 쓰지 않는 필드 삭제: 확인 문구 → 새 리비전(v3) · 토스트 · 트리에서 사라진다.
+  await fieldDetail(page).getByRole("button", { name: "삭제" }).click();
+  const deleteField = page.getByRole("dialog", { name: "필드 삭제" });
+  await expect(deleteField.getByRole("heading", { level: 2, name: "필드 삭제" })).toBeVisible();
+  await expect(deleteField).toContainText(`'${TEMP_FIELD_NAME}' 필드를 지운 새 리비전을 저장합니다.`);
+  await expect(deleteField.getByRole("button", { name: "취소" })).toBeVisible();
+  const fieldDeleted = page.waitForResponse((r) => r.request().method() === "DELETE" && r.url().endsWith(`/fields/${TEMP_FIELD_KEY}`));
+  await deleteField.getByRole("button", { name: "삭제", exact: true }).click();
+  const deletedBody = await (await fieldDeleted).json();
+  expect(deletedBody).toEqual({ schema_key: NEW_SCHEMA_KEY, field_key: TEMP_FIELD_KEY, name: TEMP_FIELD_NAME, current_rev: 3, fields_remaining: 2 });
+  await expect(deleteField).toHaveCount(0);
+  await expect(page.locator(".app-toast").filter({ hasText: `'${TEMP_FIELD_NAME}' 필드를 지웠습니다 · v3` })).toBeVisible();
+  await expect(detail.getByRole("heading", { level: 2 })).toContainText(`${NEW_SCHEMA_NAME} v3`);
+  await expect(tree(page).locator('[role="treeitem"]')).toHaveCount(2);
+  await expect(page).not.toHaveURL(/field_key=/);
+  expect((await api(page, "GET", `/schemas/${NEW_SCHEMA_KEY}/fields/${TEMP_FIELD_KEY}`)).status).toBe(404);
+
+  // ---- 자식이 있는 필드는 지울 수 없다(FIELD_HAS_CHILDREN): 모달은 열린 채 '하위 필드 보기'가 붙는다.
+  await gotoSchema(page, "&field_key=process");
+  await expect(kv(page, "필드명").locator("strong")).toHaveText("공정 정보");
+  await fieldDetail(page).getByRole("button", { name: "삭제" }).click();
+  const hasChildren = page.getByRole("dialog", { name: "필드 삭제" });
+  await hasChildren.getByRole("button", { name: "삭제", exact: true }).click();
+  await expect(hasChildren.getByRole("alert")).toContainText("하위 필드 7개(공정명, 설비명, 배치 외)를 먼저 지우세요.");
+  await expect(hasChildren.getByRole("list", { name: "하위 필드" }).getByRole("listitem")).toHaveText([
+    "공정명",
+    "설비명",
+    "배치",
+    "측정일시",
+    "온도",
+    "압력",
+    "시간",
+  ]);
+  await expect(hasChildren.getByRole("button", { name: "삭제", exact: true })).toBeDisabled();
+  await hasChildren.getByRole("button", { name: "하위 필드 보기" }).click();
+  await expect(hasChildren).toHaveCount(0);
+  await expect(page).toHaveURL(/field_key=process_name/);
+  await expect(kv(page, "필드명").locator("strong")).toHaveText("공정명");
+
+  // ---- 쓰는 규칙·추출값이 있는 필드도 지울 수 없다(FIELD_IN_USE): '사용 프로파일 보기'로 근거를 보여 준다.
+  await page.goto(`/?screen=schema&schema=${SCHEMA_KEY}&field_key=temperature`);
+  await expect(kv(page, "필드명").locator("strong")).toHaveText("온도");
+  const revisionsBefore = (await api(page, "GET", `/schemas/${SCHEMA_KEY}/revisions`)).json.items.length;
+  await fieldDetail(page).getByRole("button", { name: "삭제" }).click();
+  const inUseField = page.getByRole("dialog", { name: "필드 삭제" });
+  const fieldRefused = page.waitForResponse((r) => r.request().method() === "DELETE" && r.url().endsWith("/fields/temperature"));
+  await inUseField.getByRole("button", { name: "삭제", exact: true }).click();
+  const fieldRefusedBody = await (await fieldRefused).json();
+  expect((await fieldRefused).status()).toBe(409);
+  expect(fieldRefusedBody.error.code).toBe("FIELD_IN_USE");
+  expect(fieldRefusedBody.error.detail.profiles[0]).toMatchObject({ profile_name: PROFILE_NAME, rule_keys: ["temperature"] });
+  await expect(inUseField.getByRole("alert")).toContainText(`이 필드는 프로파일 1개(${PROFILE_NAME} 규칙 temperature)가 쓰고 있고 추출값이`);
+  await expect(inUseField.getByRole("alert")).toContainText("프로파일 정의에서 이 필드를 쓰는 규칙을 뺀 새 리비전을 저장한 뒤 다시 시도하세요.");
+  await expect(inUseField.getByRole("list", { name: "사용 프로파일" }).getByRole("listitem").first()).toContainText(PROFILE_NAME);
+  await inUseField.getByRole("button", { name: "사용 프로파일 보기" }).click();
+  await expect(inUseField).toHaveCount(0);
+  await expect(page).toHaveURL(/tab=profiles/);
+  await expect(page).toHaveURL(/field_filter=temperature/);
+  await expect(detail.getByRole("table", { name: "사용 프로파일" }).locator("tbody tr")).toHaveCount(1);
+  // 거부된 삭제는 아무것도 쓰지 않았다(필드도 리비전 수도 그대로).
+  expect((await api(page, "GET", `/schemas/${SCHEMA_KEY}/fields/temperature`)).status).toBe(200);
+  expect((await api(page, "GET", `/schemas/${SCHEMA_KEY}/revisions`)).json.items).toHaveLength(revisionsBefore);
+
+  // ---- 쓰는 프로파일이 있는 스키마에는 '삭제' 버튼이 없다. 눌러도 반드시 실패하는 버튼을 두지 않는다(§4.2.1).
+  await expect(detail.locator(".app-card-head").getByRole("button", { name: "삭제" })).toHaveCount(0);
+  // 서버도 같은 기준으로 막고, 그 문구는 실제로 가능한 행동(프로파일 삭제)만 말한다.
+  const schemaRefused = await api(page, "DELETE", `/schemas/${SCHEMA_KEY}`);
+  expect(schemaRefused.status).toBe(409);
+  expect(schemaRefused.json.error.code).toBe("SCHEMA_IN_USE");
+  expect(schemaRefused.json.error.detail).toMatchObject({ profile_count: 1, document_count: 4 });
+  expect(schemaRefused.json.error.message).toContain(`이 스키마는 파싱 프로파일 1개(${PROFILE_NAME})가 쓰고 있고 적용된 문서가 4개입니다.`);
+  expect(schemaRefused.json.error.message).toContain("프로파일 상세에서 '삭제'한 뒤 다시 시도하세요.");
+  // 그 프로파일도 적용된 문서가 있어 지울 수 없다 — 그때 가능한 행동('폐기')만 안내한다.
+  const profileRefused = await api(page, "DELETE", `/profiles/${(await api(page, "GET", "/profiles")).json.items[0].profile_id}`);
+  expect(profileRefused.status).toBe(409);
+  expect(profileRefused.json.error.code).toBe("PROFILE_IN_USE");
+  expect(profileRefused.json.error.message).toContain("더 쓰지 않으려면 '폐기'하세요.");
+  expect((await api(page, "GET", `/schemas/${SCHEMA_KEY}`)).status).toBe(200);
+  await page.goto(`/?screen=schema&schema=${SCHEMA_KEY}&tab=profiles`);
+  await expect(page).toHaveURL(/tab=profiles/);
+
+  // ---- 아무도 쓰지 않는 스키마는 지워진다: 목록에서 사라지고 정의도 404.
+  await page.goto(`/?screen=schema&schema=${NEW_SCHEMA_KEY}`);
+  await expect(detail.getByRole("heading", { level: 2 })).toContainText(NEW_SCHEMA_NAME);
+  await detail.locator(".app-card-head").getByRole("button", { name: "삭제" }).click();
+  const removeSchema = page.getByRole("dialog", { name: "스키마 삭제" });
+  await expect(removeSchema).toContainText(`'${NEW_SCHEMA_NAME}'과(와) 필드 2개를 지웁니다. 되돌릴 수 없습니다.`);
+  const removed = page.waitForResponse((r) => r.request().method() === "DELETE" && r.url().endsWith(`/api/schemas/${NEW_SCHEMA_KEY}`));
+  await removeSchema.getByRole("button", { name: "삭제", exact: true }).click();
+  const removedBody = await (await removed).json();
+  expect((await removed).status()).toBe(200);
+  expect(removedBody).toMatchObject({ schema_key: NEW_SCHEMA_KEY, schema_name: NEW_SCHEMA_NAME, deleted: { fields: 2, revisions: 3 } });
+  await expect(removeSchema).toHaveCount(0);
+  await expect(page.locator(".app-toast").filter({ hasText: `'${NEW_SCHEMA_NAME}' 스키마를 지웠습니다.` })).toBeVisible();
+  await expect(list.getByRole("heading", { level: 3 })).toHaveText("스키마 목록 (1)");
+  await expect(list.getByRole("button", { name: new RegExp(NEW_SCHEMA_NAME) })).toHaveCount(0);
+  expect((await api(page, "GET", `/schemas/${NEW_SCHEMA_KEY}`)).status).toBe(404);
+  expect((await api(page, "GET", "/schemas")).json.items.map((s: { schema_key: string }) => s.schema_key)).toEqual([SCHEMA_KEY]);
+  const mainText = await page.locator("main").innerText();
+  expect(mainText).not.toMatch(UUID);
+  // 화면에서 일부러 거부시킨 409 두 건(SCHEMA_EXISTS · FIELD_HAS_CHILDREN · FIELD_IN_USE)은 브라우저가 리소스 오류로 남긴다.
+  // SCHEMA_IN_USE·PROFILE_IN_USE는 화면에 버튼이 없어 page.request로 확인했으므로 콘솔에 남지 않는다.
+  const conflicts = errors.errors.filter((e) => e.includes("409 (Conflict)"));
+  expect(conflicts, "거부된 요청 수만큼의 409 리소스 오류").toHaveLength(3);
+  errors.errors.splice(0, errors.errors.length, ...errors.errors.filter((e) => !e.includes("409 (Conflict)")));
   errors.assertClean();
 });

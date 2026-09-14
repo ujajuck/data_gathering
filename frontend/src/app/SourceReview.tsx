@@ -2,7 +2,7 @@
 // - 검수 모드 `?review=<application_id>&rule=&sheet=&range=`: 진입 호출 = GET /applications/{aid} 1회 + 렌더 창.
 //   3열 = 좌(시트·프로파일·규칙) / 중앙 SheetViewer(review; overlay key/value/unit/context, 드래그 재지정 + 역할 선택)
 //   / 우 MappingPanel(수정·승인·반려·접힌 상세). 규칙 클릭은 추가 호출 없음. 쓰기는 낙관적 갱신, 409 EDIT_CONFLICT → 다시 읽기.
-// - 테스트 모드 `?test=<profile_id>|draft&snapshot=<sid>`: POST /profiles/{id}/test 또는 /profiles/test(초안은 profileDraft에서),
+// - 테스트 모드 `?test=<profile_id>&snapshot=<sid>`: POST /profiles/{id}/test(저장된 리비전만 테스트한다),
 //   우측은 §4.7 groups[]·errors[], 행동은 닫기 · 다시 실행뿐.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
@@ -13,7 +13,6 @@ import { formatRange } from "./sheetGeometry";
 import SheetViewer from "./SheetViewer";
 import type { Overlay } from "./SheetViewer";
 import { Chip, EmptyState } from "./ui";
-import { useProfileDraft } from "./profileDraft";
 import MappingPanel from "./SourceReviewMapping";
 import type { PanelMessage } from "./SourceReviewMapping";
 import TestResultPanel from "./SourceReviewTest";
@@ -489,23 +488,18 @@ export function normalizeTestResult(result: TestResult, sheets: SheetRow[]): Tes
 
 function TestReview({ profileId, snapshotId }: { profileId: string; snapshotId: string }) {
   const { route, go } = useNavigation();
-  const isDraft = profileId === "draft";
-  const draft = useProfileDraft();
-  const profile = useData<ProfileDetail>(!isDraft && profileId ? "/profiles/" + encodeURIComponent(profileId) : null);
+  const profile = useData<ProfileDetail>(profileId ? "/profiles/" + encodeURIComponent(profileId) : null);
   const sheetsResource = useData<Page<SheetRow> | SheetRow[]>(snapshotId ? "/snapshots/" + encodeURIComponent(snapshotId) + "/sheets" : null);
   const sheets = useMemo(() => pageItems(sheetsResource.data), [sheetsResource.data]);
   const [zoom, setZoom] = useState(1);
   const [run, setRun] = useState(0);
   const [test, setTest] = useState<TestState>({ loading: false, result: null, error: "" });
-  const missingDraft = isDraft && !draft;
 
   useEffect(() => {
-    if (!snapshotId || missingDraft) return;
+    if (!snapshotId || !profileId) return;
     let cancelled = false;
     setTest({ loading: true, result: null, error: "" });
-    const path = isDraft ? "/profiles/test" : "/profiles/" + encodeURIComponent(profileId) + "/test";
-    const body = isDraft ? { schema_key: draft!.schema_key, definition: draft!.definition, snapshot_id: snapshotId } : { snapshot_id: snapshotId };
-    api<TestResult | JobResponse>(path, body)
+    api<TestResult | JobResponse>("/profiles/" + encodeURIComponent(profileId) + "/test", { snapshot_id: snapshotId })
       .then((response) => {
         if (cancelled) return;
         const result = isJobResponse(response) ? ((response.result as unknown as TestResult | null) ?? null) : response;
@@ -518,8 +512,7 @@ function TestReview({ profileId, snapshotId }: { profileId: string; snapshotId: 
     return () => {
       cancelled = true;
     };
-    // draft 객체는 저장소가 바뀔 때만 새 참조가 된다.
-  }, [profileId, snapshotId, run, isDraft, draft, missingDraft]);
+  }, [profileId, snapshotId, run]);
 
   const result = useMemo(() => (test.result ? normalizeTestResult(test.result, sheets) : null), [test.result, sheets]);
   const groups = result?.groups ?? [];
@@ -536,7 +529,7 @@ function TestReview({ profileId, snapshotId }: { profileId: string; snapshotId: 
       .filter(([, ids]) => Array.isArray(ids) && ids.includes(s.sheet_id))
       .map(([role]) => role);
   const close = useCallback(() => go(CLOSE_PATCH), [go]);
-  const label = isDraft ? (draft?.profile_name ? `${draft.profile_name} (초안)` : "저장하지 않은 정의") : profile.data ? profileLabel(profile.data) : "파싱 프로파일";
+  const label = profile.data ? profileLabel(profile.data) : "파싱 프로파일";
 
   const context = (
     <>
@@ -546,7 +539,7 @@ function TestReview({ profileId, snapshotId }: { profileId: string; snapshotId: 
       {sheet && <span className="app-muted">/ {sheet.sheet_name}</span>}
       <span className="app-muted app-small">저장하지 않는 실행입니다</span>
       <span style={{ marginLeft: "auto" }} className="app-inline">
-        <button type="button" className="secondary" disabled={test.loading || missingDraft} onClick={() => setRun((n) => n + 1)}>
+        <button type="button" className="secondary" disabled={test.loading} onClick={() => setRun((n) => n + 1)}>
           다시 실행
         </button>
         <button type="button" onClick={close}>
@@ -558,11 +551,6 @@ function TestReview({ profileId, snapshotId }: { profileId: string; snapshotId: 
 
   return (
     <ReviewFrame context={context} onClose={close}>
-      {missingDraft && (
-        <div className="app-error app-context" role="alert">
-          <span>편집 중인 정의가 없습니다. 파싱 프로파일 화면에서 정의를 다시 입력한 뒤 테스트하세요.</span>
-        </div>
-      )}
       {!snapshotId && (
         <div className="app-error app-context" role="alert">
           <span>테스트할 문서(snapshot)가 지정되지 않았습니다.</span>

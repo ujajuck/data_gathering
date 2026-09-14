@@ -403,11 +403,24 @@ WHEN NEW.value_type = 'group' AND OLD.value_type <> 'group' BEGIN
         EXISTS (SELECT 1 FROM mapping_revision WHERE field_id = NEW.field_id);
 END;
 
--- projection 삭제 금지: 정의 파일에서 사라진 항목은 status='deprecated'로만 표시한다.
-CREATE TRIGGER parsing_field_no_delete BEFORE DELETE ON parsing_field
-BEGIN SELECT RAISE(ABORT, 'parsing_field is a projection; deprecate instead of delete'); END;
-CREATE TRIGGER parsing_rule_no_delete BEFORE DELETE ON parsing_rule
-BEGIN SELECT RAISE(ABORT, 'parsing_rule is a projection; deprecate instead of delete'); END;
+-- projection 삭제: 정의 파일에서 사라진 항목은 status='deprecated'로만 표시한다.
+-- 예외는 §4.2.2 필드 삭제·§4.2.1 스키마/프로파일 삭제뿐이며, 그때도 이 필드를 가리키는 참조가 하나도 없어야 한다
+-- (자식 parent_of 간선 · 규칙의 default_field_id · 매핑 리비전 · 추출값). 서비스가 먼저 검사하고 여기서 한 번 더 막는다.
+CREATE TRIGGER parsing_field_in_use_no_delete BEFORE DELETE ON parsing_field
+BEGIN
+    SELECT RAISE(ABORT, 'parsing_field is in use; deprecate instead of delete') WHERE
+        EXISTS (SELECT 1 FROM parsing_field_edge WHERE relation = 'parent_of' AND from_field_id = OLD.field_id) OR
+        EXISTS (SELECT 1 FROM parsing_rule WHERE default_field_id = OLD.field_id) OR
+        EXISTS (SELECT 1 FROM mapping_revision WHERE field_id = OLD.field_id) OR
+        EXISTS (SELECT 1 FROM extracted_value WHERE field_id = OLD.field_id);
+END;
+-- 규칙도 참조가 남아 있을 때만 거부한다. 정의 파일에서 빠진 규칙은 여전히 deprecated로만 표시하고(삭제하지 않고),
+-- 실제 DELETE는 §4.2.1 프로파일 삭제(적용 건이 하나도 없는 프로파일)에서만 일어난다.
+CREATE TRIGGER parsing_rule_in_use_no_delete BEFORE DELETE ON parsing_rule
+BEGIN
+    SELECT RAISE(ABORT, 'parsing_rule is in use; deprecate instead of delete') WHERE
+        EXISTS (SELECT 1 FROM mapping WHERE rule_id = OLD.rule_id);
+END;
 
 -- §1.4 CAS: 리비전 번호는 mapping.edit_seq + 1이어야 하고, 삽입되면 헤드와 edit_seq가 그 리비전으로 이동한다.
 CREATE TRIGGER mapping_edit_seq BEFORE INSERT ON mapping_revision BEGIN

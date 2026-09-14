@@ -5,6 +5,72 @@
 
 ## 2026-09-14 — 재설계·레거시 정리 (claude/system-redesign-e2e-docs)
 
+- **리뷰 반영 2차 — 보호 문서 파생물·출처 방어·삭제 경로의 빈자리** (이 커밋 — 적대적 리뷰 high 7 / medium 20건)
+  - **해제된 내용의 파생물도 작업 공간에 남기지 않는다**: 보호 문서 snapshot의 렌더 결과는 `<ws>/data/render-cache`가 아니라
+    렌더 서버 메모리(`MemoryRenderCache`)에만 둔다(`SCHEMA_RENDER_MEMORY_MB`·`_TTL_SECONDS`). 이미지 자산도 파일이 아니라 메모리에서 나간다.
+    지금까지 `can_cache_derivative`를 **읽는 곳이 0곳**이라 정책이 아무 효과가 없었다
+  - **해제본 누수와 임시 폴더**: TTL 0에서 `atexit`에만 기대다 평문이 남던 것을 고쳤다 — 각 Reader 연산의 `finally`에서 세션을 놓고,
+    Reader 자식은 SIGTERM을 예외로 받아 감사·삭제를 마치고 끝낸다(정리 구간에서는 SIGTERM을 무시한다).
+    임시 폴더는 0700으로 새로 만들고 이미 있으면 `lstat`으로 링크·소유자·권한을 확인해 어긋나면 `DRM_TEMP_UNSAFE`로 시작을 막는다.
+    잠금 파일에 소유 PID를 적어 **죽은 프로세스의 잠금만** 회수하고(예전 기준 `timeout×2`는 자기 대기 마감보다 커서 아무도 치우지 못했다),
+    `purge_all`은 살아 있는 PID가 붙잡은 항목을 남긴다(공유 임시 폴더에서 상호 배제가 깨지던 자리).
+    부모 쪽에도 보완 감사를 넣어 타임아웃·취소·스트림 중단으로 잘린 접근이 기록에서 빠지지 않게 했고,
+    열리지 않는 원본은 `container: 'missing'`으로 갈라 DRM 실패 집계에서 뺐다
+  - **인증을 걷어낸 자리에 출처 검사**: `/api/*`는 `Host`가 루프백(또는 `SCHEMA_ALLOWED_HOSTS`)이 아니면 400 `HOST_NOT_ALLOWED`,
+    교차 출처 쓰기는 403 `CROSS_ORIGIN_DENIED`. DNS 리바인딩으로 아무 페이지나 루프백 API를 부르는 길을 막는다.
+    개명(`SCHEMA_ACCESS_TOKEN` → `SCHEMA_RENDER_TOKEN`)에 한 릴리스짜리 폴백 + 경고를 넣어 업그레이드 즉시 렌더 인증이 꺼지지 않게 했다
+  - **삭제가 실제로 되게**: 없던 `DELETE /profiles/{id}`(적용 문서 0일 때만)와 `POST /profiles/{id}/deprecate`를 넣어
+    `SCHEMA_IN_USE` 문구가 시키는 행동이 실존하게 만들었다. 스키마 정의 폴더는 커밋 **전에** `.trash`로 옮겨(같은 키의 새 스키마 폴더를 지우던 경쟁 제거)
+    실패하면 아무것도 지우지 않고 409 `DEFINITION_LOCKED`. `rev==1`을 쓸 때 남은 `r*.json`을 치워 옛 정의가 되살아나지 않게 했다.
+    필드 삭제는 참조 검사를 쓰기 트랜잭션 안(`import_schema(guard=)`)에서 다시 돌고, 폐기된 규칙은 `GET /schemas/{key}/profiles`와 같은 기준으로 무시하며,
+    마지막 남은 필드는 `LAST_FIELD`로 막는다. 화면은 지울 수 있을 때만 `삭제` 버튼을 그린다
+  - **화면**: `+ 필드 추가`가 만들던 `level: null`을 없앴다(canonical로 만들 때 트리 깊이를 채운다) — 그 null이 `" ".repeat(-2)`로
+    앱 전체를 죽이던 RangeError의 뿌리다(화면 쪽에도 방어를 넣었다). 변경 이력의 `작성자`·`요약` 열(언제나 `-`)을 지우고 계약대로 `규칙 N개`·`필드 N개`를 넣었다.
+    정의 편집기가 다시 읽는 순간 저장 안 한 편집을 지우던 것, 삭제한 키를 다시 만들면 목록에서 사라지던 것, Reader 카드가 연결돼 있어도 설정 안내를 띄우던 것,
+    `내보내기`가 실패해도 오류 JSON을 파일로 저장하던 것을 함께 고쳤다
+  - 계약·문서: §4.2(`mode='upsert'` 기본·`guard`), §4.2.1(프로파일 삭제/폐기·`.trash`·`leftover_path`), §4.2.2(`LAST_FIELD`·활성 규칙 기준),
+    §6(출처 검사·새 엔드포인트·`application_count`), §7(진입 호출 예산 예외·이력 열·삭제 버튼 조건), §10(없는 테스트 파일 정리·종료 코드 2·Windows 스모크는 **없다**고 정정)
+  - 검증: `python3 -m pytest tests -q -p no:cacheprovider` **263 passed · 47 subtests**(51.5s) ·
+    `cd frontend && npx vitest run` **15 files / 152 tests passed** + `npm run build` 성공 ·
+    `cd e2e && npm test` **22 passed**(2.8m)
+
+- **화면 6건 정리 + DRM 전제 뒤집기** (이 커밋 — 사용자가 지적한 "중복되고 동작하지 않는 화면 요소"와 보호 문서 접근)
+  - **스키마를 덮어쓰던 경로를 끊었다**: `POST /schemas`는 생성 전용(있는 키면 409 `SCHEMA_EXISTS`로 **아무것도 쓰지 않는다**),
+    새 리비전은 `PUT /schemas/{key}` 하나가 맡는다(본문 키가 다르면 422). 없던 삭제를 넣었다 —
+    `DELETE /schemas/{key}`·`DELETE /schemas/{key}/fields/{field_key}`는 쓰는 곳이 있으면 409(`SCHEMA_IN_USE`·`FIELD_IN_USE`·`FIELD_HAS_CHILDREN`)이고
+    거부할 때 **어느 프로파일·규칙이 잡고 있는지**를 함께 준다. 필드 삭제는 그 필드를 뺀 새 리비전을 저장하는 방식이라 "파일이 진실"이 유지된다.
+    DDL은 `parsing_field_no_delete`(무조건 금지) → `parsing_field_in_use_no_delete`(참조 있을 때만 거부)로 바꿨다.
+    `PATCH .../fields/{key}`가 가져오기 요약을 돌려줘 화면이 갱신되지 않던 것도 필드 상세 응답으로 고정했다
+  - **화면에서 지운 것**: 프로파일 상세의 탭 6개 전부(같은 정의를 여섯 번 그리던 것 → 요약줄 + 정의 JSON 편집기 + 테스트 + 변경 이력 한 화면),
+    규칙 카드 편집기와 필드 매핑 표(`ProfileRules.tsx`), 새 프로파일 대화상자의 `대표 문서로 테스트`와 초안 버퍼(`profileDraft.ts`·`?test=draft`),
+    `외부 Profile Import` 버튼(→ `+ 새 프로파일` 하나로 합치고 `ProfileImport.tsx` → `ProfileNew.tsx`),
+    설정의 `서버 접근` 카드와 접근 토큰 입력칸. 백엔드에서도 `SCHEMA_ACCESS_TOKEN`·`AUTH_REQUIRED`·
+    `settings.access_token_required`·`POST /profiles/test {definition}`을 걷어냈다 —
+    메인 API는 인증하지 않고 기본으로 `127.0.0.1`에 바인딩한다(다른 host로 열면 시작 시 stderr 경고).
+    렌더 서버 내부 bearer는 남기되 이름을 갈랐다: `SCHEMA_RENDER_TOKEN`(루프백 밖이면 403 `RENDER_TOKEN_REQUIRED`)
+  - **DRM 전제를 뒤집었다**(`schema/drm.py` 신설, 계약 §3.5): 평문이 기본이고 DRM이 예외가 아니라 **보호 문서가 기본이고 평문 OOXML이 예외**다.
+    확장자가 아니라 앞 32바이트로 컨테이너를 판별하고(`SCHEMA_DRM_MAGIC` → `PK` → OLE2 → 그 밖), 보호 문서는 잠금으로 끝내지 않고
+    `SCHEMA_READER_FACTORY`의 Reader로 넘긴다. 판별은 `make_reader` 한 곳에서만 한다(`XlsxReader.authorize`의 `PK` 검사 삭제 —
+    두 곳에서 판정하면 어댑터를 붙여도 계속 잠긴다). 해제본은 작업 공간 밖 0700 폴더에만 만들고(안을 가리키면 `DRM_TEMP_IN_WORKSPACE`로 시작 거부),
+    해제 비용은 **snapshot마다 한 번**만 치러 같은 snapshot의 describe·match·extract·render가 재사용한다.
+    모든 접근은 `<ws>/data/audit/drm-*.jsonl`과 작업 `result_json.drm`에 남는다. 점검은 `python -m schema drm-probe`,
+    화면은 설정의 Reader 카드(`GET /settings`의 `reader.drm`)
+  - 정리(문서 담당이 함께 고친 구현 결함 4건): `GET /settings`에 빠져 있던 `reader.drm`을 실제로 실어 Reader 카드가 늘 '보안 읽기 없음'만
+    보이던 것을 고쳤고, 새 snapshot이 생겨도 이전 token의 해제본이 TTL(기본 900초)까지 임시 폴더에 남던 것을 렌더 캐시 무효화와 같은 자리에서 지우게 했으며
+    (둘 다 회귀 테스트 추가), 사라진 사용자 토큰의 이름을 그대로 쓰던 렌더 서버 bearer를 `SCHEMA_RENDER_TOKEN`·`RENDER_TOKEN_REQUIRED`로 갈랐고,
+    `serve --host`가 루프백 밖이면 경고 한 줄을 내게 했다. 그 밖에 `frontend/tests/schema.test.tsx`의 필드 타입 기대값
+    `"string"`(계약 §1.2에 없는 값) → `"text"`, 삭제된 v2 문서를 가리키던 `design/parsing-core-schema-reply.md`의 죽은 링크 2개를 풀었다.
+    앞선 리뷰가 지적한 `migrate` 잔재·`UnitRegistry` 죽은 메서드·`config/` v1 파일·DDL 머리말·계약 절 번호는 이번 트리에서 다시 확인했고
+    이미 해소돼 있었다(§-참조 검사 스크립트로 전수 확인 — 코드·테스트의 모든 `§N.N`이 실재하는 절을 가리킨다)
+  - 문서: 아키텍처에 `schema/drm.py`·DRM 흐름(§2.5)·스키마 삭제 경로·프런트 단일 화면·환경변수 표,
+    README에 보호 문서 설정 절과 `drm-probe`, 결정 기록에 §13(생성/리비전 분리)·§14(프로파일 단일 화면)·§15(접근 토큰 제거와 127.0.0.1)·§16(DRM 전제 뒤집기),
+    `.env.sample`에 `SCHEMA_RENDER_TOKEN`·`SCHEMA_DRM_*` 7개
+  - 검증: `python3 -m pytest tests -q -p no:cacheprovider` **247 passed · 47 subtests**(49.4s) ·
+    `cd frontend && npx vitest run` **15 files / 150 tests passed**(33.5s) ·
+    `cd e2e && npm test` **22 passed**(3.1m, 스펙 9개). E2E는 렌더 프록시가 전달하는 실패 본문 기대값 한 줄을
+    계약 §5 형태(`{status:'failed', error, retry_after}`)로 고친 뒤 전부 통과했다.
+    `docs/e2e-results.md`의 실행 로그는 아직 이전 화면(탭·Import 버튼) 기준이라 갱신이 필요하다
+
 - **정리 리뷰 반영 — 이름공간 잔재·죽은 코드 제거 + 조용한 실패 방지 2건** (이 커밋 — 아래 정리 항목에 대한 리뷰 반영)
   - 프런트 이름공간: 경로만 바뀌고 남아 있던 `v3` 이름을 실제 이름까지 옮겼다 —
     CSS 루트 클래스 `.v3` → `.app`, 클래스·DOM id 접두 `v3-` → `app-`, 토큰 `--v3-*` → `--app-*`,

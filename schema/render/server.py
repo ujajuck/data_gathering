@@ -17,14 +17,14 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..db import Problem, uid
 from ..jobs import env
 from . import RENDERER_VERSION
 from .assemble import assemble
-from .cache import RenderCache, valid_id
+from .cache import MemoryRenderCache, RenderCache, valid_id
 
 log = logging.getLogger(__name__)
 FAILURE_TTL = 60
@@ -71,9 +71,12 @@ class RenderJob:
 class RenderWorker:
     """(snapshot_id, sheet_id) 키별 멱등 큐. submit/get은 (http_status, body, headers)를 돌려준다."""
 
-    def __init__(self, root, cache=None, event_source=None, concurrency=None, queue_limit=None, principal=None):
+    def __init__(self, root, cache=None, event_source=None, concurrency=None, queue_limit=None, principal=None, memory=None):
         self.root = Path(root).resolve()
         self.cache = cache or RenderCache(self.root)
+        # 보호 문서의 파생물(해제된 셀 내용·워크북에 박힌 이미지)은 작업 공간에 남기지 않는다(§3.5(3)).
+        self.memory = memory or MemoryRenderCache(self.root, self.cache.renderer_version)
+        self.protected: dict[str, bool] = {}
         self.event_source = event_source or default_event_source
         self.concurrency = int(concurrency or env("RENDER_CONCURRENCY", "1"))
         self.queue_limit = int(queue_limit or env("RENDER_QUEUE", "32"))
@@ -108,6 +111,23 @@ class RenderWorker:
     def key(self, snapshot_id, sheet_id):
         return (snapshot_id, sheet_id, self.cache.renderer_version)
 
+    def _is_protected(self, request):
+        """이 snapshot의 파생물을 디스크에 둬도 되는가. 외부 provider와 보호 컨테이너는 안 된다(§3.5(1)(3))."""
+        if (request or {}).get("provider") != "local-xlsx":
+            return True
+        from ..drm import sniff_source  # 원본 앞 32바이트만 읽는다
+
+        return bool(sniff_source(self.root, request.get("source_ref"))["protected"])
+
+    def cache_for(self, snapshot_id, request=None):
+        """그 snapshot이 쓸 캐시. 보호 문서면 메모리 전용 캐시다(디스크에 아무것도 쓰지 않는다)."""
+        known = self.protected.get(snapshot_id)
+        if known is None and request is not None:
+            known = self.protected[snapshot_id] = self._is_protected(request)
+            if known:
+                self.cache.invalidate(snapshot_id)  # 옛 버전이 남긴 평문 파생물이 있으면 함께 지운다
+        return self.memory if known else self.cache
+
     def _position(self, job):
         if job.state == "rendering":
             return 0
@@ -127,13 +147,13 @@ class RenderWorker:
             return None
         return job
 
-    def _window(self, key, range_text, if_none_match, sheet_name=None, wrap=False):
-        effective = self.cache.effective_range(key, range_text)
-        etag = self.cache.etag(key, effective)
+    def _window(self, cache, key, range_text, if_none_match, sheet_name=None, wrap=False):
+        effective = cache.effective_range(key, range_text)
+        etag = cache.etag(key, effective)
         headers = {**NO_CACHE, "ETag": etag}
         if if_none_match and etag in [t.strip() for t in if_none_match.split(",")]:
             return 304, None, headers
-        window = self.cache.window(key, range_text, sheet_name)
+        window = cache.window(key, range_text, sheet_name)
         return 200, ({"status": "cached", "sheet": window} if wrap else window), headers
 
     # ---- 요청 --------------------------------------------------------------------------
@@ -143,11 +163,12 @@ class RenderWorker:
         if not valid_id(snapshot_id) or not valid_id(sheet_id):
             raise Problem("INVALID_ID", "snapshot_id/sheet_id 형식이 올바르지 않습니다.", 422)
         key = self.key(snapshot_id, sheet_id)
+        cache = self.cache_for(snapshot_id, request)
         range_text = request.get("range")
-        if self.cache.has(key):
-            return self._window(key, range_text, if_none_match, request.get("sheet_name"), wrap=True)
+        if cache.has(key):
+            return self._window(cache, key, range_text, if_none_match, request.get("sheet_name"), wrap=True)
         with self.cv:
-            if self.cache.has(key):  # 잠금 사이에 완료된 경우
+            if cache.has(key):  # 잠금 사이에 완료된 경우
                 pass
             else:
                 job = self._lookup(key)
@@ -163,23 +184,24 @@ class RenderWorker:
                 self.cv.notify()
                 self.start()
                 return self._pending(job)
-        return self._window(key, range_text, if_none_match, request.get("sheet_name"), wrap=True)
+        return self._window(cache, key, range_text, if_none_match, request.get("sheet_name"), wrap=True)
 
     def get(self, snapshot_id, sheet_id, range_text=None, if_none_match=None):
         """GET /render/{sid}/sheet/{sheet_id}. 200 창 | 202 | 4xx failed | 404 NOT_RENDERED."""
         if not valid_id(snapshot_id) or not valid_id(sheet_id):
             raise Problem("NOT_FOUND", "요청한 항목을 찾을 수 없습니다.", 404)
         key = self.key(snapshot_id, sheet_id)
-        if self.cache.has(key):
-            return self._window(key, range_text, if_none_match)
+        cache = self.cache_for(snapshot_id)
+        if cache.has(key):
+            return self._window(cache, key, range_text, if_none_match)
         with self.cv:
             job = self._lookup(key)
             if job is not None:
                 if job.state == "failed":
                     return (*failure_body(job.error), dict(NO_CACHE))
                 return self._pending(job)
-        if self.cache.has(key):
-            return self._window(key, range_text, if_none_match)
+        if cache.has(key):
+            return self._window(cache, key, range_text, if_none_match)
         raise Problem("NOT_RENDERED", "이 시트는 아직 렌더되지 않았습니다.", 404)
 
     def sheets(self, snapshot_id):
@@ -191,7 +213,7 @@ class RenderWorker:
                 for job in self.jobs.values()
                 if job.key[0] == snapshot_id and job.state != "failed"
             ]
-        return {"snapshot_id": snapshot_id, "items": self.cache.sheets(snapshot_id), "pending": pending}
+        return {"snapshot_id": snapshot_id, "items": self.cache_for(snapshot_id).sheets(snapshot_id), "pending": pending}
 
     def invalidate(self, snapshot_id):
         """세대를 올리고(진행 중 결과는 put에서 버려짐) 대기 중 작업과 실패 보관을 지운다."""
@@ -205,7 +227,17 @@ class RenderWorker:
                 except ValueError:
                     pass
             self.cache.invalidate(snapshot_id)
+            self.memory.invalidate(snapshot_id)
+            self.protected.pop(snapshot_id, None)
         return {"status": "invalidated", "snapshot_id": snapshot_id}
+
+    def asset(self, snapshot_id, asset_id):
+        """이미지 자산 `(bytes, media_type, etag)` 또는 None. 메모리 전용 캐시도 같은 모양으로 답한다."""
+        cache = self.cache_for(snapshot_id)
+        data = cache.asset_bytes(snapshot_id, asset_id)
+        if data is None:
+            return None
+        return data, cache.media_type(asset_id), f'"{asset_id}"' 
 
     def status(self):
         with self.cv:
@@ -215,6 +247,8 @@ class RenderWorker:
             "rendering": rendering,
             "renderer_version": self.cache.renderer_version,
             "cache_bytes": self.cache.cache_bytes(),
+            # 보호 문서 파생물은 디스크가 아니라 여기에만 있다(§3.5(3)).
+            "memory_bytes": self.memory.cache_bytes(),
         }
 
     # ---- 워커 --------------------------------------------------------------------------
@@ -238,10 +272,11 @@ class RenderWorker:
     def _run(self, job):
         key, request = job.key, job.request
         snapshot_id = key[0]
-        generation = self.cache.generation(snapshot_id)
+        cache = self.cache_for(snapshot_id, request)
+        generation = cache.generation(snapshot_id)
 
         def checkpoint():
-            if self.stop.is_set() or self.cache.generation(snapshot_id) != generation:
+            if self.stop.is_set() or cache.generation(snapshot_id) != generation:
                 raise Problem("CANCELLED", "렌더 중 스냅샷이 무효화되었습니다.", 409)
 
         payload = {
@@ -257,7 +292,7 @@ class RenderWorker:
             events = self.event_source(
                 self.root, request["provider"], request.get("principal") or self.principal, payload, checkpoint
             )
-            assemble(events, self.cache, key, request["expected_token"], generation)
+            assemble(events, cache, key, request["expected_token"], generation)
         except Problem as exc:
             self._finish(job, None if exc.code == "CANCELLED" else exc)
             return
@@ -294,10 +329,12 @@ def _respond(status, body, headers):
 
 
 def require_token(authorization: Optional[str] = Header(default=None)):
-    """메인 API와 같은 접근 토큰(`SCHEMA_ACCESS_TOKEN`). 토큰이 설정돼 있으면 모든 렌더 엔드포인트가 요구한다."""
-    token = env("ACCESS_TOKEN", "")
+    """렌더 서버와 메인 API 사이의 내부 bearer(`SCHEMA_RENDER_TOKEN`, §5). 설정돼 있으면 모든 렌더 엔드포인트가 요구한다.
+
+    메인 API에는 사용자 대상 인증이 없다(§6 공통) — 이 토큰은 서버 대 서버 전용이고 브라우저는 실어 보내지 않는다."""
+    token = env("RENDER_TOKEN", "")
     if token and not hmac.compare_digest(authorization or "", "Bearer " + token):
-        raise Problem("AUTH_REQUIRED", "서버 접근 토큰이 필요합니다.", 401)
+        raise Problem("AUTH_REQUIRED", "렌더 서버 내부 토큰이 필요합니다.", 401)
 
 
 def create_render_app(root, event_source=None, worker: RenderWorker | None = None):
@@ -344,14 +381,14 @@ def create_render_app(root, event_source=None, worker: RenderWorker | None = Non
 
     @app.get("/render/{snapshot_id}/assets/{asset_id}")
     def get_asset(snapshot_id: str, asset_id: str, if_none_match: Optional[str] = Header(default=None)):
-        path = worker.cache.asset_path(snapshot_id, asset_id)
-        if path is None:
+        found = worker.asset(snapshot_id, asset_id)
+        if found is None:
             raise Problem("NOT_FOUND", "요청한 항목을 찾을 수 없습니다.", 404)
-        etag = f'"{asset_id}"'
+        data, media_type, etag = found
         headers = {**NO_CACHE, "ETag": etag}
         if if_none_match and etag in [t.strip() for t in if_none_match.split(",")]:
             return Response(status_code=304, headers=headers)
-        return FileResponse(path, media_type=worker.cache.media_type(asset_id), headers=headers)
+        return Response(content=data, media_type=media_type, headers=headers)
 
     @app.delete("/render/{snapshot_id}")
     def delete_snapshot(snapshot_id: str):
@@ -363,7 +400,7 @@ def create_render_app(root, event_source=None, worker: RenderWorker | None = Non
 def serve(root, host="127.0.0.1", port=8790):
     import uvicorn
 
-    if host not in ("127.0.0.1", "localhost", "::1") and not env("ACCESS_TOKEN", ""):
-        # 루프백 밖에 열면 누구나 snapshot을 읽고 Reader 프로세스를 띄울 수 있으므로 토큰 없이는 거부한다.
-        raise Problem("ACCESS_TOKEN_REQUIRED", "루프백이 아닌 주소로 렌더 서버를 열려면 SCHEMA_ACCESS_TOKEN을 설정하세요.", 403)
+    if host not in ("127.0.0.1", "localhost", "::1") and not env("RENDER_TOKEN", ""):
+        # 루프백 밖에 열면 누구나 snapshot을 읽고 Reader 프로세스를 띄울 수 있으므로 토큰 없이는 거부한다(§5).
+        raise Problem("RENDER_TOKEN_REQUIRED", "루프백이 아닌 주소로 렌더 서버를 열려면 SCHEMA_RENDER_TOKEN을 설정하세요.", 403)
     uvicorn.run(create_render_app(root), host=host, port=port, log_level="info")

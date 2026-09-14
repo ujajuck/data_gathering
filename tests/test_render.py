@@ -378,7 +378,13 @@ def test_post_get_202_200_304(app, root):
     sheets = app.get(f"/render/{SNAPSHOT_A}/sheets").json()
     assert [s["sheet_id"] for s in sheets["items"]] == [SHEET_A] and sheets["items"][0]["sheet_name"] == "Data"
     status = app.get("/render/status").json()
-    assert status == {"queue_depth": 0, "rendering": 0, "renderer_version": RENDERER_VERSION, "cache_bytes": status["cache_bytes"]}
+    assert status == {
+        "queue_depth": 0,
+        "rendering": 0,
+        "renderer_version": RENDERER_VERSION,
+        "cache_bytes": status["cache_bytes"],
+        "memory_bytes": 0,  # 평문 문서라 파생물은 디스크 캐시에 있다(§3.5(3))
+    }
     assert status["cache_bytes"] > 0
     # 창 규칙은 HTTP에서도 같은 코드
     assert app.get(f"/render/{SNAPSHOT_A}/sheet/{SHEET_A}", params={"range": "A1:A121"}).json()["error"]["code"] == "RANGE_TOO_LARGE"
@@ -619,3 +625,52 @@ def test_render_client_unreachable(root, monkeypatch):
             client.window(SNAPSHOT_A, SHEET_A)
     finally:
         client.close()
+
+
+# ---------------------------------------------------------------------------- 보호 문서 파생물(§3.5(3))
+
+
+def test_protected_snapshots_never_write_derivatives_into_the_workspace(root, monkeypatch):
+    """보호 문서의 해제된 셀 내용·이미지는 `<ws>/data/render-cache`에 남지 않는다.
+
+    해제본을 작업 공간에 만들지 않는다는 원칙은 원본 파일뿐 아니라 **그 내용에서 나온 파생물**에도 적용된다."""
+    protected = root / "data/raw/prot.xlsx"
+    plain = (root / "data/raw/doc.xlsx").read_bytes()
+    protected.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + plain)  # OLE2 봉투 = 보호 문서
+
+    def source(root_, provider, principal, payload, checkpoint):
+        # 어댑터가 해제해 준 평문을 읽는 자리(테스트에서는 원본 평문을 그대로 쓴다).
+        path = root_ / "data/raw/doc.xlsx"
+        token = payload["expected_token"]
+        yield from render_events(path, payload["sheet_name"], token, payload["r1"], payload["c1"], payload["rows"], payload["cols"])
+        yield {"type": "verified", "token": token}
+
+    worker = RenderWorker(root, event_source=source)
+    worker.start()
+    body = request_body(root=root, source_ref="prot.xlsx", expected_token=file_hash(protected))
+    assert worker.submit(body)[0] == 202
+    until(lambda: worker.get(SNAPSHOT_A, SHEET_A)[0] == 200)
+    status, window, _ = worker.get(SNAPSHOT_A, SHEET_A, "A1:C5")
+    assert status == 200 and window["cells"]
+    # 디스크에는 아무것도 없고, 메모리에만 있다.
+    assert not list((root / "data/render-cache").rglob("*.json"))
+    assert worker.status()["cache_bytes"] == 0 and worker.status()["memory_bytes"] > 0
+    # 이미지 자산도 같은 길로 나온다(파일이 아니라 메모리에서).
+    asset = window["images"][0]["asset_id"] if window.get("images") else None
+    if asset:
+        data, media_type, _ = worker.asset(SNAPSHOT_A, asset)
+        assert data[:4] == b"\x89PNG" and media_type == "image/png"
+        assert not list((root / "data/render-cache").rglob(asset))
+    worker.invalidate(SNAPSHOT_A)
+    assert worker.status()["memory_bytes"] == 0
+    worker.close()
+
+
+def test_plain_snapshots_still_use_the_disk_cache(root):
+    worker = RenderWorker(root, event_source=make_source())
+    worker.start()
+    assert worker.submit(request_body(root=root))[0] == 202
+    until(lambda: worker.get(SNAPSHOT_A, SHEET_A)[0] == 200)
+    assert worker.status()["cache_bytes"] > 0 and worker.status()["memory_bytes"] == 0
+    assert (root / "data/render-cache").is_dir()
+    worker.close()

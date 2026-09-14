@@ -9,7 +9,7 @@ import base64
 import hashlib
 
 from ..db import Problem
-from .cache import RenderCache, _write_json
+from .cache import RenderCache
 
 IMAGE_BYTES = 2 * 1024 * 1024
 
@@ -37,7 +37,7 @@ def assemble(events, cache: RenderCache, key, expected_token=None, generation=No
                 if meta is None:
                     raise Problem("RENDER_STREAM_INVALID", "렌더 스트림이 meta 없이 시작했습니다.")
                 r1, r2 = int(event["r1"]), int(event["r2"])
-                _write_json(staging / f"band-{r1}-{r2}.json", {"r1": r1, "r2": r2, "cells": event["cells"]})
+                cache.write_json(staging, f"band-{r1}-{r2}.json", {"r1": r1, "r2": r2, "cells": event["cells"]})
                 bands.append({"r1": r1, "r2": r2, "cells": len(event["cells"])})
             elif kind == "image":
                 if meta is None:
@@ -82,7 +82,7 @@ def assemble(events, cache: RenderCache, key, expected_token=None, generation=No
             bands=sorted(bands, key=lambda b: b["r1"]),
             images=images,
         )
-        _write_json(staging / "meta.json", meta)
+        cache.write_json(staging, "meta.json", meta)
     except BaseException:
         cache.discard(staging)
         raise

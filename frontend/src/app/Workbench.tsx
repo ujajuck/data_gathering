@@ -1,4 +1,5 @@
 // 작업 공간 쉘(§7 Workbench): 사이드바 · 통합 검색 · JobBar · 라우팅(React.lazy 화면) · SourceReview 오버레이 · 토스트.
+// 메인 API는 사용자 인증을 쓰지 않는다 — /status가 실패하면 서버 연결 오류만 보여 준다.
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
@@ -9,7 +10,6 @@ import {
   ToastContext,
   api,
   notifyJobsFinished,
-  setToken,
   useData,
   useDebounced,
   useNavigation,
@@ -94,7 +94,7 @@ function Shell() {
         </header>
         <main className="app-main" inert={overlayOpen || undefined}>
           {status.error ? (
-            <TokenPrompt error={status.error} retry={status.reload} />
+            <ConnectionError error={status.error} retry={status.reload} />
           ) : status.loading ? (
             <p className="app-muted" role="status">
               작업 공간을 불러오는 중…
@@ -130,44 +130,16 @@ function Shell() {
   );
 }
 
-function TokenPrompt({ error, retry }: { error: ApiError; retry: () => void }) {
-  const [value, setValue] = useState("");
-  if (error.status !== 401 && error.status !== 403)
-    return (
-      <section className="app-card app-token-card">
-        <Heading title="작업 공간 연결" />
-        <div className="app-error" role="alert">
-          <span>{error.message}</span>
-          <button type="button" className="small" onClick={retry}>
-            다시 시도
-          </button>
-        </div>
-      </section>
-    );
+function ConnectionError({ error, retry }: { error: ApiError; retry: () => void }) {
   return (
-    <section className="app-card app-token-card">
-      <Heading title="작업 공간 연결" description="서버 접근 토큰을 입력하면 이 브라우저에 저장됩니다." />
-      <form
-        className="app-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setToken(value.trim());
-          retry();
-        }}
-      >
-        <p className="app-error" role="alert">
-          {error.message}
-        </p>
-        <label>
-          서버 접근 토큰
-          <input type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)} />
-        </label>
-        <div>
-          <button type="submit" className="primary">
-            연결
-          </button>
-        </div>
-      </form>
+    <section className="app-card app-connect-card">
+      <Heading title="작업 공간 연결" description="서버에 연결하지 못했습니다. 메인 API는 기본으로 127.0.0.1에만 열립니다." />
+      <div className="app-error" role="alert">
+        <span>{error.message}</span>
+        <button type="button" className="small" onClick={retry}>
+          다시 시도
+        </button>
+      </div>
     </section>
   );
 }

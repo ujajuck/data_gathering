@@ -69,6 +69,10 @@ class RenderCache:
         self.root = Path(root).resolve()
         self.base = self.root / "data/render-cache"
         self.base.mkdir(parents=True, exist_ok=True)
+        try:  # 렌더 파생물은 이 서버 계정만 읽는다
+            os.chmod(self.base, 0o700)
+        except OSError:
+            pass
         self.renderer_version = renderer_version
         self.version_dir = version_dirname(renderer_version)
         self.lock = threading.RLock()
@@ -133,6 +137,10 @@ class RenderCache:
 
     def discard(self, staging: Path):
         shutil.rmtree(staging, ignore_errors=True)
+
+    def write_json(self, staging, name, payload):
+        """assemble이 스테이징에 파일 하나를 쓴다. 파생물을 디스크에 두지 않는 캐시는 이 한 곳만 바꾼다."""
+        _write_json(Path(staging) / name, payload)
 
     def write_asset(self, snapshot_id, asset_id, ext, data: bytes):
         name = f"{asset_id}.{ext}"
@@ -320,6 +328,11 @@ class RenderCache:
         wr1, wc1, wr2, wc2 = self.clamp(self.meta(key), range_text)
         return address(wr1, wc1, wr2, wc2)
 
+    def asset_bytes(self, snapshot_id, asset_id):
+        """이미지 자산의 바이트. 없으면 None. (메모리 전용 캐시도 같은 모양으로 답한다.)"""
+        path = self.asset_path(snapshot_id, asset_id)
+        return path.read_bytes() if path is not None else None
+
     def asset_path(self, snapshot_id, asset_id):
         """엄격한 이름 검증 + 실제 경로가 캐시 루트 안인지 확인. 아니면 None(404)."""
         if not valid_id(snapshot_id) or not isinstance(asset_id, str) or not ASSET_RE.fullmatch(asset_id):
@@ -332,3 +345,159 @@ class RenderCache:
     @staticmethod
     def media_type(asset_id):
         return MEDIA_TYPES[asset_id.rsplit(".", 1)[1]]
+
+
+class MemoryRenderCache(RenderCache):
+    """보호 문서 전용 캐시 — 해제본에서 나온 파생물을 **디스크에 쓰지 않는다**(§3.5(3)).
+
+    `RenderCache`와 같은 API를 쓰지만 meta·밴드·이미지 자산이 프로세스 메모리에만 있다. 경로(`dir(key)`)는
+    사전 키로만 쓰고 파일을 만들지 않는다. 상한(`SCHEMA_RENDER_MEMORY_MB`, 기본 128)과 수명
+    (`SCHEMA_RENDER_MEMORY_TTL_SECONDS`, 기본 300초)을 넘기면 오래 안 쓴 snapshot부터 버린다 —
+    평문 내용이 서버 메모리에 무한정 남지 않게.
+    """
+
+    def __init__(self, root, renderer_version=RENDERER_VERSION):
+        self.root = Path(root).resolve()
+        self.base = self.root / "data/render-cache"  # 경로는 키로만 쓴다(만들지 않는다)
+        self.renderer_version = renderer_version
+        self.version_dir = version_dirname(renderer_version)
+        self.lock = threading.RLock()
+        self.limit = int(os.environ.get("SCHEMA_RENDER_MEMORY_MB", "128")) * 1024 * 1024
+        self.ttl = int(os.environ.get("SCHEMA_RENDER_MEMORY_TTL_SECONDS", "300"))
+        self.generations: dict[str, int] = {}
+        self.snapshots: dict[str, dict] = {}
+        self._blobs: dict[str, dict] = {}  # 최종 디렉터리 경로 → {파일 이름: payload}
+        self._staged: dict[str, dict] = {}
+        self._assets: dict[str, dict] = {}  # snapshot_id → {이름: bytes}
+        self._sizes: dict[str, int] = {}
+
+    # ---- 쓰기 -----------------------------------------------------------------------
+    def stage(self, key):
+        final = self.dir(key)
+        staging = final.with_name(final.name + f".mem-{os.getpid()}-{threading.get_ident()}")
+        with self.lock:
+            self._staged[str(staging)] = {}
+        return staging
+
+    def discard(self, staging):
+        with self.lock:
+            self._staged.pop(str(staging), None)
+
+    def write_json(self, staging, name, payload):
+        with self.lock:
+            self._staged.setdefault(str(staging), {})[name] = (payload, len(dump(payload).encode()))
+
+    def write_asset(self, snapshot_id, asset_id, ext, data: bytes):
+        name = f"{asset_id}.{ext}"
+        if not ASSET_RE.fullmatch(name):
+            raise Problem("INVALID_ASSET", "이미지 자산 이름이 유효하지 않습니다.")
+        with self.lock:
+            self._assets.setdefault(snapshot_id, {})[name] = bytes(data)
+        return name
+
+    def put(self, key, staging, generation=None):
+        snapshot_id, sheet_id, _ = key
+        final = str(self.dir(key))
+        with self.lock:
+            staged = self._staged.pop(str(staging), None) or {}
+            if generation is not None and generation != self.generations.get(snapshot_id, 0):
+                self._drop_assets(snapshot_id)
+                raise Problem("CANCELLED", "렌더 중 스냅샷이 무효화되었습니다.", 409)
+            prefix = str(self.snapshot_dir(snapshot_id)) + os.sep + sheet_id + "."
+            for path in [p for p in self._blobs if p.startswith(prefix) and p != final]:
+                self._forget(path)
+            self._forget(final)
+            self._blobs[final] = staged
+            self._sizes[final] = sum(size for _, size in staged.values())
+            self._touch(snapshot_id)
+            self._evict()
+
+    def _forget(self, path):
+        self._blobs.pop(path, None)
+        self._sizes.pop(path, None)
+
+    def _drop_assets(self, snapshot_id):
+        self._assets.pop(snapshot_id, None)
+
+    def _touch(self, snapshot_id):
+        self.snapshots[snapshot_id] = {"bytes": self._snapshot_bytes(snapshot_id), "touched": time.time()}
+
+    def _snapshot_bytes(self, snapshot_id):
+        prefix = str(self.snapshot_dir(snapshot_id)) + os.sep
+        total = sum(size for path, size in self._sizes.items() if path.startswith(prefix))
+        return total + sum(len(data) for data in self._assets.get(snapshot_id, {}).values())
+
+    def _evict(self):
+        """수명이 지난 snapshot과 상한을 넘긴 만큼을 오래된 것부터 버린다(잠금은 호출자가 쥔다)."""
+        now_at = time.time()
+        for snapshot_id in [s for s, info in self.snapshots.items() if self.ttl and now_at - info["touched"] > self.ttl]:
+            self._purge(snapshot_id)
+        total = sum(info["bytes"] for info in self.snapshots.values())
+        while total > self.limit and len(self.snapshots) > 1:
+            victim = min(self.snapshots, key=lambda s: self.snapshots[s]["touched"])
+            total -= self.snapshots[victim]["bytes"]
+            self._purge(victim)
+
+    def _purge(self, snapshot_id):
+        prefix = str(self.snapshot_dir(snapshot_id)) + os.sep
+        for path in [p for p in self._blobs if p.startswith(prefix)]:
+            self._forget(path)
+        self._drop_assets(snapshot_id)
+        self.snapshots.pop(snapshot_id, None)
+
+    def invalidate(self, snapshot_id):
+        with self.lock:
+            self.generations[snapshot_id] = self.generations.get(snapshot_id, 0) + 1
+            self._purge(snapshot_id)
+
+    # ---- 읽기 -----------------------------------------------------------------------
+    def has(self, key):
+        with self.lock:
+            self._evict()
+            return "meta.json" in self._blobs.get(str(self.dir(key)), {})
+
+    def _load(self, path: Path):
+        with self.lock:
+            entry = self._blobs.get(str(path.parent), {}).get(path.name)
+        if entry is None:
+            raise Problem("NOT_RENDERED", "이 시트는 아직 렌더되지 않았습니다.", 404)
+        return entry[0]
+
+    def sheets(self, snapshot_id):
+        prefix = str(self.snapshot_dir(snapshot_id)) + os.sep
+        out = []
+        with self.lock:
+            paths = sorted(p for p in self._blobs if p.startswith(prefix))
+        for path in paths:
+            sheet_id, _, version = Path(path).name.partition(".")
+            if version != self.version_dir or not valid_id(sheet_id):
+                continue
+            try:
+                meta = self._load(Path(path) / "meta.json")
+            except Problem:
+                continue
+            out.append(
+                {
+                    "sheet_id": sheet_id,
+                    "sheet_name": meta["sheet"],
+                    "renderer_version": meta["renderer_version"],
+                    "rendered_bounds": meta["rendered_bounds"],
+                    "truncated": meta["truncated"],
+                    "estimated_rows": meta["estimated_rows"],
+                    "estimated_cols": meta["estimated_cols"],
+                }
+            )
+        return out
+
+    def cache_bytes(self):
+        with self.lock:
+            return sum(info["bytes"] for info in self.snapshots.values())
+
+    def asset_path(self, snapshot_id, asset_id):
+        return None  # 디스크에 없다
+
+    def asset_bytes(self, snapshot_id, asset_id):
+        if not valid_id(snapshot_id) or not isinstance(asset_id, str) or not ASSET_RE.fullmatch(asset_id):
+            return None
+        with self.lock:
+            return self._assets.get(snapshot_id, {}).get(asset_id)

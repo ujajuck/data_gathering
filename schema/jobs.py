@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import signal
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -48,12 +49,45 @@ def _reader_environment():
     return {k: v for k, v in os.environ.items() if k.startswith("SCHEMA_")}
 
 
+# 이 작업(스레드) 하나가 친 보호 문서 해제 비용. Reader는 연산마다 별도 프로세스라 자식이 보내 준 값을 여기서 모은다.
+_drm_local = threading.local()
+
+
+def _add_drm(counts):
+    total = getattr(_drm_local, "counts", None)
+    if total is None:
+        total = _drm_local.counts = {"unlocked": 0, "reused": 0, "failed": 0}
+    for key in total:
+        total[key] += int(counts.get(key) or 0)
+
+
+def drm_counts(reset=False):
+    """작업 하나가 친 해제 비용 `{unlocked, reused, failed}`. 보호 문서를 만나지 않았으면 None."""
+    total = getattr(_drm_local, "counts", None)
+    if reset:
+        _drm_local.counts = None
+    return total if total and any(total.values()) else None
+
+
 class Cancelled(Problem):
     def __init__(self):
         super().__init__("CANCELLED", "작업을 취소했습니다.", 409)
 
 
+class _Terminated(BaseException):
+    """부모가 SIGTERM으로 이 자식을 끊었다(타임아웃·취소·스트림 중단). 감사와 해제본 정리를 마치고 끝낸다."""
+
+
 def _reader_child(pipe, environ, root, provider, principal, operation, payload):
+    """격리 프로세스 본체. 끝날 때 보호 문서 접근을 감사에 남기고(§3.5(4)) 해제 통계를 부모에게 보낸다.
+
+    강제 종료 경로(부모의 `terminate()`)도 그냥 죽지 않는다 — SIGTERM을 예외로 바꿔 `finally`에서 감사와
+    해제본 삭제가 반드시 돌게 한다. 이 처리가 없으면 '해제까지 갔다가 잘린' 접근이 기록에 남지 않고 평문이 남는다."""
+    outcome, error_code, completion = "ok", None, ("done", None)
+    try:
+        signal.signal(signal.SIGTERM, _raise_terminated)
+    except (ValueError, OSError, AttributeError):
+        pass
     try:
         for key in [k for k in os.environ if k.startswith("SCHEMA_") and k not in environ]:
             del os.environ[key]
@@ -65,7 +99,8 @@ def _reader_child(pipe, environ, root, provider, principal, operation, payload):
             resource.setrlimit(resource.RLIMIT_AS, (ceiling, ceiling))
         from .readers import make_reader
 
-        reader = make_reader(root, provider, principal)
+        # 연산마다 원본은 하나다 — Reader 선택이 컨테이너를 보려면 source_ref가 필요하다(§3.2).
+        reader = make_reader(root, provider, principal, payload.get("source_ref"))
         result = getattr(reader, operation)(**payload)
         events = result if operation in STREAM_OPERATIONS else iter([result])
         for event in events:
@@ -76,27 +111,69 @@ def _reader_child(pipe, environ, root, provider, principal, operation, payload):
                     413,
                 )
             pipe.send(("data", event))
-        pipe.send(("done", None))
+    except _Terminated:
+        outcome, error_code = "failed", "READER_STOPPED"
+        completion = ("error", ("READER_STOPPED", "문서 읽기 프로세스가 종료되었습니다.", 422))
     except Problem as exc:
-        pipe.send(("error", (exc.code, exc.message, exc.status)))
+        outcome, error_code = "failed", exc.code
+        completion = ("error", (exc.code, exc.message, exc.status))
     except MemoryError:
-        pipe.send(
-            ("error", ("READER_MEMORY_LIMIT", "문서 읽기 메모리 한도를 초과했습니다.", 413))
-        )
+        outcome, error_code = "failed", "READER_MEMORY_LIMIT"
+        completion = ("error", ("READER_MEMORY_LIMIT", "문서 읽기 메모리 한도를 초과했습니다.", 413))
     except Exception:
         # 제공자 예외의 파일 경로/자격 증명을 API 응답에 노출하지 않는다.
-        pipe.send(
-            (
-                "error",
-                (
-                    "READER_FAILED",
-                    "문서 읽기에 실패했습니다. 제공자 설정과 문서 형식을 확인하세요.",
-                    422,
-                ),
-            )
+        outcome, error_code = "failed", "READER_FAILED"
+        completion = (
+            "error",
+            ("READER_FAILED", "문서 읽기에 실패했습니다. 제공자 설정과 문서 형식을 확인하세요.", 422),
         )
+    try:
+        # 정리 구간에서는 SIGTERM을 무시한다 — 여기서 또 예외로 바뀌면 감사·삭제가 중간에 끊기고
+        # 부모가 닫은 파이프에 쓰다 죽은 트레이스백만 stderr에 남는다(부모는 2초 뒤 SIGKILL을 보낸다).
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:
+        # 해제본부터 지운다 — 감사 줄의 temp_removed가 "실제로 지운 수"여야 한다.
+        from .readers import release_sessions
+
+        release_sessions()
+    except Exception:
+        pass
+    try:
+        counts = _audit_access(root, provider, principal, payload.get("source_ref"), operation, outcome, error_code)
+        if counts:
+            pipe.send(("drm", counts))
+    except Exception:
+        pass  # 감사 기록 실패가 읽기 결과를 바꾸지 않는다
+    try:
+        pipe.send(completion)
+    except Exception:
+        pass  # 부모가 이미 파이프를 닫았다(중단 경로)
     finally:
         pipe.close()
+
+
+def _raise_terminated(signum, frame):
+    raise _Terminated()
+
+
+def _audit_access(root, provider, principal, source_ref, operation, outcome, error_code):
+    """보호 문서 접근 한 줄을 남기고 `{unlocked, reused, failed}`를 돌려준다. 평문 문서면 None."""
+    if not source_ref:
+        return None
+    from . import drm
+
+    return drm.record_access(
+        root,
+        provider=provider,
+        principal=principal,
+        source_ref=source_ref,
+        operation=operation,
+        outcome=outcome,
+        error_code=error_code,
+        reader="local-xlsx" if provider == "local-xlsx" and not drm.sniff_source(root, source_ref)["protected"] else "drm",
+    )
 
 
 def reader_events(root, provider, principal, operation, payload, checkpoint=lambda: None):
@@ -111,11 +188,12 @@ def reader_events(root, provider, principal, operation, payload, checkpoint=lamb
     process.start()
     child.close()
     deadline = time.monotonic() + int(env("READER_TIMEOUT_SECONDS", "120"))
-    done = False
+    done, audited, cut = False, False, None
     try:
         while not done:
             checkpoint()
             if time.monotonic() > deadline:
+                cut = "READER_TIMEOUT"
                 raise Problem(
                     "READER_TIMEOUT",
                     "문서 읽기 제한 시간을 초과했습니다. 범위를 줄이거나 제공자 설정을 확인하세요.",
@@ -130,12 +208,21 @@ def reader_events(root, provider, principal, operation, payload, checkpoint=lamb
                     ) from None
                 if kind == "error":
                     raise Problem(*value)
-                if kind == "done":
+                if kind == "drm":
+                    audited = True
+                    _add_drm(value)  # 이 작업이 친 보호 문서 해제 비용(§3.5(4))
+                elif kind == "done":
                     done = True
                 else:
                     yield value
             elif not process.is_alive():
                 raise Problem("READER_STOPPED", "문서 읽기 프로세스가 종료되었습니다.", 422)
+    except GeneratorExit:  # 소비자가 스트림을 중간에 닫았다
+        cut = cut or "STREAM_CLOSED"
+        raise
+    except BaseException as exc:
+        cut = cut or (exc.code if isinstance(exc, Problem) else type(exc).__name__)
+        raise
     finally:
         parent.close()
         if process.is_alive():
@@ -144,6 +231,34 @@ def reader_events(root, provider, principal, operation, payload, checkpoint=lamb
         if process.is_alive():
             process.kill()
             process.join(timeout=1)
+        if not audited and not done:
+            # 자식이 감사를 남기지 못하고 끊긴 경로(타임아웃·취소·스트림 중단). 부모가 보완 기록을 남긴다(§3.5(4)).
+            _audit_cut(root, provider, principal, payload.get("source_ref"), operation, cut or "READER_STOPPED")
+
+
+def _audit_cut(root, provider, principal, source_ref, operation, error_code):
+    """자식이 죽어 감사를 남기지 못한 보호 문서 접근을 부모가 대신 남긴다. 평문·없는 파일은 아무것도 남기지 않는다."""
+    if not source_ref:
+        return
+    try:
+        from . import drm
+
+        if not drm.sniff_source(root, source_ref)["protected"]:
+            return
+        drm.audit(
+            root,
+            principal=principal,
+            provider=provider,
+            source_ref=str(source_ref),
+            operation=operation,
+            container=drm.sniff_source(root, source_ref)["container"],
+            reader="drm",
+            outcome="failed",
+            error_code=error_code,
+            note="reader-process-terminated",
+        )
+    except Exception:
+        pass
 
 
 def reader_result(root, provider, principal, operation, payload, checkpoint=lambda: None):
@@ -433,9 +548,13 @@ class Jobs:
 
             try:
                 checkpoint(force=True)
+                drm_counts(reset=True)
                 result = self.handler(
                     job["kind"], json.loads(job["payload_json"]), job["principal"], checkpoint
                 )
+                drm = drm_counts(reset=True)
+                if drm and isinstance(result, dict):
+                    result = {**result, "drm": drm}  # §3.5(4) 작업 내역에 해제 비용을 남긴다
                 with self.db.connect(write=True) as conn:
                     conn.execute(
                         "UPDATE runtime_job SET state='succeeded',result_json=?,finished_at=?,completed=coalesce(total,completed) WHERE job_id=?",
