@@ -104,6 +104,8 @@ def test_status_search_settings_presets(world):
     settings = world.get("/settings")
     assert settings["render"]["mode"] == "inprocess" and settings["reader"]["timeout_seconds"] > 0 and settings["limits"]["wait_seconds"] == 60
     assert settings["workspace"] == world.root.name and not settings["access_token_required"] and settings["limits"]["profile"]["rules"] == 200
+    # §4.1.1 폴더 일괄 등록 한도(프런트 미리보기 안내 문구가 읽는다)
+    assert settings["limits"]["register_directory_files"] == 10000
     presets = world.get("/normalization-presets")
     assert {p["id"] for p in presets["items"]} >= {"identity", "automatic"}
     response = world.client.get("/api/v3/status")

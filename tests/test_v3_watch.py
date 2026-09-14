@@ -8,6 +8,7 @@ import types
 
 import pytest
 
+from kg.v3.__main__ import parse
 from kg.v3.db import Problem
 from kg.v3.service import Service
 from kg.v3.watch import Watcher, run
@@ -73,6 +74,27 @@ def test_dropped_file_is_registered_and_auto_applied(approved):
     deleted = [l for l in watcher.scan() if l.get("skipped") == "FILE_DELETED"]
     assert deleted and deleted[0]["source_ref"] == "b.xlsx"
     assert service.document(b["document_id"])["document_name"] == "b.xlsx"
+
+
+def test_watch_covers_subfolders_by_default(approved):
+    """계약 §10: watch는 기본으로 하위 폴더까지 감시한다(source_ref는 data/raw 기준 상대 경로)."""
+    root, service = approved["root"], approved["service"]
+    (root / "data/raw/하위/더").mkdir(parents=True)
+    build_workbook(root / "data/raw/하위/더/e.xlsx", temps=(41, 42, 43), lots=("Y1", "Y2", "Y3"))
+    watcher = Watcher(root, service=service, principal="watcher")
+    assert watcher.watcher.patterns == ("**/*.xlsx", "**/*.xlsm")
+    lines = {l.get("source_ref"): l for l in watcher.run_once()}
+    nested = lines["하위/더/e.xlsx"]
+    assert nested["event"] == "created" and nested["status"] == "normal"
+    assert [a["compatibility"] for a in nested["applied"]] == ["identical"]
+    assert [v["value_text"] for v in service.snapshot_values(nested["snapshot_id"], rule_key="lot")["items"]] == ["Y1", "Y2", "Y3"]
+
+    # --no-recursive면 최상위만 본다.
+    flat = Watcher(root, service=service, principal="watcher", recursive=False)
+    assert flat.watcher.patterns == ("*.xlsx", "*.xlsm")
+    refs = {l.get("source_ref") for l in flat.run_once()}
+    assert "a.xlsx" in refs and "하위/더/e.xlsx" not in refs
+    assert parse(["watch", "--ws", str(root), "--no-recursive"]).no_recursive is True
 
 
 def test_raw_dir_must_be_inside_workspace(tmp_path):

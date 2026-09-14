@@ -1,5 +1,6 @@
 """raw 폴더의 XLSX를 v3 문서로 자동 등록한다(계약 §10 `watch`: 등록 + 자동 적용).
 
+기본으로 하위 폴더까지 감시한다(`**/*.xlsx`; `--no-recursive`면 최상위만). source_ref는 data/raw 기준 상대 경로라 하위 폴더도 그대로 통한다.
 `kg.watch.FileEventWatcher`(폴링 + 안정화 판정)를 v2 `kg/v2/watch.py`와 같은 방식으로 재사용하고,
 등록은 v3 `Service.register_documents`(작업 1개: describe 1회 → snapshot → auto_apply → 추출·발행)로 보낸다.
 원본을 열어 저장하거나 해제본을 만들지 않는다.
@@ -19,10 +20,12 @@ from .jobs import env
 from .service import Service
 
 REGISTER_WAIT = 600  # 등록 작업(추출 포함)이 끝날 때까지 기다리는 상한(초). 워커 스레드가 없으면 run_one으로 직접 실행된다.
+RECURSIVE_PATTERNS = ("**/*.xlsx", "**/*.xlsm")  # 기본: 하위 폴더까지(계약 §10 watch)
+FLAT_PATTERNS = ("*.xlsx", "*.xlsm")  # --no-recursive
 
 
 class Watcher:
-    def __init__(self, root, raw=None, provider="local-xlsx", principal=None, service=None):
+    def __init__(self, root, raw=None, provider="local-xlsx", principal=None, service=None, recursive=True):
         # 등록은 같은 스레드에서 작업을 직접 실행하므로(jobs.wait → run_one) 워커 스레드는 띄우지 않는다.
         self.service = service or Service(root)
         self.base = (self.service.root / "data/raw").resolve()
@@ -31,7 +34,8 @@ class Watcher:
             raise Problem("INVALID_RAW_DIR", "감시 폴더는 <workspace>/data/raw 아래의 기존 폴더여야 합니다.")
         self.provider = provider
         self.principal = principal or env("PRINCIPAL", "local-user")
-        self.watcher = FileEventWatcher(raw_dir=self.raw)
+        self.recursive = recursive
+        self.watcher = FileEventWatcher(raw_dir=self.raw, patterns=RECURSIVE_PATTERNS if recursive else FLAT_PATTERNS)
 
     def close(self):
         self.service.close()
@@ -107,9 +111,9 @@ def emit(line, out=None):
     print(json.dumps(line, ensure_ascii=False), file=out or sys.stdout, flush=True)
 
 
-def run(root, raw=None, provider="local-xlsx", interval=2.0, once=False) -> int:
+def run(root, raw=None, provider="local-xlsx", interval=2.0, once=False, recursive=True) -> int:
     try:
-        watcher = Watcher(root, raw, provider)
+        watcher = Watcher(root, raw, provider, recursive=recursive)
     except Problem as exc:
         print(json.dumps({"error": exc.code, "message": exc.message}, ensure_ascii=False), file=sys.stderr)
         return 2

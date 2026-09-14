@@ -1,6 +1,6 @@
 """요청/작업마다 연결을 분리하고 짧은 트랜잭션으로 쓰는 v3 SQLite 저장소(`<ws>/data/kg/v3.db`).
 
-계약 §1. 코어 DDL은 db/v3/schema_sqlite.sql, 런타임 테이블(runtime_job·snapshot_signature)은 여기서 만든다.
+계약 §1. 코어 DDL은 db/v3/schema_sqlite.sql, 런타임 테이블(runtime_job·snapshot_signature·source_digest)은 여기서 만든다.
 """
 
 from __future__ import annotations
@@ -46,6 +46,17 @@ CREATE TABLE IF NOT EXISTS snapshot_signature (
   computed_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS snapshot_signature_sha ON snapshot_signature(signature_sha256);
+-- §1.6 source_digest: 로컬 원본 (byte_size, mtime_ns) → 내용 SHA-256 캐시. §4.1.1 스캔이 같은 stat이면 파일을 읽지 않는다.
+-- 진실은 document_snapshot.change_token이며 이 표는 언제 지워도 된다(다음 스캔이 다시 계산).
+CREATE TABLE IF NOT EXISTS source_digest (
+  provider TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  byte_size INTEGER NOT NULL,
+  mtime_ns INTEGER NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  seen_at TEXT NOT NULL,
+  PRIMARY KEY (provider, source_path)
+);
 -- 값 목록 keyset(§6 /values): 실행 안에서 group_key·item_index 순으로 O(페이지) 탐색.
 CREATE INDEX IF NOT EXISTS value_by_run_group ON extracted_value(run_id, group_key, item_index, value_id);
 -- 아래는 코어 DDL(db/v3)에도 있는 인덱스다. 이전 DDL로 만든 DB에도 붙도록 IF NOT EXISTS로 한 번 더 선언한다.

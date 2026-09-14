@@ -145,7 +145,8 @@ class SchemaV3Tests(unittest.TestCase):
         self.assertEqual(self.scalar("PRAGMA integrity_check"), "ok")
         self.assertEqual(self.scalar("SELECT version FROM schema_meta"), 3)
         core = {r[0] for r in self.rows("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertEqual(len(core - {"schema_meta", "runtime_job", "snapshot_signature"}), 18)
+        # 런타임 표(§1.6 runtime_job·snapshot_signature·source_digest)를 뺀 코어 18개
+        self.assertEqual(len(core - {"schema_meta", "runtime_job", "snapshot_signature", "source_digest"}), 18)
         self.assertEqual(self.scalar("SELECT published_run_id FROM parsing_application WHERE application_id='app-1'"), "run-1")
         self.assertEqual(self.rows("SELECT edit_seq, current_revision_id FROM mapping ORDER BY mapping_id"),
                          [(1, "rev-lot-1"), (1, "rev-temp-1")])

@@ -21,6 +21,7 @@ import time
 from importlib.metadata import version as package_version
 from pathlib import Path
 
+from kg.v2.readers import file_hash
 from kg.v2.spec import address
 
 from . import ENGINE_VERSION
@@ -38,6 +39,13 @@ KEY_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
 # schema_key는 정의 파일 폴더 이름이 되므로 '.'/'..' 같은 경로 조각을 막는다(첫 글자는 영숫자).
 SCHEMA_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$")
 REPARSE_PAGE = 200
+# §4.1.1 폴더 일괄 등록
+SOURCE_EXTENSIONS = (".xlsx", ".xlsm", ".xls")
+SCAN_ENTRY_LIMIT = 200_000  # 스캔이 걸을 수 있는 항목(폴더+파일) 수
+SCAN_SAMPLE = 20  # 미리보기 sample[] 행 수
+REGISTER_DIRECTORY_ROWS = 500  # 결과 documents[] 상한(넘으면 truncated)
+DEFAULT_TARGET_STATES = ("new", "changed", "registered")  # 기본 등록 대상
+EXTRA_TARGET_STATES = ("unchanged", "locked")  # include_unchanged=true에서만 다시 읽는다
 log = logging.getLogger(__name__)
 TEST_TIMEOUT_SECONDS = 20
 VALUE_BATCH = 200
@@ -91,6 +99,21 @@ def normalize_source_ref(source_ref):
     if normalized in (".", "..") or normalized.startswith("../"):
         raise Problem("INVALID_SOURCE", "원본 참조는 원본 폴더 안을 가리켜야 합니다.")
     return normalized
+
+
+def normalize_directory(directory):
+    """§4.1.1 폴더 참조 정규화. source_ref와 같은 규칙이되 ''(= data/raw 최상위)를 허용한다."""
+    if directory is None:
+        directory = ""
+    if not isinstance(directory, str) or len(directory) > 2048:
+        raise Problem("INVALID_SOURCE", "원본 폴더 경로가 유효하지 않습니다.")
+    text = directory.replace("\\", "/").strip()
+    if text in ("", ".", "./"):
+        return ""
+    try:
+        return normalize_source_ref(text)
+    except Problem:
+        raise Problem("INVALID_SOURCE", "등록할 폴더는 원본 폴더 기준 상대 경로여야 합니다(절대 경로·상위 이동 금지).") from None
 
 
 def split_locator(text):
@@ -710,6 +733,8 @@ class Service:
         return self.job_result(job, wait, principal)
 
     def _register_job(self, payload, principal, checkpoint):
+        if "directory" in payload:
+            return self._register_directory_job(payload, principal, checkpoint)  # §4.1.1 폴더 일괄 등록
         refs = payload["source_refs"]
         results, failures = [], []
         for n, ref in enumerate(refs):
@@ -756,6 +781,229 @@ class Service:
             )
         result.update(document_id=did, status="locked")
         return result
+
+    # ---- 폴더 일괄 등록(§4.1.1) ------------------------------------------------------
+    def _raw_folder(self, directory):
+        """data/raw 아래의 폴더를 연다. 중간 경로가 심볼릭 링크면 따라가지 않는다(404)."""
+        raw = (self.root / "data/raw").resolve()
+        folder = raw
+        for part in directory.split("/") if directory else ():
+            folder = folder / part
+            if folder.is_symlink():
+                raise Problem("SOURCE_NOT_FOUND", "원본 폴더를 찾을 수 없습니다.", 404)
+        if not folder.resolve().is_relative_to(raw):
+            raise Problem("INVALID_SOURCE", "원본 폴더 안의 경로만 등록할 수 있습니다.")
+        if not folder.is_dir():
+            raise Problem("SOURCE_NOT_FOUND", "원본 폴더를 찾을 수 없습니다.", 404)
+        return folder
+
+    def _scan_files(self, directory):
+        """os.scandir 재귀 스캔(폴더·파일 이름 순으로 결정적). Reader 프로세스를 띄우지 않고 stat만 본다."""
+        base = self._raw_folder(directory)
+        limit = max(1, int(env("REGISTER_DIRECTORY_LIMIT", "10000")))
+        folders, entries = 0, 0
+        files, skipped = [], {"temp": 0, "unsupported": 0, "symlink": 0}
+        stack = [(base, directory)]
+        while stack:
+            folder, prefix = stack.pop()
+            try:
+                with os.scandir(folder) as scan:
+                    items = sorted(scan, key=lambda entry: entry.name)
+            except OSError:
+                continue  # 스캔 중 사라졌거나 읽을 수 없는 폴더는 건너뛴다
+            children = []
+            for item in items:
+                entries += 1
+                if entries > SCAN_ENTRY_LIMIT:
+                    raise Problem("DIRECTORY_LIMIT", f"폴더 안 항목이 {SCAN_ENTRY_LIMIT:,}개를 넘습니다. 하위 폴더를 나누어 등록하세요.", 413)
+                if item.is_symlink():
+                    skipped["symlink"] += 1  # 폴더든 파일이든 따라가지 않는다
+                    continue
+                ref = f"{prefix}/{item.name}" if prefix else item.name
+                if item.is_dir(follow_symlinks=False):
+                    if item.name.startswith("."):
+                        continue  # '.'으로 시작하는 폴더는 들어가지 않는다
+                    folders += 1
+                    children.append((Path(item.path), ref))
+                    continue
+                if item.name.startswith("~$"):
+                    skipped["temp"] += 1
+                    continue
+                if posixpath.splitext(item.name)[1].lower() not in SOURCE_EXTENSIONS:
+                    skipped["unsupported"] += 1
+                    continue
+                try:
+                    stat = item.stat(follow_symlinks=False)
+                except OSError:
+                    skipped["unsupported"] += 1  # 스캔 중 사라진 파일
+                    continue
+                if len(files) >= limit:
+                    raise Problem("DIRECTORY_LIMIT", f"등록 대상 파일이 한도({limit:,}개)를 넘습니다. 하위 폴더를 나누어 등록하세요.", 413)
+                files.append({"source_ref": ref, "path": item.path, "byte_size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
+            stack.extend(reversed(children))
+        return {"folders": folders, "files": files, "skipped": skipped, "limit": limit}
+
+    def _classify_files(self, files, provider, directory):
+        """§4.1.1 분류(new/locked/changed/unchanged). 등록 문서와 해시 캐시를 SQL 두 번으로 읽는다(파일마다 DB를 치지 않는다)."""
+        prefix = None
+        if directory:
+            prefix = directory.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
+
+        def scoped(sql, column):
+            if prefix is None:
+                return sql, (provider,)
+            return f"{sql} AND {column} LIKE ? ESCAPE '\\'", (provider, prefix)
+
+        with self.db.connect() as conn:
+            sql, params = scoped(
+                "SELECT d.source_path, d.status, s.change_token, s.byte_size FROM document d"
+                " LEFT JOIN document_snapshot s ON s.snapshot_id=d.current_snapshot_id WHERE d.provider=?",
+                "d.source_path",
+            )
+            documents = {r["source_path"]: r for r in rows(conn, sql, params)}
+            sql, params = scoped(
+                "SELECT source_path, byte_size, mtime_ns, content_sha256 FROM source_digest WHERE provider=?",
+                "source_path",
+            )
+            digests = {r["source_path"]: r for r in rows(conn, sql, params)}
+        fresh = []
+        for item in files:
+            doc = documents.get(item["source_ref"])
+            if doc is None:
+                item["state"] = "new"
+                continue
+            if provider != "local-xlsx":
+                # 다른 provider의 내용은 메인 프로세스가 읽을 수 없다. 등록 여부만 보고 항상 Reader에 보낸다.
+                item["state"] = "registered"
+                continue
+            if doc["status"] == "locked":
+                item["state"] = "locked"
+                continue
+            if not doc["change_token"]:
+                item["state"] = "changed"  # 현재 snapshot이 없다
+                continue
+            if doc["byte_size"] is not None and doc["byte_size"] != item["byte_size"]:
+                item["state"] = "changed"  # 크기가 다르면 해시를 계산하지 않는다
+                continue
+            cached = digests.get(item["source_ref"])
+            if cached and cached["byte_size"] == item["byte_size"] and cached["mtime_ns"] == item["mtime_ns"]:
+                content = cached["content_sha256"]  # 같은 stat이면 파일을 읽지 않는다(§1.6)
+            else:
+                try:
+                    content = file_hash(Path(item["path"]))
+                except OSError:
+                    item["state"] = "changed"  # 읽을 수 없으면 Reader가 판단한다
+                    continue
+                fresh.append((item["source_ref"], item["byte_size"], item["mtime_ns"], content))
+            item["state"] = "unchanged" if content == doc["change_token"] else "changed"
+        if fresh:
+            self._store_digests(provider, fresh)
+        return files
+
+    def _store_digests(self, provider, entries):
+        """source_digest upsert((provider, source_path) 기준)."""
+        stamp = now()
+        with self.db.connect(write=True) as conn:
+            for source_path, byte_size, mtime_ns, content in entries:
+                conn.execute(
+                    "INSERT INTO source_digest (provider,source_path,byte_size,mtime_ns,content_sha256,seen_at) VALUES (?,?,?,?,?,?)"
+                    " ON CONFLICT(provider,source_path) DO UPDATE SET byte_size=excluded.byte_size,mtime_ns=excluded.mtime_ns,"
+                    "content_sha256=excluded.content_sha256,seen_at=excluded.seen_at",
+                    (provider, source_path, byte_size, mtime_ns, content, stamp),
+                )
+
+    def _remember_digest(self, provider, item, before, snapshot):
+        """등록 전 stat과 등록 뒤 stat이 같으면 (byte_size, mtime_ns, snapshot.change_token)을 캐시해 다음 스캔이 파일을 읽지 않게 한다."""
+        token = (snapshot or {}).get("change_token")
+        if provider != "local-xlsx" or not token:
+            return
+        try:
+            stat = os.stat(item["path"])
+        except OSError:
+            return
+        if (stat.st_size, stat.st_mtime_ns) != tuple(before):
+            return  # 등록 중에 파일이 다시 바뀌었다
+        self._store_digests(provider, [(item["source_ref"], stat.st_size, stat.st_mtime_ns, token)])
+
+    @staticmethod
+    def _scan_states(files):
+        # states{new, changed, unchanged, locked}. 'registered'(다른 provider의 기존 문서)는 항상 다시 읽으므로 changed로 센다.
+        counts = {"new": 0, "changed": 0, "unchanged": 0, "locked": 0}
+        for item in files:
+            counts["changed" if item["state"] == "registered" else item["state"]] += 1
+        return counts
+
+    def scan_sources(self, directory="", provider="local-xlsx"):
+        """GET /sources/scan: 폴더 아래 재귀 미리보기(§4.1.1). Reader 없이 stat과 캐시된 해시만 본다."""
+        directory = normalize_directory(directory)
+        scan = self._scan_files(directory)
+        files = self._classify_files(scan["files"], provider, directory)
+        return {
+            "directory": directory,
+            "folders": scan["folders"],
+            "files": len(files),
+            "states": self._scan_states(files),
+            "skipped": scan["skipped"],
+            "targeted": sum(1 for f in files if f["state"] in DEFAULT_TARGET_STATES),
+            "limit": scan["limit"],
+            "sample": [{"source_ref": f["source_ref"], "state": f["state"]} for f in files[:SCAN_SAMPLE]],
+        }
+
+    def register_directory(self, directory="", provider="local-xlsx", include_unchanged=False, principal=None, wait=0):
+        """POST /documents/register-directory: 폴더 아래 전부를 작업 1개(kind='register')로 등록한다(§4.1.1)."""
+        principal = principal or self.principal
+        directory = normalize_directory(directory)
+        name = directory.rsplit("/", 1)[-1] if directory else "원본"
+        payload = {"directory": directory, "provider": provider, "include_unchanged": bool(include_unchanged), "recursive": True}
+        job = self.jobs.submit("register", payload, principal, uid(), target_kind="workspace", label=f"{name} 폴더 일괄 등록")
+        return self.job_result(job, wait, principal)
+
+    def _register_directory_job(self, payload, principal, checkpoint):
+        """스캔 → checkpoint(0, targeted) → 정렬 순서대로 §4.1 register. 파일 하나의 Problem은 그 행의 error로 남긴다."""
+        directory = normalize_directory(payload.get("directory"))
+        provider = payload.get("provider") or "local-xlsx"
+        include_unchanged = bool(payload.get("include_unchanged"))
+        # 스캔 자체의 Problem만 작업을 failed로 만든다(전부 실패해도 작업은 succeeded, 요약이 결과물이다).
+        scan = self._scan_files(directory)
+        files = self._classify_files(scan["files"], provider, directory)
+        wanted = DEFAULT_TARGET_STATES + (EXTRA_TARGET_STATES if include_unchanged else ())
+        targets = [f for f in files if f["state"] in wanted]
+        counts = self._scan_states(files)
+        summary = {
+            "found": len(files),
+            "targeted": len(targets),
+            "registered": 0,
+            "new": counts["new"],
+            "changed": counts["changed"],
+            "unchanged": counts["unchanged"],
+            "failed": 0,
+            "locked": counts["locked"],
+            "skipped": scan["skipped"],
+        }
+        documents, truncated = [], False
+        checkpoint(0, len(targets), force=True)
+        for n, item in enumerate(targets):
+            checkpoint(n, len(targets), force=True)
+            before = (item["byte_size"], item["mtime_ns"])
+            try:
+                row = self.register(item["source_ref"], provider, principal, None, checkpoint)
+                summary["registered"] += 1
+                self._remember_digest(provider, item, before, row.get("snapshot"))
+            except Cancelled:
+                raise  # 그때까지 등록된 문서는 남는다
+            except Problem as exc:
+                summary["failed"] += 1
+                # 스캔에서 이미 locked로 센 파일은 다시 더하지 않는다(같은 파일을 두 번 세지 않는다).
+                if exc.code == "DRM_READER_REQUIRED" and item["state"] != "locked":
+                    summary["locked"] += 1
+                row = self._register_failure(item["source_ref"], provider, exc)
+            row = {**row, "source_ref": item["source_ref"], "state": item["state"]}
+            if len(documents) < REGISTER_DIRECTORY_ROWS:
+                documents.append(row)
+            else:
+                truncated = True
+        checkpoint(len(targets), len(targets), force=True)
+        return {"directory": directory, "summary": summary, "documents": documents, "truncated": truncated}
 
     def register(self, source_ref, provider="local-xlsx", principal=None, document_id=None, checkpoint=lambda *a, **k: None):
         """§4.1 describe(profiles=approved) 1회 → document/snapshot/sheet/signature → §4.4 승계 → §4.3 auto_apply → 상태 갱신."""

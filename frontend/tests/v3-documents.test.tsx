@@ -3,8 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { STATUS_LABELS, STATUS_ORDER } from "../src/v3/types";
 import { getBuildDraft } from "../src/v3/buildDraft";
-import { UUID_RE, job, page, reply, v3Fixture } from "./v3-fixture";
-import { documentsFixture } from "./v3-documents-fixture";
+import { UUID_RE, errorBody, job, page, reply, v3Fixture } from "./v3-fixture";
+import { documentsFixture, registerDirectoryResult } from "./v3-documents-fixture";
 
 const route = () => new URLSearchParams(location.search);
 const documentsTable = () => screen.findByRole("table", { name: "문서 목록" });
@@ -171,7 +171,8 @@ describe("v3 문서 화면", () => {
     await f.waitForApi(/^\/sources/);
     const files = await within(dialog).findByRole("table", { name: "원본 파일 목록" });
     expect(within(files).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["", "이름", "크기", "수정"]);
-    await user.click(within(files).getByRole("button", { name: /2024/ }));
+    // 폴더 행에는 이름(이동)과 '전체 등록'(§4.1.1) 두 버튼이 있으므로 이름으로 정확히 고른다
+    await user.click(within(files).getByRole("button", { name: "📁 2024" }));
     await f.waitForApi(/^\/sources\?directory=2024/);
     await user.click(await within(dialog).findByRole("checkbox", { name: "공정데이터_2024_05.xlsx" }));
     await user.click(within(dialog).getByRole("checkbox", { name: "손상파일.xlsx" }));
@@ -405,5 +406,156 @@ describe("v3 문서 화면", () => {
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(route().get("document")).toBeNull();
+  });
+});
+
+describe("v3 폴더 일괄 등록(§4.1.1)", () => {
+  // 등록 대화상자를 열고 원본 폴더 목록까지 그린다.
+  async function openRegister() {
+    const f = documentsFixture();
+    f.renderApp("?screen=documents");
+    await documentsTable();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "+ 문서 등록" }));
+    const dialog = await screen.findByRole("dialog", { name: "문서 등록" });
+    await f.waitForApi(/^\/sources$/);
+    await within(dialog).findByRole("table", { name: "원본 파일 목록" });
+    return { f, user, dialog };
+  }
+  const startButton = (dialog: HTMLElement) => footer(dialog).getByRole("button", { name: /등록 시작/ });
+
+  it("'이 폴더 전체 등록'은 폴더를 한 번만 스캔해 미리보기를 보여주고, 체크박스는 재조회 없이 대상 수를 바꾼다", async () => {
+    const { f, user, dialog } = await openRegister();
+    await user.click(within(dialog).getByRole("button", { name: "📁 2024" }));
+    await f.waitForApi(/^\/sources\?directory=2024/);
+    await user.click(within(dialog).getByRole("button", { name: "이 폴더 전체 등록" }));
+    await f.waitForApi(/^\/sources\/scan\?directory=2024/);
+    expect(f.scanned).toEqual([{ directory: "2024" }]);
+
+    expect(await within(dialog).findByText("2024/ 아래 파일 5개 · 하위 폴더 1개")).toBeTruthy();
+    const chips = within(dialog).getByLabelText("스캔 요약");
+    expect(within(chips).getByText("새 파일 2")).toBeTruthy();
+    expect(within(chips).getByText("변경된 문서 1")).toBeTruthy();
+    expect(within(chips).getByText("변경 없음 1")).toBeTruthy();
+    expect(within(chips).getByText("잠김 1")).toBeTruthy();
+    expect(within(dialog).getByText("건너뜀: 임시 파일 1 · 지원하지 않는 파일 2")).toBeTruthy();
+    expect(within(dialog).queryByRole("table", { name: "원본 파일 목록" })).toBeNull();
+
+    // 대상 수는 targeted(3) ↔ targeted + 변경 없음 + 잠김(5)
+    expect(startButton(dialog).textContent).toBe("3개 등록 시작");
+    const again = within(dialog).getByLabelText("변경 없는 문서·잠긴 문서도 다시 읽기");
+    await user.click(again);
+    expect(startButton(dialog).textContent).toBe("5개 등록 시작");
+    await user.click(again);
+    expect(startButton(dialog).textContent).toBe("3개 등록 시작");
+    expect(f.scanned).toHaveLength(1);
+    expect(dialog.textContent).not.toMatch(UUID_RE);
+
+    await user.click(startButton(dialog));
+    await f.waitForApi(/^\/documents\/register-directory\?wait=10/, "POST");
+    expect(f.registeredDirectory).toHaveLength(1);
+    expect(f.registeredDirectory[0].body).toEqual({ directory: "2024", provider: "local-xlsx", include_unchanged: false });
+
+    const results = await within(dialog).findByRole("table", { name: "등록 결과" });
+    expect(within(results).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["문서명", "등록", "자동 적용", "상태", "실패 사유"]);
+    expect(within(dialog).getByText("3개 중 2개 등록 · 1개 변경 없음 · 1개 실패 · 1개 잠김")).toBeTruthy();
+    const rows = within(results).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(3);
+    expect(rows[0].textContent).toContain("공정데이터_2024_05.xlsx");
+    expect(within(rows[0]).getByText("완료", { selector: ".v3-chip" })).toBeTruthy();
+    expect(within(rows[0]).getByText("정상", { selector: ".v3-chip" })).toBeTruthy();
+    expect(within(rows[2]).getByText("실패", { selector: ".v3-chip" })).toBeTruthy();
+    expect(rows[2].textContent).toContain("파일을 열 수 없습니다");
+    expect(within(dialog).queryByText(/앞 500개만 표시/)).toBeNull();
+    expect(dialog.textContent).not.toMatch(UUID_RE);
+    expect(await screen.findByText("2개 문서 등록 · 1개 실패")).toBeTruthy();
+    // 등록 뒤 문서 목록을 다시 읽는다
+    await f.waitForApi(/^\/documents\?/, "GET", 2);
+  });
+
+  it("등록 대상이 없으면 시작 버튼이 비활성이고 안내를 보여주며, 다시 읽기를 켜면 대상이 생긴다", async () => {
+    const { f, user, dialog } = await openRegister();
+    await user.click(within(dialog).getByRole("button", { name: "원본 폴더 전체 등록" }));
+    await f.waitForApi(/^\/sources\/scan$/);
+    expect(await within(dialog).findByText("원본 폴더 아래 파일 6개 · 하위 폴더 1개")).toBeTruthy();
+    expect(startButton(dialog).textContent).toBe("0개 등록 시작");
+    expect(startButton(dialog).hasAttribute("disabled")).toBe(true);
+    expect(within(dialog).getByText(/등록할 새 파일이나 변경된 문서가 없습니다\./)).toBeTruthy();
+    await user.click(within(dialog).getByLabelText("변경 없는 문서·잠긴 문서도 다시 읽기"));
+    expect(startButton(dialog).textContent).toBe("6개 등록 시작");
+    expect(startButton(dialog).hasAttribute("disabled")).toBe(false);
+    expect(within(dialog).queryByText(/등록할 새 파일이나 변경된 문서가 없습니다\./)).toBeNull();
+    expect(dialog.textContent).not.toMatch(UUID_RE);
+  });
+
+  it("413 DIRECTORY_LIMIT은 서버 문구를 그대로 보여주고 '파일 고르기로 돌아가기'가 된다", async () => {
+    const f = documentsFixture();
+    const message = "폴더 안 파일이 10,000개를 넘습니다. 하위 폴더를 나누어 등록하세요.";
+    f.overrides.set("GET /sources/scan", () => reply(413, errorBody("DIRECTORY_LIMIT", message)));
+    f.renderApp("?screen=documents");
+    await documentsTable();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "+ 문서 등록" }));
+    const dialog = await screen.findByRole("dialog", { name: "문서 등록" });
+    await within(dialog).findByRole("table", { name: "원본 파일 목록" });
+    await user.click(within(dialog).getByRole("button", { name: "원본 폴더 전체 등록" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain(message);
+    expect(startButton(dialog).hasAttribute("disabled")).toBe(true);
+    expect(f.registeredDirectory).toHaveLength(0);
+    await user.click(footer(dialog).getByRole("button", { name: "파일 고르기로 돌아가기" }));
+    expect(await within(dialog).findByRole("table", { name: "원본 파일 목록" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "원본 폴더 전체 등록" })).toBeTruthy();
+    expect(dialog.textContent).not.toMatch(UUID_RE);
+  });
+
+  it("폴더 행의 '2024 전체 등록'은 폴더를 열지 않고 같은 미리보기를 연다", async () => {
+    const { f, user, dialog } = await openRegister();
+    await user.click(within(dialog).getByRole("button", { name: "2024 전체 등록" }));
+    await f.waitForApi(/^\/sources\/scan\?directory=2024/);
+    expect(await within(dialog).findByText("2024/ 아래 파일 5개 · 하위 폴더 1개")).toBeTruthy();
+    expect(startButton(dialog).textContent).toBe("3개 등록 시작");
+    // 행 클릭(폴더 이동)은 일어나지 않는다
+    expect(f.callsTo(/^\/sources\?directory=2024/)).toHaveLength(0);
+    await user.click(footer(dialog).getByRole("button", { name: "파일 고르기로 돌아가기" }));
+    expect(within(dialog).getByRole("button", { name: "원본 폴더 전체 등록" })).toBeTruthy();
+  });
+
+  it("10초 뒤에도 진행 중이면 폴더 일괄 등록 진행률을 보여주고, 닫아도 JobBar에서 이어진다", async () => {
+    const { f, user, dialog } = await openRegister();
+    const running = job({ kind: "register", state: "running", completed: 1, total: 3, result: null, finished_at: null, label: "2024 폴더 일괄 등록" });
+    f.overrides.set("POST /documents/register-directory", () => {
+      f.state.running.push(running);
+      return running;
+    });
+    await user.click(within(dialog).getByRole("button", { name: "2024 전체 등록" }));
+    await f.waitForApi(/^\/sources\/scan\?directory=2024/);
+    await within(dialog).findByText("2024/ 아래 파일 5개 · 하위 폴더 1개");
+    await user.click(startButton(dialog));
+    await within(dialog).findByText(/폴더 일괄 등록 진행 중 \(1\/3\)/);
+    expect(within(dialog).queryByRole("table", { name: "등록 결과" })).toBeNull();
+    expect(footer(dialog).queryByRole("button", { name: "파일 고르기로 돌아가기" })).toBeNull();
+    await user.click(footer(dialog).getByRole("button", { name: "닫기" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await screen.findByText("진행 중 작업 1");
+  });
+
+  it("결과가 500행을 넘으면 잘렸다는 안내를 함께 보여준다", async () => {
+    const { f, user, dialog } = await openRegister();
+    f.overrides.set("POST /documents/register-directory", () =>
+      job({ kind: "register", label: "2024 폴더 일괄 등록", result: { ...registerDirectoryResult("2024"), truncated: true } as unknown as Record<string, unknown> }),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "2024 전체 등록" }));
+    await f.waitForApi(/^\/sources\/scan\?directory=2024/);
+    await within(dialog).findByText("2024/ 아래 파일 5개 · 하위 폴더 1개");
+    await user.click(startButton(dialog));
+    await f.waitForApi(/^\/documents\/register-directory\?wait=10/, "POST");
+    expect(await within(dialog).findByText("앞 500개만 표시 — 나머지는 문서 화면에서 확인하세요")).toBeTruthy();
+    expect(within(dialog).getByRole("table", { name: "등록 결과" })).toBeTruthy();
+    expect(dialog.textContent).not.toMatch(UUID_RE);
+    // '추가 등록'은 파일 고르기 초기 상태로 돌아간다
+    await user.click(footer(dialog).getByRole("button", { name: "추가 등록" }));
+    expect(await within(dialog).findByRole("table", { name: "원본 파일 목록" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "원본 폴더 전체 등록" })).toBeTruthy();
   });
 });

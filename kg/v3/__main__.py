@@ -1,6 +1,7 @@
 """python -m kg.v3 [serve] --ws <ws> --port 8031 [--host 127.0.0.1]
 python -m kg.v3 render-serve --ws <ws> --port 8032 [--host 127.0.0.1]
-python -m kg.v3 watch --ws <ws> [--raw DIR] [--interval 2] [--once] [--provider local-xlsx]
+python -m kg.v3 watch --ws <ws> [--raw DIR] [--interval 2] [--once] [--no-recursive] [--provider local-xlsx]
+python -m kg.v3 register --ws <ws> --directory <raw 기준 폴더> [--include-unchanged] [--provider local-xlsx]
 python -m kg.v3 migrate --ws <v3 ws> --from-ws <v2 ws> [--dry-run] [--report PATH]
 python -m kg.v3 import-schema --ws <ws> --file schema.json
 python -m kg.v3 import-profile --ws <ws> --schema <schema_key> --file profile.json [--format auto] [--name NAME] [--profile PROFILE_ID]
@@ -20,7 +21,9 @@ from pathlib import Path
 from ..env import load_env
 from .db import Problem
 
-COMMANDS = ("serve", "render-serve", "watch", "migrate", "import-schema", "import-profile", "build", "seed-demo")
+COMMANDS = ("serve", "render-serve", "watch", "register", "migrate", "import-schema", "import-profile", "build", "seed-demo")
+# 폴더 일괄 등록은 워커 스레드 없이 같은 프로세스에서 돌린다(jobs.wait → run_one). 큰 폴더도 끝까지 기다린다.
+REGISTER_WAIT = 24 * 3600
 
 
 def build_parser():
@@ -42,7 +45,14 @@ def build_parser():
     watch.add_argument("--raw", type=Path, default=None, help="기본 <ws>/data/raw; 그 아래 폴더만 허용")
     watch.add_argument("--interval", type=float, default=2.0)
     watch.add_argument("--once", action="store_true", help="스캔 2회 후 종료(테스트/원샷)")
+    watch.add_argument("--no-recursive", dest="no_recursive", action="store_true", help="하위 폴더를 감시하지 않는다(기본은 하위 폴더 포함)")
     watch.add_argument("--provider", default="local-xlsx")
+
+    register = sub.add_parser("register", help="원본 폴더 아래 파일 일괄 등록(계약 §4.1.1)")
+    register.add_argument("--ws", type=Path, required=True)
+    register.add_argument("--directory", default="", help="data/raw 기준 상대 폴더(생략하면 최상위 전체)")
+    register.add_argument("--include-unchanged", dest="include_unchanged", action="store_true", help="변경 없는 문서·잠긴 문서도 다시 읽는다")
+    register.add_argument("--provider", default="local-xlsx")
 
     mig = sub.add_parser("migrate", help="v2 작업 공간 → v3 이관")
     mig.add_argument("--ws", type=Path, required=True)
@@ -148,6 +158,26 @@ def run_build(args):
         service.close()
 
 
+def run_register(args) -> int:
+    """§4.1.1 폴더 일괄 등록. 요약 JSON을 stdout에 출력하고 실패 행이 있으면 1, Problem이면 stderr + 2."""
+    from .service import Service
+
+    service = Service(args.ws)
+    try:
+        job = service.register_directory(args.directory, args.provider, args.include_unchanged, wait=REGISTER_WAIT)
+    except Problem as exc:
+        print(json.dumps({"error": {"code": exc.code, "message": exc.message}}, ensure_ascii=False), file=sys.stderr)
+        return 2
+    finally:
+        service.close()
+    if job["state"] != "succeeded":
+        print(json.dumps({"error": {"code": job.get("error_code") or job["state"], "message": job.get("error_message")}}, ensure_ascii=False), file=sys.stderr)
+        return 2
+    result = job.get("result") or {}
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 1 if (result.get("summary") or {}).get("failed") else 0
+
+
 def main(argv=None):
     args = parse(argv)
     load_env(getattr(args, "ws", None) or getattr(args, "workspace", None) or ".", ".")
@@ -169,7 +199,9 @@ def main(argv=None):
         except ImportError:
             print("watch는 아직 제공되지 않습니다(kg.v3.watch 없음).", file=sys.stderr)
             return 2
-        return run(args.ws, args.raw, provider=args.provider, interval=args.interval, once=args.once)
+        return run(args.ws, args.raw, provider=args.provider, interval=args.interval, once=args.once, recursive=not args.no_recursive)
+    if args.command == "register":
+        return run_register(args)
     if args.command == "migrate":
         try:
             from .migrate import run_cli

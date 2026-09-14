@@ -226,9 +226,9 @@ def write_documents(raw: Path):
     build_locked_file(raw / LOCKED_DOCUMENT)
 
 
-def mutate_first_document(root: Path, temp_offset=0.5):
-    """`공정데이터_2024_01.xlsx`의 값(온도)을 바꿔 새 snapshot 시나리오(UC-5)를 만든다. 양식은 그대로."""
-    path = Path(root) / "data/raw" / REFERENCE_DOCUMENT
+def mutate_document(root: Path, source_ref: str, temp_offset=0.5):
+    """A양식 문서(원본 폴더 기준 상대 경로, 하위 폴더 가능)의 값(온도)을 바꿔 새 snapshot 시나리오(UC-5)를 만든다. 양식은 그대로."""
+    path = Path(root) / "data/raw" / source_ref
     wb = load_workbook(path)
     ws = wb[MAIN_SHEET]
     for row in range(9, 9 + LOT_COUNT):
@@ -236,7 +236,12 @@ def mutate_first_document(root: Path, temp_offset=0.5):
         cell.value = round(float(cell.value) + temp_offset, 2)
     ws["B4"] = "RCP-101-개정"
     wb.save(path)
-    return REFERENCE_DOCUMENT
+    return source_ref
+
+
+def mutate_first_document(root: Path, temp_offset=0.5):
+    """`공정데이터_2024_01.xlsx`를 바꾼다(mutate_document 래퍼)."""
+    return mutate_document(root, REFERENCE_DOCUMENT, temp_offset)
 
 
 def write_heavy_document(root: Path, name="공정데이터_2024_09_대용량.xlsx", table_shift=3, rows=3000, cols=150):

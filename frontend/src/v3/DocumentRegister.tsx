@@ -1,22 +1,33 @@
 // 문서 등록 대화상자(§7 Documents): GET /sources?directory= 폴더 탐색(체크박스) → POST /documents/register?wait=10
 // {source_refs, provider} → 파일별 결과 행(등록 · 자동 적용 · 상태 · 실패 사유). 10초를 넘겨도 작업은 계속되고
 // 대화상자를 닫으면 상단 JobBar(진행 중 작업)에서 이어서 볼 수 있다.
+// 폴더 일괄 등록(§4.1.1): 파일을 하나씩 고르는 대신 폴더 하나를 지정한다. 툴바 '이 폴더 전체 등록'(최상위는
+// '원본 폴더 전체 등록')과 폴더 행의 '전체 등록' → GET /sources/scan?directory= 미리보기(호출 1회, Reader 없이
+// stat·해시 캐시만 쓰므로 큰 폴더도 빠르다) → POST /documents/register-directory?wait=10. 변경 없는 문서는
+// 기본으로 건너뛰므로 같은 폴더를 다시 돌려도 싸다.
 import { useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { State, isJobActive, useData, useJob, useToast, withQuery } from "./client";
-import type { Page, RegisterResult, SourceEntry } from "./types";
+import type { ChipClass, Page, RegisterResult, RegisterSummary, SourceEntry, SourceScan } from "./types";
 import { Chip, EmptyState, Modal, StatusChip } from "./ui";
-import { compatibilityLabel } from "./types";
+import { SCAN_STATE_CLASS, SCAN_STATE_LABELS, compatibilityLabel } from "./types";
 
 export const REGISTER_PROVIDER = "local-xlsx";
 
 const parentOf = (directory: string) => directory.split("/").filter(Boolean).slice(0, -1).join("/");
+const fileName = (ref: string) => ref.split("/").filter(Boolean).pop() || ref;
 
 function formatSize(size: number | null | undefined): string {
   if (!size && size !== 0) return "";
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// 요약 줄(§7): "N개 중 R개 등록 · U개 변경 없음 · F개 실패" (+ 잠김이 있으면 덧붙인다).
+function summaryText(summary: RegisterSummary): string {
+  const base = `${summary.targeted}개 중 ${summary.registered}개 등록 · ${summary.unchanged}개 변경 없음 · ${summary.failed}개 실패`;
+  return summary.locked ? `${base} · ${summary.locked}개 잠김` : base;
 }
 
 export default function DocumentRegister({ onClose, onRegistered }: { onClose: () => void; onRegistered: () => void }) {
@@ -26,12 +37,22 @@ export default function DocumentRegister({ onClose, onRegistered }: { onClose: (
   // source_ref → 표시 이름. 폴더를 오가도 선택은 유지된다.
   const [selected, setSelected] = useState<Map<string, string>>(new Map());
   const [submitted, setSubmitted] = useState<string[]>([]);
+  // 폴더 일괄 등록 미리보기 대상. null이면 파일 고르기 화면이다.
+  const [scanned, setScanned] = useState<string | null>(null);
+  const [includeUnchanged, setIncludeUnchanged] = useState(false);
   const job = useJob();
   const sources = useData<Page<SourceEntry> | SourceEntry[]>(withQuery("/sources", { directory }));
+  // 미리보기는 폴더당 한 번만 읽는다(GET 60초 캐시 + 진행 중 요청 공유).
+  const scan = useData<SourceScan>(scanned === null ? null : withQuery("/sources/scan", { directory: scanned }));
   const entries = Array.isArray(sources.data) ? sources.data : sources.data?.items ?? [];
   const folders = entries.filter((e) => e.directory);
   const files = entries.filter((e) => !e.directory);
   const allChecked = files.length > 0 && files.every((f) => selected.has(f.source_ref));
+  const preview = scan.data;
+  // 체크박스는 재조회 없이 로컬에서 계산한다: 기본은 targeted, 켜면 변경 없음·잠김까지.
+  const targetCount = preview
+    ? preview.targeted + (includeUnchanged ? preview.states.unchanged + preview.states.locked : 0)
+    : 0;
 
   function open(next: string) {
     setDirectory(next);
@@ -42,6 +63,14 @@ export default function DocumentRegister({ onClose, onRegistered }: { onClose: (
       e.preventDefault();
       open(directoryInput.trim());
     }
+  }
+  function openScan(next: string) {
+    setIncludeUnchanged(false);
+    setScanned(next);
+  }
+  function backToFiles() {
+    setScanned(null);
+    job.reset();
   }
   function toggle(entry: SourceEntry, checked: boolean) {
     setSelected((map) => {
@@ -70,15 +99,35 @@ export default function DocumentRegister({ onClose, onRegistered }: { onClose: (
       notify(failed ? `${documents.length - failed}개 문서 등록 · ${failed}개 실패` : `${documents.length}개 문서를 등록했습니다.`);
     }
   }
+  async function submitDirectory() {
+    const result = await job.run(
+      "/documents/register-directory",
+      { directory: scanned ?? "", provider: REGISTER_PROVIDER, include_unchanged: includeUnchanged },
+      10,
+    );
+    if (!result) return;
+    onRegistered();
+    if (result.state === "succeeded") {
+      const summary = (result.result as RegisterResult | null)?.summary;
+      const registered = summary?.registered ?? 0;
+      const failed = summary?.failed ?? 0;
+      notify(failed ? `${registered}개 문서 등록 · ${failed}개 실패` : `${registered}개 문서를 등록했습니다.`);
+    }
+  }
   function again() {
     job.reset();
     setSubmitted([]);
     setSelected(new Map());
+    setScanned(null);
+    setIncludeUnchanged(false);
   }
 
   const finished = job.job && !isJobActive(job.job);
   const running = job.job && isJobActive(job.job);
-  const results = finished && job.job?.state === "succeeded" ? ((job.job.result as RegisterResult | null)?.documents ?? []) : null;
+  const result = finished && job.job?.state === "succeeded" ? (job.job.result as RegisterResult | null) : null;
+  const results = result ? result.documents ?? [] : null;
+  // 미리보기에서 시작한 작업인지(진행·결과 문구가 다르다).
+  const directoryMode = scanned !== null;
 
   return (
     <Modal
@@ -96,6 +145,25 @@ export default function DocumentRegister({ onClose, onRegistered }: { onClose: (
               추가 등록
             </button>
           </>
+        ) : directoryMode ? (
+          <>
+            <button
+              type="button"
+              className="primary"
+              disabled={job.busy || scan.loading || !!scan.error || targetCount === 0}
+              onClick={submitDirectory}
+            >
+              {job.busy ? "등록 중…" : preview ? `${targetCount}개 등록 시작` : "등록 시작"}
+            </button>
+            {!running && (
+              <button type="button" onClick={backToFiles}>
+                파일 고르기로 돌아가기
+              </button>
+            )}
+            <button type="button" onClick={onClose}>
+              닫기
+            </button>
+          </>
         ) : (
           <>
             <button type="button" className="primary" disabled={selected.size === 0 || job.busy} onClick={submit}>
@@ -109,7 +177,7 @@ export default function DocumentRegister({ onClose, onRegistered }: { onClose: (
       }
     >
       {results ? (
-        <RegisterResults documents={results} />
+        <RegisterResults documents={results} summary={result?.summary} truncated={result?.truncated} />
       ) : finished ? (
         <div className="v3-error" role="alert">
           <span>등록 작업이 실패했습니다: {job.job?.error_message || job.job?.error_code || "알 수 없는 오류"}</span>
@@ -117,19 +185,77 @@ export default function DocumentRegister({ onClose, onRegistered }: { onClose: (
       ) : running ? (
         <div className="v3-stack">
           <p className="v3-note" role="status">
-            등록 작업이 진행 중입니다
+            {directoryMode ? "폴더 일괄 등록 진행 중" : "등록 작업이 진행 중입니다"}
             {job.job?.total ? ` (${job.job.completed}/${job.job.total})` : ""}. 10초 안에 끝나지 않아 계속 기다리는 중이며, 닫아도 상단의
             진행 중 작업 표시에서 확인할 수 있습니다.
           </p>
-          <ul className="v3-plain-list" aria-label="등록 중인 문서">
-            {submitted.map((ref) => (
-              <li key={ref}>{selected.get(ref) || ref.split("/").pop()}</li>
-            ))}
-          </ul>
+          {!directoryMode && (
+            <ul className="v3-plain-list" aria-label="등록 중인 문서">
+              {submitted.map((ref) => (
+                <li key={ref}>{selected.get(ref) || fileName(ref)}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : directoryMode ? (
+        <div className="v3-stack">
+          <State resource={scan} />
+          {preview && (
+            <>
+              <p>
+                <strong>
+                  {scanned ? `${scanned}/ 아래` : "원본 폴더 아래"} 파일 {preview.files}개 · 하위 폴더 {preview.folders}개
+                </strong>
+              </p>
+              <span className="v3-chips" aria-label="스캔 요약">
+                {stateChips(preview).map(([label, count, kind]) => (
+                  // 0인 항목은 색을 빼서 눈에 띄지 않게 한다.
+                  <Chip key={label} kind={count ? kind : "muted"}>
+                    {label} {count}
+                  </Chip>
+                ))}
+              </span>
+              <SkippedNote scan={preview} />
+              <label className="v3-inline">
+                <input type="checkbox" checked={includeUnchanged} onChange={(e) => setIncludeUnchanged(e.target.checked)} />
+                변경 없는 문서·잠긴 문서도 다시 읽기
+              </label>
+              {targetCount === 0 && (
+                <p className="v3-note">
+                  등록할 새 파일이나 변경된 문서가 없습니다.
+                  {preview.states.unchanged + preview.states.locked > 0 ? " 다시 읽으려면 위 상자를 켜세요." : ""}
+                </p>
+              )}
+              {preview.sample.length > 0 && (
+                <details>
+                  <summary className="v3-small">예시 파일 {preview.sample.length}개 보기</summary>
+                  <ul className="v3-plain-list" aria-label="예시 파일">
+                    {preview.sample.map((item) => (
+                      <li key={item.source_ref} className="v3-inline">
+                        <span>{fileName(item.source_ref)}</span>
+                        <Chip kind={SCAN_STATE_CLASS[item.state] || "muted"}>{SCAN_STATE_LABELS[item.state] || item.state}</Chip>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </>
+          )}
+          {scan.error?.code === "DIRECTORY_LIMIT" && (
+            <p className="v3-muted v3-small">파일 고르기로 돌아가 하위 폴더를 하나씩 지정하면 나누어 등록할 수 있습니다.</p>
+          )}
+          {job.error && (
+            <div className="v3-error" role="alert">
+              <span>{job.error}</span>
+            </div>
+          )}
         </div>
       ) : (
         <div className="v3-stack">
-          <p className="v3-muted v3-small">원본 폴더에서 등록할 파일을 고르세요. 등록과 함께 맞는 파싱 프로파일이 자동으로 적용됩니다.</p>
+          <p className="v3-muted v3-small">
+            원본 폴더에서 등록할 파일을 고르세요. 폴더 하나를 통째로 넣으려면 '이 폴더 전체 등록'을 누르면 됩니다(하위 폴더까지
+            한 번에). 등록과 함께 맞는 파싱 프로파일이 자동으로 적용됩니다.
+          </p>
           <div className="v3-toolbar">
             <label className="v3-grow">
               폴더
@@ -146,6 +272,11 @@ export default function DocumentRegister({ onClose, onRegistered }: { onClose: (
             <button type="button" className="small" disabled={!directory} onClick={() => open(parentOf(directory))}>
               상위 폴더
             </button>
+            <span className="v3-toolbar-end">
+              <button type="button" className="small secondary" onClick={() => openScan(directory)}>
+                {directory ? "이 폴더 전체 등록" : "원본 폴더 전체 등록"}
+              </button>
+            </span>
           </div>
           {job.error && (
             <div className="v3-error" role="alert">
@@ -176,7 +307,16 @@ export default function DocumentRegister({ onClose, onRegistered }: { onClose: (
                         </button>
                       </td>
                       <td className="v3-muted">폴더</td>
-                      <td></td>
+                      <td>
+                        <button
+                          type="button"
+                          className="small"
+                          aria-label={`${folder.name} 전체 등록`}
+                          onClick={(e) => { e.stopPropagation(); openScan(folder.source_ref); }}
+                        >
+                          전체 등록
+                        </button>
+                      </td>
                     </tr>
                   ))}
                   {files.map((file) => (
@@ -211,43 +351,78 @@ export default function DocumentRegister({ onClose, onRegistered }: { onClose: (
   );
 }
 
-function RegisterResults({ documents }: { documents: RegisterResult["documents"] }) {
-  if (documents.length === 0) return <EmptyState>등록된 문서가 없습니다.</EmptyState>;
+// 미리보기 칩(§7): 새 파일 · 변경된 문서 · 변경 없음 · 잠김.
+function stateChips(scan: SourceScan): [string, number, ChipClass][] {
+  return [
+    ["새 파일", scan.states.new, "ok"],
+    ["변경된 문서", scan.states.changed, "warn"],
+    ["변경 없음", scan.states.unchanged, "muted"],
+    ["잠김", scan.states.locked, "err"],
+  ];
+}
+
+// 건너뛴 항목(§4.1.1 skipped). 0인 항목은 적지 않고, 전부 0이면 줄 자체를 숨긴다.
+function SkippedNote({ scan }: { scan: SourceScan }) {
+  const parts: string[] = [];
+  if (scan.skipped.temp) parts.push(`임시 파일 ${scan.skipped.temp}`);
+  if (scan.skipped.unsupported) parts.push(`지원하지 않는 파일 ${scan.skipped.unsupported}`);
+  if (scan.skipped.symlink) parts.push(`링크 ${scan.skipped.symlink}`);
+  if (!parts.length) return null;
+  return <p className="v3-muted v3-small">건너뜀: {parts.join(" · ")}</p>;
+}
+
+function RegisterResults({
+  documents,
+  summary,
+  truncated,
+}: {
+  documents: RegisterResult["documents"];
+  summary?: RegisterSummary;
+  truncated?: boolean;
+}) {
+  if (!summary && documents.length === 0) return <EmptyState>등록된 문서가 없습니다.</EmptyState>;
   return (
     <div className="v3-stack">
       <p className="v3-muted v3-small">
-        {documents.length}개 중 {documents.filter((d) => !d.error).length}개 등록 · {documents.filter((d) => d.error).length}개 실패
+        {summary
+          ? summaryText(summary)
+          : `${documents.length}개 중 ${documents.filter((d) => !d.error).length}개 등록 · ${documents.filter((d) => d.error).length}개 실패`}
       </p>
-      <div className="v3-table-wrap">
-        <table className="v3-table" aria-label="등록 결과">
-          <thead>
-            <tr>
-              <th scope="col">문서명</th>
-              <th scope="col">등록</th>
-              <th scope="col">자동 적용</th>
-              <th scope="col">상태</th>
-              <th scope="col">실패 사유</th>
-            </tr>
-          </thead>
-          <tbody>
-            {documents.map((d, i) => (
-              <tr key={d.document_id || i}>
-                <td>{d.document_name}</td>
-                <td>{d.error ? <Chip kind="err">실패</Chip> : <Chip kind="ok">완료</Chip>}</td>
-                <td>
-                  {d.applied?.length ? (
-                    d.applied.map((a) => `${a.profile_name} · ${compatibilityLabel(a.compatibility)}`).join(", ")
-                  ) : (
-                    <span className="v3-muted">없음</span>
-                  )}
-                </td>
-                <td>{d.status ? <StatusChip status={d.status} /> : <span className="v3-muted">-</span>}</td>
-                <td className="v3-wrap">{d.error?.message || ""}</td>
+      {truncated && <p className="v3-note">앞 500개만 표시 — 나머지는 문서 화면에서 확인하세요</p>}
+      {documents.length === 0 ? (
+        <EmptyState>등록된 문서가 없습니다.</EmptyState>
+      ) : (
+        <div className="v3-table-wrap">
+          <table className="v3-table" aria-label="등록 결과">
+            <thead>
+              <tr>
+                <th scope="col">문서명</th>
+                <th scope="col">등록</th>
+                <th scope="col">자동 적용</th>
+                <th scope="col">상태</th>
+                <th scope="col">실패 사유</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {documents.map((d, i) => (
+                <tr key={d.document_id || d.source_ref || i}>
+                  <td title={d.source_ref || undefined}>{d.document_name}</td>
+                  <td>{d.error ? <Chip kind="err">실패</Chip> : <Chip kind="ok">완료</Chip>}</td>
+                  <td>
+                    {d.applied?.length ? (
+                      d.applied.map((a) => `${a.profile_name} · ${compatibilityLabel(a.compatibility)}`).join(", ")
+                    ) : (
+                      <span className="v3-muted">없음</span>
+                    )}
+                  </td>
+                  <td>{d.status ? <StatusChip status={d.status} /> : <span className="v3-muted">-</span>}</td>
+                  <td className="v3-wrap">{d.error?.message || ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

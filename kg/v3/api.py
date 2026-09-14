@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import Field
 
 from . import ENGINE_VERSION
 from . import build as build_module
@@ -31,6 +32,7 @@ from .contracts import (
     ApplicationRequest,
     ApproveAllRequest,
     BuildCandidatesRequest,
+    Contract,
     BuildPreviewRequest,
     BuildRequest,
     FieldPatchRequest,
@@ -64,6 +66,16 @@ DocumentStatus = Literal["not_extracted", "locked", "unmatched", "review", "chan
 DocumentSort = Literal["document_name", "status", "last_processed_at", "-document_name", "-status", "-last_processed_at"]
 JobState = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 JobKind = Literal["register", "extract", "reparse", "build", "test", "queue_action", "migrate"]
+
+
+class RegisterDirectoryRequest(Contract):
+    """§4.1.1 폴더 일괄 등록 본문(POST /documents/register-directory)."""
+
+    directory: str = Field("", max_length=1024)
+    provider: str = Field("local-xlsx", min_length=1, max_length=200)
+    include_unchanged: bool = False
+
+
 ProfileStatus = Literal["draft", "approved", "deprecated"]
 BuildFormat = Literal["csv", "xlsx", "sqlite"]
 FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -749,6 +761,7 @@ def install(app: FastAPI, root, start_worker=True):
                 "render_rows": 2000,
                 "render_cols": 200,
                 "register_files": 100,
+                "register_directory_files": int(env("REGISTER_DIRECTORY_LIMIT", "10000")),
                 "profile": dict(LIMITS),
             },
             "paths": {
@@ -787,6 +800,16 @@ def install(app: FastAPI, root, start_worker=True):
 
         found = heapq.nsmallest(limit + 1, entries(), key=lambda r: r["name"])
         return page(found, limit, ["name"], scope)
+
+    @router.get("/sources/scan")
+    def sources_scan(directory: str = Query("", max_length=1024), user=Depends(principal)):
+        """§4.1.1 폴더 일괄 등록 미리보기(재귀 스캔). Reader 프로세스를 띄우지 않는다."""
+        return service.scan_sources(directory)
+
+    @router.post("/documents/register-directory", response_model=JobResponse, status_code=202)
+    def register_directory(body: RegisterDirectoryRequest, wait: float = Wait, user=Depends(principal)):
+        """§4.1.1 폴더 아래 전부를 한 작업으로 등록한다(결과 summary + documents[≤500] + truncated)."""
+        return job_response(service.register_directory(body.directory, body.provider, body.include_unchanged, user, wait))
 
     @router.post("/documents/register", response_model=JobResponse, status_code=202)
     def register(body: RegisterRequest, wait: float = Wait, user=Depends(principal)):

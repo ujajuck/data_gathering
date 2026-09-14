@@ -151,15 +151,73 @@ export type SourceEntry = {
   modified_at?: string | null;
 };
 
+// 폴더 일괄 등록(§4.1.1)의 파일 분류. provider가 local-xlsx가 아니면 registered(항상 다시 읽는다).
+export type SourceScanState = "new" | "changed" | "unchanged" | "locked" | "registered";
+
+export const SCAN_STATE_LABELS: Record<string, string> = {
+  new: "새 파일",
+  changed: "변경된 문서",
+  unchanged: "변경 없음",
+  locked: "잠김",
+  registered: "등록됨",
+};
+export const SCAN_STATE_CLASS: Record<string, ChipClass> = {
+  new: "ok",
+  changed: "warn",
+  unchanged: "muted",
+  locked: "err",
+  registered: "muted",
+};
+
+export type SourceSkipped = {
+  temp: number;
+  unsupported: number;
+  symlink: number;
+};
+
+// GET /sources/scan?directory= (§4.1.1). files는 대상 확장자 파일 수, targeted는 include_unchanged=false 기준 등록 대상 수.
+export type SourceScan = {
+  directory: string;
+  folders: number;
+  files: number;
+  states: { new: number; changed: number; unchanged: number; locked: number; registered?: number };
+  skipped: SourceSkipped;
+  targeted: number;
+  limit: number;
+  sample: { source_ref: string; state: SourceScanState | string }[];
+};
+
+export type RegisterDocument = {
+  document_id: string;
+  document_name: string;
+  snapshot: SnapshotRef | null;
+  status: DocumentStatus;
+  applied: { profile_name: string; compatibility: string; state: string }[];
+  error?: { code: string; message: string } | null;
+  // 폴더 일괄 등록에서만 채워진다(§4.1.1 결과 행).
+  source_ref?: string;
+  state?: SourceScanState | string;
+};
+
+// POST /documents/register-directory 결과 요약(§4.1.1). 요약은 documents가 잘려도 항상 전체 기준이다.
+export type RegisterSummary = {
+  found: number;
+  targeted: number;
+  registered: number;
+  new: number;
+  changed: number;
+  unchanged: number;
+  failed: number;
+  locked: number;
+  skipped: SourceSkipped;
+};
+
 export type RegisterResult = {
-  documents: {
-    document_id: string;
-    document_name: string;
-    snapshot: SnapshotRef | null;
-    status: DocumentStatus;
-    applied: { profile_name: string; compatibility: string; state: string }[];
-    error?: { code: string; message: string } | null;
-  }[];
+  documents: RegisterDocument[];
+  // 아래 세 값은 폴더 일괄 등록 결과에만 있다.
+  directory?: string;
+  summary?: RegisterSummary;
+  truncated?: boolean;
 };
 
 // ---------------------------------------------------------------- 프로파일
