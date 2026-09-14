@@ -17,7 +17,8 @@ npm run test:v3
 다른 양식 1개·잠긴 파일 1개·이미지 시트)와 스키마·approved 프로파일을 만들고, **렌더 서버를 별도 프로세스(8032)**로,
 메인 API/UI를 8031로 띄운다. 제어 포트(18031)의 `POST /reset`으로 스펙 파일마다 새 작업 공간을 시드해 스펙 간 상태를 격리한다
 (`helpers.resetWorkspace()`, ≈3.5초). 작업 공간 경로는 `e2e/v3/.workspace`에 기록되어 새 snapshot 시나리오가
-`mutate_first_document`를 실행한다. 포트는 `KG_E2E_V3_PORT`·`KG_E2E_V3_RENDER_PORT`·`KG_E2E_V3_CONTROL_PORT`로 바꿀 수 있다.
+`mutate_first_document`를, 폴더 일괄 등록 시나리오가 `helpers.makeRawTree`(원본 폴더 아래 하위 폴더 트리 생성)와
+`helpers.mutateRawDocument`(하위 폴더 안 문서 값 변경)를 실행한다. 포트는 `KG_E2E_V3_PORT`·`KG_E2E_V3_RENDER_PORT`·`KG_E2E_V3_CONTROL_PORT`로 바꿀 수 있다.
 실제 도메인 DB·사용자 원본은 열지 않는다.
 
 | 스펙 | 검증 |
@@ -29,6 +30,7 @@ npm run test:v3
 | `v3/jobs.spec.ts` | 요약 카드 · 묶음 행 · approve_all 1클릭 · 실패 이동 · 작업 목록 |
 | `v3/source-review.spec.ts` | 실제 셀·overlay · 드래그 재지정 · 승인→추출 요청 1회 · 역방향 조회 · 잠긴 문서 실패 표시 |
 | `v3/render-isolation.spec.ts` | 렌더 중 문서 API 응답 시간 · 캐시 재접근 < 1초 · 304 |
+| `v3/register-directory.spec.ts` | 폴더 일괄 등록(§4.1.1) — 루트 폴더 하나 지정 → 하위 폴더까지 4개 등록 · 재스캔 `변경 없음`(재실행이 싸다) · 값 바뀐 파일만 `변경 감지` · 폴더 경로 422/404 · 작업 라벨 |
 
 결과와 완료 조건 대조표는 [docs/e2e-results-v3.md](../docs/e2e-results-v3.md). 실패 보고서는 `e2e/playwright-report-v3`,
 trace·다운로드·스크린샷은 `e2e/test-results-v3`(Git 제외).
