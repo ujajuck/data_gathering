@@ -1,7 +1,7 @@
 // Source Review 우측 패널(검수 모드): 필드·규칙·관찰된 키·추출값·원본 위치·상태, 수정(인라인 편집기) · 승인 · 반려,
 // 접힌 상세(선택자 JSON, 변경 이력은 펼칠 때만 GET /mappings/{mid}/revisions, 복원).
 import { useState } from "react";
-import { Pager, State, mappingRevisionLabel, regionLabel, useData, usePage } from "./client";
+import { Pager, State, mappingRevisionLabel, regionLabel, useData, usePage, useWriteSeq } from "./client";
 import type { MappingRegion, MappingRevisionRow, MappingRow, MappingStatus, SchemaTree } from "./types";
 import { Chip } from "./ui";
 import {
@@ -270,7 +270,10 @@ function RevisionHistory({ mapping, busy, onRollback }: { mapping: MappingRow; b
 }
 
 function RevisionList({ mapping, busy, onRollback }: { mapping: MappingRow; busy: boolean; onRollback: (revision: MappingRevisionRow) => Promise<boolean> }) {
-  const revisions = usePage<MappingRevisionRow>("/mappings/" + encodeURIComponent(mapping.mapping_id) + "/revisions", mapping.revision_no);
+  // 쓰기(승인·반려·복원)가 서버에 저장된 뒤(writeSeq 증가) 다시 읽는다. revision_no는 낙관적 갱신으로 POST보다 먼저 오르므로
+  // 그 값으로 다시 읽으면 아직 저장되기 전 목록이 캐시에 남는다.
+  const writeSeq = useWriteSeq();
+  const revisions = usePage<MappingRevisionRow>("/mappings/" + encodeURIComponent(mapping.mapping_id) + "/revisions", writeSeq);
   return (
     <div className="v3-stack">
       <State resource={revisions} empty="아직 리비전이 없습니다." />

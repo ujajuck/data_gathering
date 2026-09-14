@@ -24,7 +24,7 @@ import {
   withQuery,
 } from "./client";
 import type { ApplicationRow, DocumentDetail as DocumentDetailData, DocumentProfile, DocumentStatus, Page, ProfileRow, SheetRow, SnapshotRef, ValueRow } from "./types";
-import { ApplicationStateChip, Chip, EmptyState, Modal, StatusChip, Tabs, ZoomControl } from "./ui";
+import { ApplicationStateChip, Chip, EmptyState, Modal, StatusChip, Tabs, ZoomControl, statusDetailText } from "./ui";
 import { compatibilityLabel } from "./sourceReviewShared";
 import SheetViewer from "./SheetViewer";
 
@@ -56,7 +56,7 @@ export default function DocumentDetail({ documentId, onAddToBuild }: { documentI
         doc ? (
           <div className="v3-inline">
             <h2>{doc.document_name}</h2>
-            <StatusChip status={doc.status as DocumentStatus} detail={doc.status_detail || doc.last_error} />
+            <StatusChip status={doc.status as DocumentStatus} detail={statusDetailText(doc.status_detail, doc.last_error)} />
             {doc.current_snapshot ? (
               <span className="v3-muted v3-small v3-inline">
                 현재 Snapshot {snapshotLabel(doc.current_snapshot)} <Chip kind="blue">최신</Chip>
@@ -120,7 +120,7 @@ export default function DocumentDetail({ documentId, onAddToBuild }: { documentI
               <strong>{doc.schemas.length ? doc.schemas.map((s) => schemaLabel(s)).join(", ") : "없음"}</strong>
             </span>
             <span className="v3-toolbar-end v3-muted v3-small">
-              {doc.status_detail ? doc.status_detail + " · " : ""}
+              {statusDetailText(doc.status_detail) ? statusDetailText(doc.status_detail) + " · " : ""}
               최근 처리 {doc.last_processed_at ? formatDateTime(doc.last_processed_at) : "-"}
             </span>
           </div>

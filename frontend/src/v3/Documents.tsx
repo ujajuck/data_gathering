@@ -19,7 +19,7 @@ import {
 } from "./client";
 import type { DocumentRow, DocumentStatus, Page, ProfileRow } from "./types";
 import { STATUS_LABELS, STATUS_ORDER } from "./types";
-import { Chip, Heading, StatusChip } from "./ui";
+import { Chip, Heading, StatusChip, statusDetailText } from "./ui";
 import { addToBuildDraft } from "./buildDraft";
 import DocumentDetail from "./DocumentDetail";
 import DocumentRegister from "./DocumentRegister";
@@ -224,7 +224,7 @@ export default function Documents() {
                         </button>
                       </td>
                       <td>
-                        <StatusChip status={doc.status as DocumentStatus} detail={doc.status_detail || doc.last_error} />
+                        <StatusChip status={doc.status as DocumentStatus} detail={statusDetailText(doc.status_detail, doc.last_error)} />
                       </td>
                       <td>
                         <ProfileCell profiles={doc.profiles} />

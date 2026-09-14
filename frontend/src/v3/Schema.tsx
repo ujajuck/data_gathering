@@ -180,6 +180,7 @@ export default function Schema() {
                   <div role="tabpanel" aria-label="변경 이력">
                     <SchemaHistoryTab
                       schemaKey={key}
+                      version={version}
                       currentRev={detail.data.current_rev}
                       onNewRevision={() => setDialog({ kind: "revision", schemaKey: key, schemaName: detail.data!.schema_name })}
                     />
@@ -198,7 +199,8 @@ export default function Schema() {
               onOpenTab={(next, field_key) => go({ tab: next, field_filter: field_key })}
               onSaved={(field) => {
                 notify(`${field.name} 필드 저장됨`);
-                tree.reload();
+                // 필드 편집은 새 리비전을 만들므로 목록·헤더(vN)·트리·변경 이력을 함께 다시 읽는다.
+                setWritten((n) => n + 1);
               }}
             />
           ) : (

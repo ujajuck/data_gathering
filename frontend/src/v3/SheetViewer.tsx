@@ -34,6 +34,22 @@ import {
 } from "./sheetGeometry";
 import type { Viewport } from "./sheetGeometry";
 
+// 렌더 서버는 CSS 이름(background·fontWeight·fontStyle·textAlign·fontSize)으로, 픽스처·계약 예시는 짧은 이름(bg·bold·italic·align·font_size)으로
+// 스타일을 준다. 둘 다 받아 뷰어가 쓰는 짧은 이름으로 맞춘다.
+function normalizeStyle(raw: RenderStyle | Record<string, unknown> | null | undefined): RenderStyle | null {
+  if (!raw) return null;
+  const s = raw as Record<string, unknown>;
+  const weight = s.fontWeight;
+  return {
+    ...(raw as RenderStyle),
+    bg: (s.bg ?? s.background ?? null) as string | null,
+    bold: s.bold !== undefined ? !!s.bold : typeof weight === "number" ? weight >= 600 : weight === "bold",
+    italic: s.italic !== undefined ? !!s.italic : s.fontStyle === "italic",
+    align: (s.align ?? s.textAlign) as RenderStyle["align"],
+    font_size: (s.font_size ?? s.fontSize ?? null) as number | null,
+  };
+}
+
 export type OverlayKind = "key" | "value" | "unit" | "context" | "focus";
 export type Overlay = Area & { kind: OverlayKind; label?: string };
 
@@ -379,9 +395,11 @@ export default function SheetViewer({
   const visible = visibleArea(viewport, rows, columns);
   const band = visible ? bandFor(visible, bounds) : null;
   const styleOf = (cell: RenderCell | undefined): RenderStyle | null => {
-    if (!cell || cell.style === undefined || cell.style === null) return null;
-    if (typeof cell.style === "number") return base?.styles?.[cell.style] || null;
-    return cell.style;
+    // 렌더 서버 셀은 스타일 표 인덱스를 `s`로 준다(`style`은 인라인 스타일·픽스처 형태).
+    const style = cell?.style ?? (cell as { s?: number } | undefined)?.s;
+    if (!cell || style === undefined || style === null) return null;
+    if (typeof style === "number") return normalizeStyle(base?.styles?.[style]);
+    return normalizeStyle(style);
   };
 
   // 초점 셀은 렌더 뒤 실제 DOM 초점도 옮긴다.

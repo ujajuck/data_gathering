@@ -125,8 +125,9 @@ export function SchemaDocumentsTab({ schemaKey, fieldKey }: { schemaKey: string;
   );
 }
 
-export function SchemaHistoryTab({ schemaKey, currentRev, onNewRevision }: { schemaKey: string; currentRev: number; onNewRevision: () => void }) {
-  const revisions = useData<Page<RevisionRow>>(`/schemas/${encodeURIComponent(schemaKey)}/revisions`);
+export function SchemaHistoryTab({ schemaKey, currentRev, onNewRevision, version = 0 }: { schemaKey: string; currentRev: number; onNewRevision: () => void; version?: number }) {
+  // version은 쓰기(필드 편집·새 리비전) 뒤 다시 읽기 위한 카운터.
+  const revisions = useData<Page<RevisionRow>>(`/schemas/${encodeURIComponent(schemaKey)}/revisions`, version);
   const items = revisions.data?.items ?? [];
   return (
     <>

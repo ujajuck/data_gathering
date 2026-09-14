@@ -13,10 +13,12 @@ npx playwright install --with-deps chromium          # 또는 KG_E2E_CHROMIUM_PA
 npm run test:v3
 ```
 
-러너 `v3/serve.py`가 임시 작업 공간에 `examples/schema_v3/demo.py`의 가상 문서(같은 양식 3개·앵커 이동 1개·
+러너 `v3/serve.py`(감독 프로세스)가 임시 작업 공간에 `examples/schema_v3/demo.py`의 가상 문서(같은 양식 3개·앵커 이동 1개·
 다른 양식 1개·잠긴 파일 1개·이미지 시트)와 스키마·approved 프로파일을 만들고, **렌더 서버를 별도 프로세스(8032)**로,
-메인 API/UI를 8031로 띄운다. 작업 공간 경로는 `e2e/v3/.workspace`에 기록되어 새 snapshot 시나리오가
-`mutate_first_document`를 실행한다. 실제 도메인 DB·사용자 원본은 열지 않는다.
+메인 API/UI를 8031로 띄운다. 제어 포트(18031)의 `POST /reset`으로 스펙 파일마다 새 작업 공간을 시드해 스펙 간 상태를 격리한다
+(`helpers.resetWorkspace()`, ≈3.5초). 작업 공간 경로는 `e2e/v3/.workspace`에 기록되어 새 snapshot 시나리오가
+`mutate_first_document`를 실행한다. 포트는 `KG_E2E_V3_PORT`·`KG_E2E_V3_RENDER_PORT`·`KG_E2E_V3_CONTROL_PORT`로 바꿀 수 있다.
+실제 도메인 DB·사용자 원본은 열지 않는다.
 
 | 스펙 | 검증 |
 |---|---|

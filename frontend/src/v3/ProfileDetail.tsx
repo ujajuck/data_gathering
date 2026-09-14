@@ -350,7 +350,7 @@ function InfoTab({
                       <td>{row.published ? <Chip kind="ok">발행됨</Chip> : <Chip kind="muted">미발행</Chip>}</td>
                       <td>{row.is_reference ? <Chip kind="blue">대표</Chip> : <span className="v3-muted">-</span>}</td>
                       <td>
-                        <StatusChip status={row.status} />
+                        <StatusChip status={row.document_status || row.status || "-"} />
                       </td>
                       <td>
                         <span className="v3-inline">

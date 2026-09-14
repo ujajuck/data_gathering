@@ -286,7 +286,7 @@ function MemberRows({ kind, group }: { kind: QueueKind; group: QueueGroup }) {
                 </td>
                 <td>{m.snapshot ? snapshotLabel(m.snapshot) : "-"}</td>
                 <td>
-                  <StatusChip status={m.status} detail={m.error} />
+                  <StatusChip status={m.document_status || m.status || m.state || "-"} detail={m.detail?.error ?? m.error} />
                 </td>
                 <td>
                   <button

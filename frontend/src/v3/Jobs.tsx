@@ -20,7 +20,7 @@ import {
   withQuery,
 } from "./client";
 import type { JobResponse, JobState, Page, QueueKind, QueueSummary, StatusResponse } from "./types";
-import { JOB_KIND_LABELS, JOB_STATE_LABELS, QUEUE_LABELS } from "./types";
+import { JOB_KIND_LABELS, JOB_STATE_LABELS, QUEUE_LABELS, queueCounts } from "./types";
 import { Chip, Heading } from "./ui";
 import QueuePanel, { QUEUE_ORDER, QueueActionDialog, resultSummary } from "./JobsQueue";
 import type { DialogRequest } from "./JobsQueue";
@@ -63,7 +63,7 @@ export default function Jobs() {
   const [pending, setPending] = useState(0);
   const [tick, setTick] = useState(0);
 
-  const counts = queues.data?.counts;
+  const counts = queueCounts(queues.data);
   // URL에 큐가 없으면 요약이 온 뒤 첫 번째로 비어 있지 않은 큐(없으면 매핑 검수)를 고른다 — 헛된 호출을 막는다.
   const selected: QueueKind | null = isQueueKind(route.queue)
     ? route.queue
@@ -74,16 +74,20 @@ export default function Jobs() {
   // 조용한 새로고침(로딩 표시 없이 교체). 첫 페이지일 때만 작업 목록을 다시 받는다.
   const { setData: setQueues } = queues;
   const { setData: setJobs, number: pageNumber } = jobs;
+  const { setData: setStatus } = status;
+  // 렌더 서버 상태 한 줄(진행 중 작업 수)도 같은 폴링으로 갱신한다 — 쉘 캐시(60초)의 값이 작업 목록과 어긋나지 않게.
   const refreshAll = useCallback(async () => {
-    const [q, j] = await Promise.all([
+    const [q, j, s] = await Promise.all([
       api<QueueSummary>("/queues", undefined, { fresh: true }).catch(() => null),
       pageNumber === 1
         ? api<Page<JobResponse>>(withQuery(jobsPath, { limit: PAGE_LIMIT }), undefined, { fresh: true }).catch(() => null)
         : Promise.resolve(null),
+      api<StatusResponse>("/status", undefined, { fresh: true }).catch(() => null),
     ]);
     if (q) setQueues(q);
     if (j) setJobs(j);
-  }, [jobsPath, pageNumber, setQueues, setJobs]);
+    if (s) setStatus(s);
+  }, [jobsPath, pageNumber, setQueues, setJobs, setStatus]);
   useEffect(() => {
     if (!tick) return;
     void refreshAll();
@@ -106,7 +110,11 @@ export default function Jobs() {
   const onCountDelta = useCallback(
     (kind: QueueKind, delta: number) => {
       setPending((n) => (delta < 0 ? n + 1 : Math.max(0, n - 1)));
-      setQueues((p) => (p ? { ...p, counts: { ...p.counts, [kind]: Math.max(0, (p.counts[kind] ?? 0) + delta) } } : p));
+      setQueues((p) => {
+        if (!p) return p;
+        const current = queueCounts(p) ?? ({} as Record<QueueKind, number>);
+        return { ...p, counts: { ...current, [kind]: Math.max(0, (current[kind] ?? 0) + delta) } };
+      });
     },
     [setQueues],
   );

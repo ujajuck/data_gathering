@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { ApiError, State, api, errorMessage, profileLabel, schemaLabel, snapshotLabel, useData, useJob, useNavigation } from "./client";
-import type { Area, ApplicationSummary, JobResponse, MappingRegion, MappingRevisionRow, MappingRow, MappingStatus, Page, ProfileDetail, RegionRef, SheetRow, TestResult } from "./types";
+import type { Area, ApplicationSummary, JobResponse, MappingRegion, MappingRevisionRow, MappingRow, MappingStatus, Page, ProfileDetail, RegionRef, SheetRow, TestGroup, TestResult } from "./types";
 import { JOB_STATE_LABELS } from "./types";
 import { formatRange } from "./sheetGeometry";
 import SheetViewer from "./SheetViewer";
@@ -130,6 +130,34 @@ function RolePicker({ value, onChange }: { value: RegionRole; onChange: (role: R
 
 const pageItems = <T,>(data: Page<T> | T[] | null): T[] => (Array.isArray(data) ? data : data?.items ?? []);
 
+// §4.5 approve-all 응답은 `{application_id, approved, skipped[], extraction: JobResponse|null}`이다(픽스처·구형 응답은 작업 응답 자체).
+// 배너·추적에 쓰는 작업 응답 하나로 맞춘다: 추출 작업이 있으면 그 작업(+승인 수), 없으면 승인 결과만 담은 완료 응답.
+type ApproveAllResult = { application_id: string; approved: number; skipped: { rule_key: string; reason: string }[]; extraction: JobResponse | null };
+export function approveAllJob(response: JobResponse | ApproveAllResult): JobResponse {
+  if (isJobResponse(response)) return response;
+  const skipped = response.skipped?.length ?? 0;
+  const summary = { approved: response.approved, ...(skipped ? { skipped } : {}) };
+  if (response.extraction && isJobResponse(response.extraction))
+    return { ...response.extraction, result: { ...(response.extraction.result || {}), ...summary } };
+  const stamp = new Date().toISOString();
+  return {
+    job_id: "",
+    kind: "approve_all",
+    state: skipped ? "failed" : "succeeded",
+    completed: response.approved,
+    total: response.approved + skipped,
+    result: summary,
+    error_code: skipped ? "FIELD_REQUIRED" : null,
+    error_message: skipped ? `${skipped}개 규칙은 필드가 없어 승인하지 못했습니다` : null,
+    target_kind: "application",
+    target_id: response.application_id,
+    label: null,
+    created_at: stamp,
+    started_at: stamp,
+    finished_at: stamp,
+  };
+}
+
 // ---------------------------------------------------------------- 검수 모드
 
 function ApplicationReview({ applicationId }: { applicationId: string }) {
@@ -170,6 +198,10 @@ function ApplicationReview({ applicationId }: { applicationId: string }) {
   useEffect(() => {
     if (extractionJob && (extractionJob.state === "succeeded" || extractionJob.state === "failed" || extractionJob.state === "cancelled")) {
       setMessage({ kind: extractionJob.state === "succeeded" ? "info" : "error", text: "추출 " + jobSummary(extractionJob) });
+      // 모두 승인에서 넘긴 추출 작업이면 배너도 최종 상태로 바꾼다(승인 수는 유지).
+      setApproveAllResult((current) =>
+        current && current.job_id === extractionJob.job_id ? { ...extractionJob, result: { ...(current.result || {}), ...(extractionJob.result || {}) } } : current,
+      );
       application.reload();
     }
   }, [extractionJob?.state, extractionJob?.job_id]);
@@ -190,8 +222,21 @@ function ApplicationReview({ applicationId }: { applicationId: string }) {
     setMessage(null);
     try {
       const result = await api<unknown>(path, body);
-      if (isMappingRow(result)) patchMapping(target.mapping_id, result);
-      else if (isJobResponse(result)) {
+      if (isMappingRow(result)) {
+        // §4.5 revise 응답 = 매핑 행 + `extraction`(헤드가 전부 approved면 같은 요청에서 큐에 넣은 추출 작업, 아니면 null).
+        const { extraction: extractionJob, ...row } = result as MappingRow & { extraction?: unknown };
+        patchMapping(target.mapping_id, row);
+        if (isJobResponse(extractionJob)) {
+          if (extractionJob.state === "queued" || extractionJob.state === "running") {
+            extraction.track(extractionJob);
+            setMessage({ kind: "info", text: doneText + " · 추출 진행 중…" });
+            return true;
+          }
+          setMessage({ kind: extractionJob.state === "succeeded" ? "info" : "error", text: doneText + " · 추출 " + jobSummary(extractionJob) });
+          application.reload();
+          return true;
+        }
+      } else if (isJobResponse(result)) {
         if (result.state === "queued" || result.state === "running") {
           extraction.track(result);
           setMessage({ kind: "info", text: doneText + " · 추출 진행 중…" });
@@ -271,11 +316,14 @@ function ApplicationReview({ applicationId }: { applicationId: string }) {
       return { ...current, mappings: next, heads_approved: countApproved(next) };
     });
     setApproveAllResult(null);
-    const job = await approveAll.run("/applications/" + encodeURIComponent(app.application_id) + "/approve-all", { extract: true }, 20);
-    if (!job) {
+    const response = await approveAll.run("/applications/" + encodeURIComponent(app.application_id) + "/approve-all", { extract: true }, 20);
+    if (!response) {
       application.setData(previous);
       return;
     }
+    const job = approveAllJob(response);
+    // wait 안에 추출이 끝나지 않았으면 이어서 폴링한다(끝나면 extractionJob 효과가 값을 다시 읽고 배너를 마무리한다).
+    if (job.state === "queued" || job.state === "running") extraction.track(job);
     setApproveAllResult(job);
     application.reload();
   }
@@ -411,13 +459,41 @@ function ApplicationReview({ applicationId }: { applicationId: string }) {
 
 type TestState = { loading: boolean; result: TestResult | null; error: string };
 
+// §4.7 결과의 원본 위치는 서비스가 `regions: {role: [{sheet_name, range}]}` · `values[].sheet_name/range` · `bindings: {role: [sheet_name]}`
+// (sheet_id 없음)로 주고, 검수 모드 매핑 행은 `regions[{role, sheet_id, sheet_name, range}]`로 준다. 두 모양을 모두 받아
+// 시트 목록(snapshot의 sheets)으로 sheet_id를 채운 배열 모양으로 맞춘다 — overlay·초점·시트 역할 표시는 sheet_id로 동작한다.
+export function normalizeTestResult(result: TestResult, sheets: SheetRow[]): TestResult {
+  const byName = new Map(sheets.map((s) => [s.sheet_name, s.sheet_id] as const));
+  const byId = new Set(sheets.map((s) => s.sheet_id));
+  const ref = (region: Partial<RegionRef> & { sheet?: string }): RegionRef => {
+    const sheetName = region.sheet_name ?? region.sheet ?? "";
+    const sheetId = region.sheet_id && byId.has(region.sheet_id) ? region.sheet_id : byName.get(sheetName) ?? region.sheet_id ?? "";
+    return { sheet_id: sheetId, sheet_name: sheetName || sheets.find((s) => s.sheet_id === sheetId)?.sheet_name || "", range: region.range || "" };
+  };
+  const groups = (result.groups || []).map((group) => {
+    const raw = group.regions as unknown;
+    const regions: TestGroup["regions"] = Array.isArray(raw)
+      ? raw.map((r) => ({ ...ref(r), role: r.role }))
+      : Object.entries((raw || {}) as Record<string, Partial<RegionRef>[]>).flatMap(([role, parts]) => (parts || []).map((r) => ({ ...ref(r), role })));
+    const values = (group.values || []).map((value) => {
+      const source = value.region || ((value as { sheet_name?: string; range?: string }).range ? (value as { sheet_name?: string; range?: string }) : undefined);
+      return source ? { ...value, region: ref(source) } : value;
+    });
+    return { ...group, regions, values };
+  });
+  const bindings: Record<string, string[]> = {};
+  for (const [role, names] of Object.entries(result.bindings || {}))
+    bindings[role] = (Array.isArray(names) ? names : [names]).map((name) => (byId.has(name) ? name : byName.get(name) ?? name));
+  return { ...result, groups, bindings };
+}
+
 function TestReview({ profileId, snapshotId }: { profileId: string; snapshotId: string }) {
   const { route, go } = useNavigation();
   const isDraft = profileId === "draft";
   const draft = useProfileDraft();
   const profile = useData<ProfileDetail>(!isDraft && profileId ? "/profiles/" + encodeURIComponent(profileId) : null);
   const sheetsResource = useData<Page<SheetRow> | SheetRow[]>(snapshotId ? "/snapshots/" + encodeURIComponent(snapshotId) + "/sheets" : null);
-  const sheets = pageItems(sheetsResource.data);
+  const sheets = useMemo(() => pageItems(sheetsResource.data), [sheetsResource.data]);
   const [zoom, setZoom] = useState(1);
   const [run, setRun] = useState(0);
   const [test, setTest] = useState<TestState>({ loading: false, result: null, error: "" });
@@ -445,7 +521,7 @@ function TestReview({ profileId, snapshotId }: { profileId: string; snapshotId: 
     // draft 객체는 저장소가 바뀔 때만 새 참조가 된다.
   }, [profileId, snapshotId, run, isDraft, draft, missingDraft]);
 
-  const result = test.result;
+  const result = useMemo(() => (test.result ? normalizeTestResult(test.result, sheets) : null), [test.result, sheets]);
   const groups = result?.groups ?? [];
   const group = groups.find((g) => g.rule_key === route.rule) || groups[0] || null;
   const regions = useMemo(() => group?.regions ?? [], [group]);

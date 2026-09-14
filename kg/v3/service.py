@@ -1339,7 +1339,8 @@ class Service:
             "document": {"document_id": app["document_id"], "document_name": app["document_name"]},
             "snapshot": {"snapshot_id": app["snapshot_id"], "revision_no": app["revision_no"], "captured_at": app["captured_at"]},
             "profile": {"profile_id": app["profile_id"], "profile_name": app["profile_name"], "rev": app["profile_rev"], "current_rev": app["profile_current_rev"], "status": app["profile_status"]},
-            "schema": {"schema_key": app["schema_key"], "schema_name": app["schema_name"]},
+            # §7 스키마 표기 `{schema_name} v{rev}` — 이 application이 본 schema_rev를 함께 준다(프로파일 ref와 같은 모양).
+            "schema": {"schema_key": app["schema_key"], "schema_name": app["schema_name"], "rev": app["schema_rev"]},
             "sheets": [{"sheet_id": s["sheet_id"], "sheet_name": s["sheet_name"], "ordinal": s["ordinal"], "roles": sorted(set((s["roles"] or "").split(","))) if s["roles"] else []} for s in sheets],
             "mappings": mappings,
         }
@@ -2164,6 +2165,7 @@ class Service:
             "application_id": r["application_id"],
             "profile_id": r["profile_id"],
             "rule_key": r["rule_key"],
+            "rule_name": r["rule_name"] if "rule_name" in r.keys() else None,
             "field": {"key": r["field_key"], "name": r["field_name"], "type": r["field_type"], "unit": r["canonical_unit"]},
             "group_key": r["group_key"],
             "record_key": r["record_key"],
@@ -2178,6 +2180,8 @@ class Service:
             "formula_state": r["formula_state"],
             "derivation_key": r["derivation_key"],
             "source": firsts.get(r["value_id"]),
+            # 프런트(ValueRow.first_region)·매핑 행(value.first_region)과 같은 이름으로도 준다.
+            "first_region": firsts.get(r["value_id"]),
             "regions": regions.get(r["value_id"], []),
         }
 
@@ -2206,7 +2210,7 @@ class Service:
             args.extend(after)
         found = rows(
             conn,
-            "SELECT v.*, a.application_id, a.profile_id, r.rule_key, f.field_key, f.field_name, f.value_type field_type, f.canonical_unit "
+            "SELECT v.*, a.application_id, a.profile_id, r.rule_key, r.rule_name, f.field_key, f.field_name, f.value_type field_type, f.canonical_unit "
             "FROM extracted_value v JOIN extraction_run x ON x.run_id=v.run_id JOIN parsing_application a ON a.application_id=x.application_id "
             "JOIN mapping_revision mr ON mr.mapping_revision_id=v.mapping_revision_id JOIN mapping m ON m.mapping_id=mr.mapping_id "
             "JOIN parsing_rule r ON r.rule_id=m.rule_id JOIN parsing_field f ON f.field_id=v.field_id "
@@ -2251,7 +2255,7 @@ class Service:
         with self.db.connect() as conn:
             row = one(
                 conn,
-                "SELECT v.*, m.mapping_id, a.application_id, a.profile_id, a.published_run_id, r.rule_key, f.field_key, f.field_name, f.value_type field_type, f.canonical_unit, d.document_id, d.document_name, s.revision_no, s.captured_at "
+                "SELECT v.*, m.mapping_id, a.application_id, a.profile_id, a.published_run_id, r.rule_key, r.rule_name, f.field_key, f.field_name, f.value_type field_type, f.canonical_unit, d.document_id, d.document_name, s.revision_no, s.captured_at "
                 "FROM extracted_value v JOIN extraction_run x ON x.run_id=v.run_id JOIN parsing_application a ON a.application_id=x.application_id JOIN mapping_revision mr ON mr.mapping_revision_id=v.mapping_revision_id "
                 "JOIN mapping m ON m.mapping_id=mr.mapping_id JOIN parsing_rule r ON r.rule_id=m.rule_id JOIN parsing_field f ON f.field_id=v.field_id "
                 "JOIN document_snapshot s ON s.snapshot_id=v.snapshot_id JOIN document d ON d.document_id=s.document_id WHERE v.value_id=?",

@@ -1,7 +1,7 @@
 // 작은 공용 UI 조각: 제목·칩·탭·모달(inert 형제 + 초점 가두기 + Escape — v2 DocumentDrawer 패턴 이식).
 import { useEffect, useRef } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
-import type { ChipClass, DocumentStatus, ProfileStatus } from "./types";
+import type { ChipClass, DocumentStatus, DocumentStatusDetail, ProfileStatus } from "./types";
 import { APPLICATION_STATE_CLASS, APPLICATION_STATE_LABELS, PROFILE_STATUS_CLASS, PROFILE_STATUS_LABELS, STATUS_CLASS, STATUS_LABELS } from "./types";
 
 export function Heading({
@@ -30,6 +30,21 @@ export function Chip({ kind = "muted", children, title }: { kind?: ChipClass | "
       {children}
     </span>
   );
+}
+
+// 상태 근거(status_detail)를 툴팁 문장으로. 객체면 항목별 요약, 잠김이면 last_error를 우선한다.
+export function statusDetailText(detail: DocumentStatusDetail | string | null | undefined, lastError?: string | null): string | undefined {
+  if (typeof detail === "string") return detail || lastError || undefined;
+  if (!detail || typeof detail !== "object") return lastError || undefined;
+  const parts: string[] = [];
+  if (detail.locked) parts.push(lastError || `잠김 · ${detail.locked.code || "DRM"}`);
+  if (detail.applications) parts.push(`적용 프로파일 ${detail.applications}개`);
+  if (detail.unapproved) parts.push(`검수 필요 ${detail.unapproved}건`);
+  if (detail.inherited) parts.push(`변경 감지 ${detail.inherited}건`);
+  if (detail.failed?.length) parts.push(`파싱 실패 ${detail.failed.length}건`);
+  if (detail.incompatible?.length) parts.push(`불일치 ${detail.incompatible.length}건`);
+  if (!parts.length && lastError) parts.push(lastError);
+  return parts.join(" · ") || undefined;
 }
 
 export function StatusChip({ status, detail }: { status: DocumentStatus | string; detail?: string | null }) {

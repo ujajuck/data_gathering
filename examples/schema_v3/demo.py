@@ -239,6 +239,45 @@ def mutate_first_document(root: Path, temp_offset=0.5):
     return REFERENCE_DOCUMENT
 
 
+def write_heavy_document(root: Path, name="공정데이터_2024_09_대용량.xlsx", table_shift=3, rows=3000, cols=150):
+    """E2E 도우미(작업 내역 JobBar 시나리오): A양식(기본은 표가 이동한 compatible 양식)에 큰 부속 시트를 붙인 문서를 원본 폴더에 만든다.
+
+    Reader가 파일을 열 때마다 수 초가 걸려 등록·재파싱 작업이 '진행 중'으로 관찰될 만큼 오래 돈다. 시드 문서 집합은 바꾸지 않는다."""
+    raw = Path(root) / "data/raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    path = build_process_workbook(raw / name, 9, table_shift=table_shift)
+    wb = load_workbook(path)
+    ws = wb.create_sheet("부속 자료")
+    for r in range(1, rows + 1):
+        ws.append([r * c for c in range(1, cols + 1)])
+    wb.save(path)
+    return name
+
+
+def write_wide_document(root: Path, name="공정데이터_2024_08_확장.xlsx", extra_lots=60, note_col=30):
+    """E2E 도우미(Source Review 창 요청 시나리오): A양식 문서의 LOT 표를 60행 아래까지 늘리고 Z열 너머(기본 AD열)에 비고를 적어
+    렌더 범위가 첫 창(A1:Z60)을 넘게 만든다 — 스크롤하면 뷰어가 두 번째 창(A61:… / AA1:…)을 요청한다. 시드 문서 집합은 바꾸지 않는다."""
+    raw = Path(root) / "data/raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    path = build_process_workbook(raw / name, 8)
+    wb = load_workbook(path)
+    ws = wb[MAIN_SHEET]
+    base = datetime(2024, 1, 8, 9, 0)
+    for n in range(LOT_COUNT, LOT_COUNT + extra_lots):
+        row = 9 + n
+        ws.cell(row, 1, f"LOT-08-{n + 1:03d}")
+        ws.cell(row, 2, base + timedelta(minutes=30 * n))
+        ws.cell(row, 3, round(150 + (n % 5) * 2.5, 2))
+        ws.cell(row, 4, round(1.2 + (n % 4) * 0.05, 2))
+        ws.cell(row, 5, 30 + (n % 3) * 5)
+        ws.cell(row, 6, round(98.0 + (n % 7) * 0.3, 2))
+        ws.cell(row, 7, "합격" if n % 6 else "불합격")
+    ws.cell(2, note_col, "비고: 확장 열")
+    ws.cell(9 + LOT_COUNT + extra_lots - 1, note_col, "마지막 행 비고")
+    wb.save(path)
+    return name
+
+
 def seed(root: Path, principal="demo-user"):
     """작업 공간을 만들고 요약을 돌려준다(이미 시드된 작업 공간은 덮어쓰지 않는다)."""
     root = Path(root).resolve()

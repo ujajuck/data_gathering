@@ -76,7 +76,7 @@ def test_queues_group_same_cause_and_signature(world, scene):
 
     review = result["groups"]["review"][0]
     assert review["group_key"] == scene["profile"]["profile_id"] and review["count"] == 1 and review["label"] == "공정데이터_A양식 v1 · 매핑 검수 · 1문서"
-    assert review["impact"]["rules"] == ["lot", "signer", "temperature"] and review["actions"] == ["open_review", "approve_all"] and "compatible 1" in review["cause"]
+    assert review["impact"]["rules"] == ["lot", "signer", "temperature"] and review["actions"] == ["open_review", "approve_all"] and "호환 1" in review["cause"]
     assert review["representative"]["document_id"] == scene["c"]["document_id"] and review["representative"]["application_id"] == scene["c"]["applied"][0]["application_id"]
 
     failed = group_of(result, "failed", "UNIT_MISMATCH")

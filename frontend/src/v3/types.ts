@@ -29,6 +29,15 @@ export type DocumentStatus =
 export type ChipClass = "ok" | "warn" | "err" | "muted";
 
 // 상태 표(상태 필터·표·드로어 헤더 공용, §7).
+export type DocumentStatusDetail = {
+  applications?: number;
+  unapproved?: number;
+  inherited?: number;
+  failed?: unknown[];
+  incompatible?: unknown[];
+  locked?: { code?: string } | null;
+};
+
 export const STATUS_LABELS: Record<DocumentStatus, string> = {
   normal: "정상",
   review: "검수 필요",
@@ -109,7 +118,8 @@ export type DocumentRow = {
   provider: string;
   file_type: string;
   status: DocumentStatus;
-  status_detail: string | null;
+  // 서버는 상태 근거를 객체로 준다({applications, unapproved, inherited, failed[], incompatible[], locked{code}}); 문자열도 허용.
+  status_detail: DocumentStatusDetail | string | null;
   current_snapshot: SnapshotRef | null;
   profiles: DocumentProfile[];
   schemas: SchemaRef[];
@@ -212,7 +222,10 @@ export type ProfileDocumentRow = {
   heads_total: number;
   published: boolean;
   is_reference: boolean;
-  status: DocumentStatus;
+  // §6: `state`는 application 상태 어휘, `document_status`는 문서 상태. (구 픽스처의 `status`도 문서 상태로 받는다.)
+  state?: string;
+  document_status?: DocumentStatus;
+  status?: DocumentStatus;
 };
 
 // 정의 파일 리비전(프로파일·스키마 변경 이력).
@@ -509,7 +522,6 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   test: "테스트",
   queue_action: "묶음 처리",
   migrate: "마이그레이션",
-  render: "렌더",
 };
 
 export type JobResponse = {
@@ -561,10 +573,13 @@ export type QueueGroup = {
   actions: QueueAction[];
 };
 
+// GET /queues는 §4.11 `summary`(큐별 문서 수)를 준다. `counts`는 화면 낙관적 갱신·기존 픽스처가 쓰는 같은 표.
 export type QueueSummary = {
-  counts: Record<QueueKind, number>;
+  summary?: Record<QueueKind, number>;
+  counts?: Record<QueueKind, number>;
   groups?: Partial<Record<QueueKind, QueueGroup[]>>;
 };
+export const queueCounts = (data: QueueSummary | null | undefined): Record<QueueKind, number> | undefined => data?.counts ?? data?.summary;
 
 export type QueueActionResult = {
   queued: number;
@@ -626,9 +641,18 @@ export type BuildConflict = {
   reason?: string;
 };
 
+// 미리보기 행: 백엔드(build.py _Assembler.rows)는 {row_no, document, snapshot, record_key, cells[]}를 주고, 셀 배열만 오는 형태도 받는다.
+export type PreviewRow = {
+  row_no?: number;
+  document?: { document_id: string; document_name: string } | null;
+  snapshot?: { snapshot_id: string; captured_at: string | null } | null;
+  record_key?: string | null;
+  cells: PreviewCell[];
+};
+
 export type BuildPreview = {
   columns: BuildColumn[];
-  rows: PreviewCell[][];
+  rows: (PreviewRow | PreviewCell[])[];
   row_count: number;
   excluded: BuildCandidate[];
   conflicts: BuildConflict[];
@@ -719,12 +743,22 @@ export type NormalizationPreset = {
 };
 
 // 큐 묶음 멤버(GET /queues/{kind}/groups/{group_key}/members) — 계약에 열 정의가 없어 여기서 고정한다.
+// §4.11 멤버 행: {snapshot_id, state(큐 종류), document_status, application_state, detail{error?…}} + 서버가 붙이는 snapshot 객체.
 export type QueueMemberRow = {
   document_id: string;
   document_name: string;
-  snapshot: SnapshotRef | null;
-  status: DocumentStatus;
+  snapshot_id?: string | null;
+  snapshot?: SnapshotRef | null;
+  state?: string;
+  document_status?: DocumentStatus | string;
+  application_state?: string | null;
+  detail?: { error?: string | null; [key: string]: unknown };
   application_id?: string | null;
+  profile_id?: string | null;
+  profile_name?: string | null;
+  compatibility?: string | null;
+  // 이전 형태(status·error) 호환.
+  status?: DocumentStatus | string;
   error?: string | null;
 };
 
@@ -742,14 +776,20 @@ export const compatibilityLabel = (value: string | null | undefined): string =>
 
 // 프로파일 적용(application) 상태 — 문서 상세 '적용 프로파일' 표 등.
 export const APPLICATION_STATE_LABELS: Record<string, string> = {
+  published: "발행",
   approved: "승인",
   review: "검수 필요",
+  changed: "변경 감지",
+  extracting: "추출 중",
   pending: "대기",
   failed: "실패",
 };
 export const APPLICATION_STATE_CLASS: Record<string, ChipClass> = {
+  published: "ok",
   approved: "ok",
   review: "warn",
+  changed: "warn",
+  extracting: "muted",
   pending: "muted",
   failed: "err",
 };

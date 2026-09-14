@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { api, downloadFile, errorMessage, isJobActive, profileLabel, regionLabel, reviewRoute, schemaLabel, useJob, useNavigation, useToast } from "./client";
-import type { BuildCandidate, BuildConflict, BuildFormat, BuildManifest, BuildPreview, BuildResult, JobResponse, PreviewCell, SchemaRow } from "./types";
+import type { BuildCandidate, BuildConflict, BuildFormat, BuildManifest, BuildPreview, BuildResult, JobResponse, PreviewCell, PreviewRow, SchemaRow } from "./types";
 import { BUILD_REASON_LABELS, JOB_STATE_LABELS } from "./types";
 import { Chip, EmptyState } from "./ui";
 import type { BuildInput } from "./Build";
@@ -78,7 +78,8 @@ function PreviewStep({
   const { go } = useNavigation();
   const data = preview?.data || null;
   const headers = data?.columns?.length ? data.columns : input.columns;
-  const rows = (data?.rows || []).slice(0, 50);
+  // 행은 {cells[]} 객체(백엔드) 또는 셀 배열 — 둘 다 셀 배열로 편다.
+  const rows = (data?.rows || []).slice(0, 50).map((row) => cellsOf(row));
   const openSource = (cell: NonNullable<PreviewCell>) =>
     cell.application_id && go(reviewRoute({ application_id: cell.application_id, rule_key: cell.rule_key, sheet_id: cell.sheet_id, range: cell.range }));
   return (
@@ -166,6 +167,11 @@ function PreviewStep({
       </div>
     </section>
   );
+}
+
+function cellsOf(row: PreviewRow | PreviewCell[]): PreviewCell[] {
+  if (Array.isArray(row)) return row;
+  return Array.isArray(row?.cells) ? row.cells : [];
 }
 
 function ExcludedAndConflicts({ excluded, conflicts }: { excluded: BuildCandidate[]; conflicts: BuildConflict[] }) {

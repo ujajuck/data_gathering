@@ -1,7 +1,28 @@
-# 진행 로그 (claude/dev-fixes)
+# 진행 로그
 
 작업 단위(=커밋)마다 한 항목씩 기록한다. 상세 근거·검증 방법은 각 커밋
 메시지에 있고, 여기는 흐름을 한눈에 보는 색인이다. 최신이 위.
+
+## 2026-09-14 — v3 재설계 (claude/system-redesign-e2e-docs)
+
+- **Codex 설계 문서 기반 v3 재설계·구현·E2E** (이 브랜치의 커밋 묶음)
+  - 입력: `claude/data-gathering-schema-review-6kf0n9`의 Codex 문서군(시스템 정체성·18개 코어 스키마·
+    개발 기준안+승인 목업·렌더 서버 아키텍처)을 fast-forward 병합. 코드 단위 계약
+    `docs/design/v3-contracts.md`(적대적 검증 45건 반영), 문서 간 충돌 결정 `docs/design/v3-decisions.md`
+  - 백엔드 `kg/v3/`·`db/v3/`: 18개 코어 테이블(+런타임 2) DDL SQLite/PostgreSQL, 트리거 35개(불변·CAS·
+    발행 조건·projection 보호), Parsing Profile DSL 3.0(이름 앵커·composite·regex·relations·split_delimiter),
+    Import Adapter(3.0/v2/v1/generic), 추출 엔진·매치 판정, Reader 격리(forkserver), 서비스(등록 1회 Reader →
+    자동 적용/승계/검수 CAS/추출/발행/프로파일 테스트·승인·재파싱/문서 상태 캐시), 데이터 빌드(CSV/XLSX/SQLite+manifest),
+    검수 큐 5종(묶음 처리), FastAPI `/api/v3`, 별도 렌더 서버(밴드 캐시·창 응답·asset·ETag/304·인증),
+    v2→v3 이관, raw 감시. 적대적 리뷰 32건 중 31건 반영
+  - 프런트 `frontend/src/v3/`: 좌측 사이드바 5화면(문서·파싱 프로파일·파싱 스키마·데이터 빌드·작업 내역)+설정,
+    Source Review 오버레이, 창 단위 가상화 SheetViewer, 출력 Header 편집, 트리/그래프 토글, 큐 묶음 처리;
+    규칙 테스트(금지 용어·ID 비노출·v2 import 금지·진입 호출 ≤3·접근성). 기본 화면 v3, `?v2=1`/`?v1=1` 유지
+  - E2E `e2e/v3/`: 감독 러너(렌더 서버 별도 프로세스, 스펙 파일마다 작업 공간 리셋), 스펙 7개·테스트 19개,
+    결과·완료 조건 대조·측정값은 `docs/e2e-results-v3.md`
+  - 검증: `python -m pytest` 443 passed(DRM e2e 제외 시) · `npm test` 180 passed · `npm run test:v3` 19 passed(연속 3회) ·
+    `npm run test:v2` 3 passed. CI `.github/workflows/v3.yml`
+  - 문서: `docs/ARCHITECTURE_V3.md`(ERD·모듈·시퀀스·API 지도), README/e2e/frontend/kg README, `.env.sample`
 
 ## 2026-09-07
 

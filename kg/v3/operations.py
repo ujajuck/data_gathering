@@ -131,7 +131,7 @@ def _review_groups(conn, prefix=APP_CTE):
         " sum(rejected>0) rejected_n, sum(field_required>0) field_required_n, sum(compatibility='compatible') compatible_n, sum(heads_total=0) empty_n,"
         f" group_concat(pending_rules, char(31)) rules FROM app WHERE {REVIEW_WHERE} GROUP BY profile_id"
     ):
-        causes = [f"{name} {n}" for name, n in (("compatible", r["compatible_n"]), ("FIELD_REQUIRED", r["field_required_n"]), ("반려됨 · 수정 필요", r["rejected_n"]), ("규칙 없음", r["empty_n"])) if n]
+        causes = [f"{name} {n}" for name, n in (("호환", r["compatible_n"]), ("FIELD_REQUIRED", r["field_required_n"]), ("반려됨 · 수정 필요", r["rejected_n"]), ("규칙 없음", r["empty_n"])) if n]
         out.append(
             {
                 "group_key": r["profile_id"],
@@ -199,7 +199,7 @@ def _changed_groups(conn, prefix=APP_CTE):
             {
                 "group_key": r["profile_id"],
                 "kind": "changed",
-                "cause": f"새 snapshot 승계 (identical {r['identical_n']} · compatible {r['compatible_n']})",
+                "cause": f"새 snapshot 승계 (동일 {r['identical_n']} · 호환 {r['compatible_n']})",
                 "label": f"{r['profile_name']} v{r['profile_current_rev']} · 변경 감지 · {r['n']}문서",
                 "count": r["n"],
                 "impact": {"documents": r["n"], "rules": _split(r["rules"]), "identical": r["identical_n"], "compatible": r["compatible_n"]},
@@ -397,7 +397,20 @@ def _member_rows(conn, kind, group_key, after=None, limit=None):
         if isinstance(row["detail"].get("missing"), str):
             row["detail"]["missing"] = load(row["detail"]["missing"], [])
         out.append(row)
+    _attach_snapshots(conn, out)
     return out
+
+
+def _attach_snapshots(conn, rows_):
+    """멤버 행에 snapshot{snapshot_id, revision_no, captured_at}을 붙인다(페이지당 IN 질의 1개; snapshot이 없으면 None)."""
+    ids = sorted({r["snapshot_id"] for r in rows_ if r.get("snapshot_id")})
+    found = {}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start : start + 500]
+        for r in conn.execute(f"SELECT snapshot_id, revision_no, captured_at FROM document_snapshot WHERE snapshot_id IN ({','.join('?' * len(chunk))})", chunk):
+            found[r["snapshot_id"]] = {"snapshot_id": r["snapshot_id"], "revision_no": r["revision_no"], "captured_at": r["captured_at"]}
+    for row in rows_:
+        row["snapshot"] = found.get(row.get("snapshot_id"))
 
 
 def members(service, kind, group_key, cursor=None, limit=50):
