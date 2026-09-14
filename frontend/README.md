@@ -1,16 +1,24 @@
 # Semantic Excel Integration — React Frontend
 
-이 시스템의 **웹 프런트엔드**다 (React + TypeScript + Vite). 기본 화면은 `src/v2/`의
-파일 분석·개념 탐색·원본 데이터·통합 DB·템플릿 관리 탭이다. 제품명·파란색·탭 순서는
-v1과 공유한다(`src/product.ts`, `src/product.css`). [복원 범위와 결정 기록](../docs/design/v2-restoration.md)에
-복원한 기능과 남은 항목을 명시한다. `/api/v2`는 독립 서버 `kg.v2` 또는
-기존 `kg.webapp`에서 제공한다. [v2 실행 안내](../docs/design/db-schema-v2-runtime.md)에
-샘플 생성, 검수와 추출, DRM Reader 계약 및 지원 범위를 정리했다.
-개념 탐색의 [KG 커버리지 캔버스](../docs/design/v2-kg-coverage.md)는 선택한 문서 버전의
-검수·발행 상태와 도메인 관계를 페이지·확대·드래그로 탐색하고 원본 검수로 연결한다.
-빌드 산출물(`dist/`)이 커밋되어 서버가 루트
-`/` 에 바로 서빙한다 — 프론트를 고치면 `npm run build` 후 dist까지 커밋한다.
-(초기 바닐라 JS UI `kg/web_kg`는 포트 완료 후 제거됐다.)
+이 시스템의 **웹 프런트엔드**다 (React + TypeScript + Vite). 기본 화면은 `src/v3/`의
+문서 · 파싱 프로파일 · 파싱 스키마 · 데이터 빌드 · 작업 내역(좌측 사이드바) + Source Review 오버레이이며,
+파일·라우트·픽스처 설명은 [src/v3/README.md](src/v3/README.md), 계약은 [docs/design/v3-contracts.md §7](../docs/design/v3-contracts.md)에 있다.
+`?v2=1`은 v2 화면(`src/v2/`), `?v1=1`은 v1 화면(`src/screens/`), `?legacy=1`은 PDF 근거 뷰어를 연다.
+빌드 산출물(`dist/`)이 커밋되어 서버가 루트 `/`에 바로 서빙한다 — 프론트를 고치면 `npm run build` 후 dist까지 커밋한다.
+
+```bash
+# v3 샘플과 백엔드 (개발 프록시 대상)
+python -m kg.v3 seed-demo --workspace /tmp/v3-demo
+python -m kg.v3 serve --ws /tmp/v3-demo --port 8010
+npm ci && npm run dev        # Vite, /api → 127.0.0.1:8010 프록시
+npm test                     # vitest: v2 + v3 컴포넌트 회귀
+npm run build                # tsc -b && vite build → dist/
+```
+
+## v2 화면 (`?v2=1`)
+
+`src/v2/`의 파일 분석·개념 탐색·원본 데이터·통합 DB·템플릿 관리 5탭. 구조는 [../docs/ARCHITECTURE_V2.md](../docs/ARCHITECTURE_V2.md),
+실행은 `python -m examples.schema_v2.runtime_demo --workspace /tmp/data-gathering-v2-demo && python -m kg.v2 --ws /tmp/data-gathering-v2-demo --port 8010`.
 
 ## 기존 화면 (`?v1=1`)
 

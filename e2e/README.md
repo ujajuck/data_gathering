@@ -3,7 +3,36 @@
 현행 React UI 기준의 브라우저 시나리오 테스트. UI가 바뀌면 **여기 스크립트도
 같은 커밋에서 갱신한다** — 구버전 UI를 가정한 스크립트를 방치하지 않는다.
 
-## v2 실행 (기본 화면)
+## v3 실행 (기본 화면)
+
+```bash
+npm --prefix frontend ci && npm --prefix frontend run build
+npm --prefix e2e ci
+cd e2e
+npx playwright install --with-deps chromium          # 또는 KG_E2E_CHROMIUM_PATH=/opt/pw-browsers/chromium
+npm run test:v3
+```
+
+러너 `v3/serve.py`가 임시 작업 공간에 `examples/schema_v3/demo.py`의 가상 문서(같은 양식 3개·앵커 이동 1개·
+다른 양식 1개·잠긴 파일 1개·이미지 시트)와 스키마·approved 프로파일을 만들고, **렌더 서버를 별도 프로세스(8032)**로,
+메인 API/UI를 8031로 띄운다. 작업 공간 경로는 `e2e/v3/.workspace`에 기록되어 새 snapshot 시나리오가
+`mutate_first_document`를 실행한다. 실제 도메인 DB·사용자 원본은 열지 않는다.
+
+| 스펙 | 검증 |
+|---|---|
+| `v3/documents.spec.ts` | 등록 대화상자 · 7개 상태 칩 · 정렬/필터 · 드로어 4탭(파일 보기 202 폴링) · 문서→프로파일→스키마 관계 |
+| `v3/profiles.spec.ts` | 목록·6탭 · JSON 검증 · v1/v2 Import 미리보기 경고 · 테스트 → Source Review overlay · 승인 · 재파싱 |
+| `v3/schema.spec.ts` | 트리/그래프 토글 · 필드 상세 · 사용 프로파일/연관 문서 탭 · 필드에서 Source Review |
+| `v3/build.spec.ts` | 문서 3개 인계 · candidates · 헤더 중복 오류 · 순서 변경 · 미리보기 원본 보기 · CSV/XLSX/SQLite 내용 · manifest |
+| `v3/jobs.spec.ts` | 요약 카드 · 묶음 행 · approve_all 1클릭 · 실패 이동 · 작업 목록 |
+| `v3/source-review.spec.ts` | 실제 셀·overlay · 드래그 재지정 · 승인→추출 요청 1회 · 역방향 조회 · 잠긴 문서 실패 표시 |
+| `v3/render-isolation.spec.ts` | 렌더 중 문서 API 응답 시간 · 캐시 재접근 < 1초 · 304 |
+
+결과와 완료 조건 대조표는 [docs/e2e-results-v3.md](../docs/e2e-results-v3.md). 실패 보고서는 `e2e/playwright-report-v3`,
+trace·다운로드·스크린샷은 `e2e/test-results-v3`(Git 제외).
+
+## v2 실행 (`?v2=1`)
+
 
 Python 3.12와 프로젝트의 web/test 의존성, Node 24.15 이상이 필요하다.
 
@@ -19,7 +48,7 @@ npm run test:v2
 `KG_E2E_PYTHON`으로 Python 실행 경로를 지정할 수 있다. 서버와 다운로드 SQLite 검사 모두 같은
 Python을 쓴다. `CHROMIUM_PATH`를 지정하면 v1 러너(`helpers.mjs`)와 같은 브라우저 실행 파일을
 `launchOptions.executablePath`로 사용한다. 미지정 시 `npx playwright install`이 설치한 chromium을 쓴다
-(`.github/workflows/v2.yml`은 지정하지 않는다). 러너는 `127.0.0.1:8021`에 임시 가상 작업 공간을 직접 생성·실행한다.
+(`.github/workflows/v2.yml`은 지정하지 않는다). 러너는 `127.0.0.1:8021`에 임시 가상 작업 공간을 직접 생성·실행하며, 스펙은 `/?v2=1&…`로 v2 화면에 진입한다.
 기존 서버 재사용이나 실제 `kg.db` 변경은 하지 않는다. 실패 보고서는 `e2e/playwright-report`,
 trace·다운로드·스크린샷은 `e2e/test-results`에 남으며 Git에서는 제외한다.
 

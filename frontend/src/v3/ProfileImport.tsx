@@ -12,10 +12,13 @@ export type ImportMode = "import" | "new";
 
 export default function ProfileImport({
   mode,
+  initialSnapshot,
   onClose,
   onSaved,
 }: {
   mode: ImportMode;
+  // 작업 내역 큐(?import=1&snapshot=)에서 열릴 때 '테스트 문서'로 미리 고를 snapshot.
+  initialSnapshot?: string;
   onClose: () => void;
   onSaved: (profile: ProfileSaveResult) => void;
 }) {
@@ -31,7 +34,7 @@ export default function ProfileImport({
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const [testSnapshot, setTestSnapshot] = useState("");
+  const [testSnapshot, setTestSnapshot] = useState(initialSnapshot || "");
   const seeded = useRef(false);
   useEffect(() => {
     if (!schemaKey && schemaList.length) setSchemaKey(schemaList[0].schema_key);
@@ -77,6 +80,8 @@ export default function ProfileImport({
   const documents = usePage<DocumentRow>(valid ? "/documents" : null);
   const candidates = documents.items.filter((d) => d.current_snapshot);
   const snapshotId = testSnapshot || candidates[0]?.current_snapshot?.snapshot_id || "";
+  // 큐에서 넘어온 snapshot이 첫 페이지 문서 목록에 없으면 별도 항목으로 보여 준다(ID는 값으로만 쓴다).
+  const snapshotListed = !snapshotId || candidates.some((d) => d.current_snapshot?.snapshot_id === snapshotId);
   const canonicalName = preview?.canonical && typeof preview.canonical.profile_name === "string" ? preview.canonical.profile_name : "";
 
   function upload(file: File | undefined) {
@@ -216,8 +221,9 @@ export default function ProfileImport({
             {valid && (
               <label>
                 테스트 문서
-                <select value={snapshotId} onChange={(e) => setTestSnapshot(e.target.value)} disabled={candidates.length === 0}>
-                  {candidates.length === 0 && <option value="">{documents.loading ? "불러오는 중…" : "문서 없음"}</option>}
+                <select value={snapshotId} onChange={(e) => setTestSnapshot(e.target.value)} disabled={candidates.length === 0 && snapshotListed}>
+                  {candidates.length === 0 && snapshotListed && <option value="">{documents.loading ? "불러오는 중…" : "문서 없음"}</option>}
+                  {!snapshotListed && <option value={snapshotId}>작업 내역에서 고른 문서</option>}
                   {candidates.map((d) => (
                     <option key={d.document_id} value={d.current_snapshot!.snapshot_id}>
                       {d.document_name}

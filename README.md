@@ -1,160 +1,87 @@
 # Semantic Excel Integration
 
-반정형 Excel(반복 블록·병합 셀·색 범례·수기 양식)을 **도메인 온톨로지**의 개념에
-매핑해 **문서군(공유 양식) → 양식 → 문서** 계층으로 관리하고, 원본 충실 뷰어로
-근거를 확인하며, 셀 단위 출처 추적(lineage)이 붙은 **통합 DB**를 만드는 시스템.
+NASCA/DRM 등으로 보호된 사내 Excel 문서를 **검증된 파싱 스키마(무엇)와 파싱 프로파일(어떻게)**로
+정형화된 단일 테이블 데이터로 바꾸어 공정/분석 Agent에 제공하는 **Secure Document-to-Table Adapter**다.
+Agent는 원본의 물리 양식·DRM·병합 셀·단위를 알 필요 없이 표준 테이블만 소비하고, 모든 추출값은
+원본 Sheet/Range까지 추적된다. 최종 CSV/XLSX/SQLite는 필요할 때 만드는 산출물이지 새로운 Source of Truth가 아니다.
 
-문서를 표준 양식으로 강제 변환하지 않는다 — 각 문서의 구조를 Knowledge Tree로
-보존하고, 의미 노드를 고정 개념 체계에 연결한 뒤, 개념을 공통 축으로 목적별
-DB를 생성한다. 문서는 `docs/`에 모은다 — 아키텍처 다이어그램(ERD·모듈·
-시퀀스·EL 플로우)은 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), 설계 ↔ 모듈
-대응은 [kg/README.md](kg/README.md), 작업 이력은
-[docs/PROGRESS.md](docs/PROGRESS.md) 참고.
+현행 런타임은 **v3**(`kg/v3/`, `db/v3/`, `frontend/src/v3/`)다. 설계 근거와 결정은 `docs/`에 있다.
 
-## v2 실행
-
-별도 브랜치 `codex/db-schema-redesign`에서 버전형 스키마와 실제 실행 경로를 연결했다.
-문서·KG·템플릿·매핑 수정·추출·사용자 DB는 별도 `data/kg/v2.db`를 사용한다.
-기존 `kg.db`를 자동 변경하지 않는다.
-
-```bash
-pip install -e ".[web,test]"
-# 가상 데이터로 처음부터 실행 — 새 폴더를 지정한다
-python -m examples.schema_v2.runtime_demo --workspace /tmp/data-gathering-v2-demo
-python -m kg.v2 --ws /tmp/data-gathering-v2-demo --port 8010
-# http://localhost:8010/?v2=1
-# 완료된 빌드를 DVC 추적 폴더로 내보내기 / KG 리비전의 Apache AGE projection SQL 생성
-python -m kg.v2 export --ws /tmp/data-gathering-v2-demo --build <build_id> --out exports/v2/<build_id>
-python -m kg.v2 age-projection --ws /tmp/data-gathering-v2-demo --kg current --out age/kg.sql
-# raw 폴더 감시 → 새 파일/변경을 문서 버전으로 자동 등록 (--once는 1회 스캔)
-python -m kg.v2 watch --ws /tmp/data-gathering-v2-demo --once
-```
-
-문서 → 원본 · 검수 → 승인/추출 → 도메인 개념별 소스 선택 → 사용자 DB 순서로 사용한다.
-원본 화면은 기본 40행×12열, 데이터 목록은 30개씩 읽는다. 키·값의 복수 영역,
-병합 셀, 가로/세로 목록, 여러 시트의 역할 연결과 항목별 출처를 지원한다.
-
-일반 XLSX의 기본 뷰어는 **간략 보기**다. 실제 DRM 문서의 읽기와 원본 스타일·차트·도형
-재현은 운영자가 승인한 읽기·렌더 어댑터로 연결해야 한다. v2는 기존 해제본 등록/SaveAs 경로를 호출하지 않는다.
-
-- [실행·Reader 계약·지원 범위·검증](docs/design/db-schema-v2-runtime.md)
-- 기존 v1 `kg.db`는 `python -m kg.v2 migrate --ws <v2 ws> --from-ws <v1 ws> [--dry-run] [--report r.json]`으로
-  새 ID·`proposed` 매핑으로 옮긴다(값은 재추출 대상). 자세한 규칙은 위 문서의 "v1 이관" 절 참고.
-- [v2 아키텍처 다이어그램 — ERD 전체·클래스 다이어그램](docs/ARCHITECTURE_V2.md) · [결정 기록 — 넣은 것·안 넣은 것·이유](docs/design/v2-decisions.md) · [DVC 최소 스키마 논의 — 답장](docs/design/dvc-minimal-schema-response.md) / [재답변·34테이블 3범주 분류](docs/design/dvc-minimal-schema-reply.md) / [코어 스키마안(18개, 채택)](docs/design/parsing-core-schema.md) / [코어안 답변](docs/design/parsing-core-schema-reply.md)
-- [DB 설계와 ERD](docs/design/db-schema-v2.md), [목표 UI/API 설계](docs/design/db-schema-v2-ui.md),
-  [기능·디자인 복원 기록](docs/design/v2-restoration.md), [후속 구현 기록](docs/design/v2-followup.md)
-- 기존 서버 `python -m kg.webapp ...`에도 `/api/v2`가 연결되며 기본 화면은 v2다.
-  기존 작업 화면은 `?v1=1`, 기존 PDF 뷰어는 `?legacy=1`로 접근한다.
+| 문서 | 내용 |
+|---|---|
+| [docs/ARCHITECTURE_V3.md](docs/ARCHITECTURE_V3.md) | ERD(21개 테이블·트리거 35개)·모듈·시퀀스·API 지도·프런트 구조·운영 |
+| [docs/design/v3-contracts.md](docs/design/v3-contracts.md) | 코드 단위 계약(테이블·DSL·서비스 규칙·렌더 서버·API·화면·E2E·이관) |
+| [docs/design/v3-decisions.md](docs/design/v3-decisions.md) | 설계 문서끼리 갈린 지점의 결정과 근거 |
+| [docs/design/system-identity-and-scope.md](docs/design/system-identity-and-scope.md) · [parsing-core-schema.md](docs/design/parsing-core-schema.md) · [ui-development-spec.md](docs/design/ui-development-spec.md) · [drm-viewer-render-architecture.md](docs/design/drm-viewer-render-architecture.md) | 시스템 정체성 · 18개 코어 스키마 · 승인된 UI 기준안 · 렌더 서버 아키텍처 |
+| [docs/e2e-results-v3.md](docs/e2e-results-v3.md) | v3 브라우저 E2E 실행 결과와 완료 조건 대조표 |
 
 ## 구성
 
 ```
-kg/          코어 + 웹 서버 — 온톨로지/트리/시맨틱 매핑, 문서군·추출 레시피·
-             재크롤링, DRM 획득 게이트, 원본 충실 렌더(LibreOffice PDF 포함),
-             통합 DB 빌더(DAG/lineage), FastAPI(kg/webapp.py)
-frontend/    React + TypeScript 5탭 UI — 유일한 프론트. 빌드(dist)가 커밋되어
-             서버가 루트 / 에 바로 서빙한다 (프론트 수정 시 npm run build)
-src/         Parser library — 파서·단위 엔진 코어(Inspector/RegionDetector/
-             UnitRegistry/RecordBuilder, kg가 §14.1 계약으로 사용) + survey.
-             레거시 앱 경로는 삭제됨 — 경위는 docs/MIGRATION.md
-domains/<d>/ 도메인 워크스페이스 — config(개념·단위 units.yaml·정규화
-             프리셋 normalizers.yaml)·data/raw(원본)·data/kg/kg.db
-tests/       회귀 전체 (python -m pytest)
+kg/v3/       v3 런타임 — 파싱 스키마/프로파일 projection, Reader 계약(격리 프로세스), DSL 3.0 검증·컴파일,
+             Import Adapter(3.0·v2·v1·generic), 추출 엔진, 매핑 검수(CAS)·발행, 데이터 빌드, 검수 큐,
+             FastAPI /api/v3, 렌더 서버(kg/v3/render/), v2→v3 이관, raw 감시
+db/v3/       코어 18개 테이블 DDL(SQLite + PostgreSQL 번역) — 불변성·CAS·발행 조건 트리거
+frontend/    React + TypeScript. 기본 화면은 src/v3/(문서 · 파싱 프로파일 · 파싱 스키마 · 데이터 빌드 · 작업 내역 + Source Review 오버레이).
+             빌드(dist)가 커밋되어 서버가 루트 /에 바로 서빙한다. ?v2=1 → v2 화면, ?v1=1 → v1 화면
+e2e/         Playwright 브라우저 시나리오 — v3(e2e/v3, 렌더 서버 별도 프로세스), v2(e2e/v2), v1(run_all.mjs)
+examples/schema_v3/  E2E·데모용 가상 작업 공간 시드(스키마·프로파일·문서 7종)
+kg/, kg/v2/, src/, domains/  이전 런타임(v1 Fixed Domain KG, v2 versioned extraction)과 파서 라이브러리 — 이관 완료까지 유지
+tests/       회귀 전체 (python -m pytest) — v1 · v2 · v3
 ```
 
-## 기존 v1 CLI 및 호환 서버
+## 빠른 시작 (v3)
 
 ```bash
 pip install -e ".[web,test]"
 
-# 최초 1회 — 온톨로지 시드 + 원본 적재/매핑 (financier 예제 도메인)
-python -m kg.cli --ws domains/financier seed
-python -m kg.cli --ws domains/financier ingest --raw domains/financier/data/raw --map
+# 가상 문서·스키마·프로파일이 들어 있는 작업 공간을 만든다 (사용자 원본을 읽지 않는다)
+python -m kg.v3 seed-demo --workspace /tmp/v3-demo
 
-# 웹 실행 — 이 서버 하나가 API와 웹 UI를 모두 서빙한다
-python -m kg.webapp --ws domains/financier --port 8010
-#  → http://localhost:8010/?v1=1  기존 5탭 UI
+# 렌더 서버(별도 프로세스)와 메인 API/UI
+python -m kg.v3 render-serve --ws /tmp/v3-demo --port 8032 &
+KG_V3_RENDER_URL=http://127.0.0.1:8032 python -m kg.v3 serve --ws /tmp/v3-demo --port 8010
+#  → http://localhost:8010/   (KG_V3_RENDER_URL이 없으면 같은 프로세스 안의 렌더 워커를 쓴다)
 ```
 
-React 개발/빌드 (선택):
+실제 작업 공간은 `<ws>/data/raw/`에 원본을 두고 `문서 → + 문서 등록`(또는 `python -m kg.v3 watch --ws <ws>`)으로 등록한다.
+등록은 Reader 프로세스 1회로 시트·구조 서명·approved 프로파일 매치를 함께 계산하고, 매치가 `identical`이면 사람 개입 없이
+자동 승인·추출·발행한다(근거는 [v3-decisions §1](docs/design/v3-decisions.md)). 나머지는 `작업 내역`의 검수 큐로 간다.
 
-```bash
-cd frontend
-npm install
-npm run dev     # http://localhost:5173 — /api 는 8010 백엔드로 프록시
-npm run build   # dist/ 갱신 → kg.webapp 재시작 시 / 에 서빙 (dist는 커밋 대상)
-```
+## 5개 화면 + Source Review
 
-기존 v1 운영 참고 (v2 경로에는 적용하지 않음): 원본 충실 PDF 프리뷰에는 LibreOffice(`libreoffice-calc`)가,
-DRM(암호화) 문서의 COM 렌더에는 Windows + Excel이 필요하다. 둘 다 없어도
-셀 그리드 렌더·매핑·빌드는 동작한다. 사내(벤더) DRM 컨테이너 판별은
-환경변수 `KG_DRM_MAGIC`(파일 선두 바이트 시그니처, 콤마 구분)으로 주입한다 —
-시그니처를 저장소에 두지 않기 위한 규약이며, 미설정 시 해당 판별은 꺼진다.
-전체 환경변수 목록과 기본값은 [.env.sample](.env.sample) 참고.
-
-## 기존 v1의 5개 화면
-
-1. **파일 분석** — 파일명·작성자·템플릿 검색, 작성일 필터, 정렬, 템플릿
-   배정/미배정 필터. 미등록(raw) 파일은
-   분석 → 같은 양식의 문서군 제안 → 저장된 추출 레시피로 매핑 이식 등록.
-   잠긴 파일(암호화/DRM)은 우회 없이 정식 해제 요청서 발급 → 해제본 도착 자동
-   감지 → 등록.
-2. **개념 탐색** — 온톨로지 트리 + 문서군 커버리지 그래프(확대/축소).
-   문서군 상세는 `양식 → 문서(인스턴스)` 계층(미배정은 '기타'), 추출 레시피
-   스냅샷/이력/롤백, 재크롤링(fill/reset_auto — 사람 승인은 불가침), 개념
-   편집(별칭/관계/폐기).
-3. **원본 데이터** — 원본 충실 렌더(병합/열폭/스타일/이미지/텍스트박스 앵커
-   정합) + Semantic Overlay, 검수 큐(승인/반려/재매핑), Source Inspector
-   (매핑 근거·양식 provenance·값 미리보기), PDF Preview.
-4. **통합 DB** — `① 개념 트리 체크(상위 개념 체크 시 하위 일괄 선택) →
-   ② 스키마 확인(컬럼명 조정) → ③ 생성·다운로드` 3단계. 양식 카드에서
-   전처리(자동 정규화 / 원값 유지 / normalizers.yaml 정규화 프리셋)와 문서별
-   가감을 조정한다. 결과는 `_source_*` lineage 컬럼·빌드 리포트를 포함하고
-   `.db`/`.csv` 파일로 바로 내려받는다.
-5. **템플릿 관리** — 파싱 템플릿의 생성/버전/라이프사이클과 문서 배정.
-   문서:템플릿은 **N:M** — 템플릿마다 파싱하려는 정보(관점)가 달라도 한
-   문서에 함께 배정되고, 파싱·override·버전 감사는 템플릿 단위로 독립이다.
+1. **문서** — 원본을 찾고 상태(정상·검수 필요·변경 감지·프로파일 없음·재추출 필요·파싱 실패·잠김)를 확인하고 데이터 빌드 대상으로 고른다. 상세: 파일 보기(실제 셀 렌더)·추출 결과·적용 프로파일·연결 스키마.
+2. **파싱 프로파일** — 문서 양식별로 값을 찾는 규칙(JSON DSL 3.0: sheet role · 이름 앵커/composite · range/find/regex/relative · relations · 정규화). 외부 프로파일 JSON은 Import Adapter가 canonical로 바꾸고, 실제 문서로 테스트한 뒤 대표 문서로 승인한다.
+3. **파싱 스키마** — 공통 데이터 의미(필드·타입·단위·alias·계층)를 트리/그래프로 보고, 필드에서 사용 프로파일·연관 문서·원본까지 추적한다.
+4. **데이터 빌드** — 문서 선택 → 스키마 → 출력 Header 편집·순서 → 미리보기(값마다 원본 보기) → CSV/XLSX/SQLite + manifest.json. 영속 Integration 객체는 없다.
+5. **작업 내역** — 같은 원인·같은 양식을 묶은 검수 큐(신규 양식·매핑 검수·파싱 실패·변경 감지·충돌)와 작업 이력. 묶음 처리(프로파일 배정·모두 승인·재파싱)는 요청 1회.
+- **Source Review** — 어디서나 `원본 보기`로 여는 검수 작업공간. 별도 렌더 서버의 창 단위 캐시로 실제 셀·병합·이미지를 보이고 key/value/unit/context overlay 위에서 승인·수정·반려한다.
 
 ## CLI
 
 ```bash
-python -m kg.cli --ws domains/financier <command>
-#  seed / ingest / watch / survey / map / search / review / project / build / trace / status / metrics
-#  watch: raw 폴링 → 자동 등록(+매핑), DRM 해제본 도착 감지 포함
+python -m kg.v3 serve | render-serve | watch | migrate | import-schema | import-profile | build | seed-demo
+python -m kg.v3 migrate --ws /tmp/v3 --from-ws domains/financier --report report.json   # v2 작업 공간 이관
 ```
 
-DVC: `dvc add data/raw`(원본 버전닝) + `dvc.yaml`의 `kg_ingest` 스테이지가
-현행 재적재 흐름이다. 재현성(무엇이 어떤 원본·설정에서 나왔나)은 kg.db의
-문서 버전 해시·빌드 서명·lineage가 담당한다. v2는 `v2_export_build` 스테이지(또는
-`python -m kg.v2 export` + `dvc add`)로 승인된 빌드 snapshot만 DVC에 올린다 — 활성 `v2.db`와
-DRM 원본은 제외한다([상세](docs/design/db-schema-v2-postgres.md)).
+환경변수는 [.env.sample](.env.sample) 참고(`KG_V3_RENDER_URL`, `KG_V3_READER_FACTORY`(DRM Reader), `KG_V3_ACCESS_TOKEN` 등). `kg.webapp`(v1 서버)에도 `/api/v3`가 함께 설치된다.
 
 ## 테스트
 
 ```bash
-python -m pytest        # 전체 회귀 (파서·매핑·문서군·뷰어·빌더·웹 API)
-node e2e/run_all.mjs    # 브라우저 E2E (서버 기동 후 — e2e/README.md 참고)
+python -m pytest                       # 백엔드 전체 (v1 · v2 · v3)
+cd frontend && npm test                # 컴포넌트 (v2 · v3 — 용어·ID 비노출·진입 호출 수 규칙 포함)
+cd e2e && npm run test:v3              # v3 브라우저 시나리오 (임시 작업 공간 + 렌더 서버 8032)
+cd e2e && npm run test:v2              # v2 브라우저 시나리오 (?v2=1)
 ```
 
-## 다중 도메인
+CI: [.github/workflows/v3.yml](.github/workflows/v3.yml)이 push/PR마다 위 전부를 실행한다. 사전 설치 Chromium을 쓰려면 `KG_E2E_CHROMIUM_PATH`를 지정한다([e2e/README.md](e2e/README.md)).
 
-도메인(공정/제품군)마다 독립 워크스페이스를 쓴다 — 사전과 DB가 완전히 분리된다.
-`domains/financier`(휘낭시에 실험 예제) 참고. 새 도메인은 `domains/<이름>/config`에
-개념·단위·정규화 사전만 두면 같은 파서·API·프런트가 그대로 동작한다.
+## 이전 런타임 (v1 · v2)
 
-## 파서 능력 (src/ 코어 — kg가 재사용)
+- **v2** — versioned extraction(`kg/v2/`, 34테이블). `python -m kg.v2 --ws <ws>`로 실행, 화면은 `?v2=1`. 구조와 결정은 [docs/ARCHITECTURE_V2.md](docs/ARCHITECTURE_V2.md)·[docs/design/v2-decisions.md](docs/design/v2-decisions.md). v3 이관은 `python -m kg.v3 migrate`.
+- **v1** — Fixed Domain KG(`kg/`, `kg.db`). `python -m kg.webapp --ws domains/financier --port 8010`, 화면은 `?v1=1`. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)·[kg/README.md](kg/README.md)·[docs/MIGRATION.md](docs/MIGRATION.md).
+- 파서 라이브러리 `src/`(Inspector/RegionDetector/UnitRegistry/RecordBuilder)는 v1·v3 빌드가 재사용한다.
 
-- 반복 블록/계층 헤더/색 범례/다영역 분할, 수기 혼돈양식 복원(서식 없는 헤더,
-  후행 라벨/단위 전치, 캡션 그룹, 전치 KPI, 행별 단위 열)
-- 아핀 단위 변환(K/°F→℃ 등 22종), 문서 내장 사전 자동 흡수, record key는
-  위치가 아니라 업무 키
-- 적재 전 어휘 조사(dry-run): `python -m kg.cli --ws domains/financier
-  survey --raw incoming/` — 미지 라벨/모호 라벨/미등록 단위/예상 매핑률 리포트
-
-## 레거시 정리 완료
-
-`kg/` 이전의 초기 Canonical DB 앱 경로(7뷰 서버·canonicalize·loader·export·
-pipeline·src.cli·web/·build_report)는 삭제됐다. `src/`는 현행이 사용하는
-**Parser library**(inspect/segment/units/common/mapping + survey)로만 남는다 —
-경위와 모듈 처분표는 [docs/MIGRATION.md](docs/MIGRATION.md), 초기 설계 이력은
-[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+운영 참고: DRM(암호화) 문서는 운영자가 등록한 Reader factory(`KG_V3_READER_FACTORY`)로만 읽으며, 해제본 파일이나 SaveAs 우회를 만들지 않는다.
+사내 DRM 컨테이너 판별 시그니처는 `KG_DRM_MAGIC`으로 주입한다. 작업 이력은 [docs/PROGRESS.md](docs/PROGRESS.md).

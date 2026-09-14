@@ -34,7 +34,7 @@
 | --- | --- |
 | 공통 | `screen=documents\|profiles\|schema\|build\|jobs\|settings`, `review=<application_id>` 또는 `test=<profile_id>\|draft&snapshot=<snapshot_id>`(오버레이) + `rule=<rule_key>` `sheet=<sheet_id>` `range=<A1>` |
 | documents | `q` `status` `profile_id` `schema_key` `sort=[-]document_name\|status\|last_processed_at` · `document=<id>` `tab=file\|values\|profiles\|schemas` `sheet` |
-| profiles | `q` `status=draft\|approved\|deprecated` `schema_key` · `profile=<id>` `tab=info\|rules\|mapping\|test\|json\|history` `rev=<n>` · `import=1&snapshot=<sid>`(등록 대화상자) |
+| profiles | `q` `status=draft\|approved\|deprecated` `schema_key` · `profile=<id>` `tab=info\|rules\|mapping\|test\|json\|history` `rev=<n>` · `import=1&snapshot=<sid>`(작업 내역 큐의 '프로파일 만들기' → 외부 Profile Import 대화상자를 열고 그 snapshot을 테스트 문서로 미리 고른다; 닫으면 두 키를 지운다) |
 | schema | `schema=<key>` `view=graph` `tab=profiles\|documents\|history` `field_key=<key>` `field_filter=<key>` |
 | build | `step=2..5`(1단계는 파라미터 없음) |
 | jobs | `queue=unmatched\|review\|failed\|changed\|conflict` `state` `kind` |

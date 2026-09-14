@@ -1,6 +1,6 @@
 // 파싱 프로파일 화면(§7 Profiles): 목록(검색 250ms · 상태 필터 · 외부 Profile Import · 새 프로파일) → 상세(?profile=)는
 // ProfileDetail, 가져오기 대화상자는 ProfileImport. 상세를 열면 목록은 왼쪽의 좁은 목록으로 접힌다.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pager, State, formatDateTime, relativeTime, useDebounced, useNavigation, usePage, useToast, withQuery } from "./client";
 import type { ProfileRow, ProfileStatus } from "./types";
 import { PROFILE_STATUS_LABELS } from "./types";
@@ -14,8 +14,11 @@ const isProfileStatus = (value: string | undefined): value is ProfileStatus =>
   !!value && (PROFILE_STATUSES as string[]).includes(value);
 
 export default function Profiles() {
-  const { route, go, refresh } = useNavigation();
+  const { route, go, replace, refresh } = useNavigation();
   const { notify } = useToast();
+  // 작업 내역의 '프로파일 만들기'는 ?screen=profiles&import=1&snapshot=<sid>로 들어온다(§7 큐 행동).
+  const importRequested = route.import === "1";
+  const importSnapshot = importRequested ? route.snapshot || "" : "";
   const [query, setQuery] = useState("");
   const q = useDebounced(query.trim(), 250);
   // 문서 화면의 status(문서 상태)가 남아 있어도 프로파일 상태가 아니면 무시한다.
@@ -23,8 +26,16 @@ export default function Profiles() {
   const profiles = usePage<ProfileRow>(withQuery("/profiles", { q, status, schema_key: route.schema_key }), refresh);
   const items = profiles.items;
   const selected = route.profile || "";
-  const [dialog, setDialog] = useState<ImportMode | null>(null);
+  const [dialog, setDialog] = useState<ImportMode | null>(importRequested ? "import" : null);
+  useEffect(() => {
+    if (importRequested) setDialog("import");
+  }, [importRequested]);
   const open = (id: string) => go({ profile: id, tab: "", rev: "" });
+  const closeDialog = () => {
+    setDialog(null);
+    // URL로 열린 대화상자는 닫을 때 import·snapshot을 지워 새로고침해도 다시 열리지 않게 한다.
+    if (importRequested) replace({ import: "", snapshot: "" });
+  };
   return (
     <>
       <div inert={dialog ? true : undefined}>
@@ -84,9 +95,10 @@ export default function Profiles() {
       {dialog && (
         <ProfileImport
           mode={dialog}
-          onClose={() => setDialog(null)}
+          initialSnapshot={importSnapshot || undefined}
+          onClose={closeDialog}
           onSaved={(profile) => {
-            setDialog(null);
+            closeDialog();
             notify(`${profile.profile_name} v${profile.current_rev} 저장됨`);
             profiles.reset();
             open(profile.profile_id);

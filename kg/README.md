@@ -1,5 +1,8 @@
 # Fixed Domain KG 기반 Excel 데이터 통합 (설계서 v0.1 구현)
 
+> **현행 런타임은 v3(`kg/v3/`)다** — 파싱 스키마/파싱 프로파일 모델, 구조는 [../docs/ARCHITECTURE_V3.md](../docs/ARCHITECTURE_V3.md).
+> 아래는 v1(Fixed Domain KG) 설명이며 이관 완료까지 유지된다. v2는 [../docs/ARCHITECTURE_V2.md](../docs/ARCHITECTURE_V2.md).
+
 `kg/`는 "고정 지식 그래프 기반 Excel 데이터 통합 시스템 설계서 v0.1"의 구현이다.
 문서를 하나의 표준 양식으로 강제 변환하지 않는다 — 각 문서의 구조를 **Document
 Knowledge Tree**로 보존하고, 트리의 의미 노드를 **Fixed Domain KG**의 개념에

@@ -339,4 +339,23 @@ describe("v3 파싱 프로파일 화면", () => {
     expect(draft.format).toBe("parsing-profile-3.0");
     await screen.findByRole("dialog", { name: "Source Review" });
   });
+
+  it("작업 내역의 '프로파일 만들기'(?import=1&snapshot=)는 Import 대화상자를 열고 그 문서를 테스트 문서로 미리 고르며, 닫으면 import·snapshot을 지운다", async () => {
+    const f = profilesFixture();
+    const secondSnapshot = f.state.documents[1].current_snapshot!.snapshot_id;
+    f.renderApp(`?screen=profiles&import=1&snapshot=${secondSnapshot}`);
+    const dialog = await screen.findByRole("dialog", { name: "외부 Profile Import" });
+    const user = userEvent.setup();
+    fireEvent.change(within(dialog).getByLabelText("정의 JSON"), { target: { value: JSON.stringify(GENERIC_DEFINITION) } });
+    await f.waitForApi(/^\/profiles\/import-preview/, "POST");
+    const select = (await within(dialog).findByLabelText("테스트 문서")) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe(secondSnapshot));
+    expect(dialog.textContent).not.toMatch(UUID_RE);
+    await user.click(within(dialog).getByRole("button", { name: "취소" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "외부 Profile Import" })).toBeNull());
+    expect(route().get("import")).toBeNull();
+    expect(route().get("snapshot")).toBeNull();
+    expect(route().get("screen")).toBe("profiles");
+    await screen.findByRole("table", { name: "파싱 프로파일 목록" });
+  });
 });
