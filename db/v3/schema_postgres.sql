@@ -35,6 +35,9 @@ CREATE TABLE document (
 CREATE INDEX document_by_status_name ON document(status, document_name);
 CREATE INDEX document_by_status_updated ON document(status, updated_at DESC);
 CREATE INDEX document_current_snapshot ON document(current_snapshot_id);
+CREATE INDEX document_by_processed ON document((coalesce(last_processed_at, to_timestamp(0))) DESC, document_id DESC);
+CREATE INDEX document_by_name ON document(document_name, document_id);
+CREATE INDEX document_by_status ON document(status, document_id);
 
 CREATE TABLE document_snapshot (
     snapshot_id UUID PRIMARY KEY NOT NULL,
@@ -234,6 +237,7 @@ CREATE TABLE mapping (
     FOREIGN KEY (application_id, snapshot_id) REFERENCES parsing_application(application_id, snapshot_id)
 );
 CREATE INDEX mapping_by_rule ON mapping(rule_id);
+CREATE INDEX mapping_by_head ON mapping(current_revision_id);
 
 CREATE TABLE mapping_revision (
     mapping_revision_id UUID PRIMARY KEY NOT NULL,
@@ -324,6 +328,9 @@ CREATE TABLE extracted_value (
 CREATE INDEX value_by_run_field_record ON extracted_value(run_id, field_id, record_key);
 CREATE INDEX value_by_revision ON extracted_value(mapping_revision_id);
 CREATE INDEX value_by_field ON extracted_value(field_id);
+CREATE INDEX value_by_run_revision ON extracted_value(run_id, mapping_revision_id, group_key, item_index, value_id);
+CREATE INDEX value_by_field_created ON extracted_value(field_id, created_at DESC, value_id);
+CREATE INDEX value_unit_by_run ON extracted_value(run_id, field_id, unit_normalized) WHERE unit_normalized IS NOT NULL;
 
 CREATE TABLE extracted_value_region (
     value_id UUID NOT NULL,

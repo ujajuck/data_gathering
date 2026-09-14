@@ -103,7 +103,7 @@ def test_status_search_settings_presets(world):
     assert world.get("/search?q=")["items"] == []
     settings = world.get("/settings")
     assert settings["render"]["mode"] == "inprocess" and settings["reader"]["timeout_seconds"] > 0 and settings["limits"]["wait_seconds"] == 60
-    assert settings["workspace"] == str(world.root) and not settings["access_token_required"] and settings["limits"]["profile"]["rules"] == 200
+    assert settings["workspace"] == world.root.name and not settings["access_token_required"] and settings["limits"]["profile"]["rules"] == 200
     presets = world.get("/normalization-presets")
     assert {p["id"] for p in presets["items"]} >= {"identity", "automatic"}
     response = world.client.get("/api/v3/status")
@@ -178,7 +178,7 @@ def test_register_via_sources_wait_and_job_cancel(world):
     job = world.post("/documents/register?wait=30", {"source_refs": ["신규_2024_07.xlsx"]})
     assert job["state"] == "succeeded" and job["kind"] == "register" and job["label"] == "신규_2024_07.xlsx" and job["finished_at"]
     result = job["result"]["documents"][0]
-    assert result["status"] == "normal" and [(a["compatibility"], a["state"]) for a in result["applied"]] == [("identical", "approved")]
+    assert result["status"] == "normal" and [(a["compatibility"], a["state"]) for a in result["applied"]] == [("identical", "published")]
     assert world.get("/status")["counts"]["documents"] == 7
     queued = world.post("/documents/register", {"source_refs": ["신규_2024_07.xlsx"]}, expect=202)
     assert queued["state"] == "queued"
@@ -215,7 +215,7 @@ def test_manual_application_with_draft_profile_and_extract_gate(world):
     assert world.get(f"/applications/{app['application_id']}")["published"]
     assert world.get(f"/documents/{app['document']['document_id']}")["status"] == "normal"
     docs = world.get(f"/profiles/{draft['profile_id']}/documents")["items"]
-    assert len(docs) == 1 and docs[0]["published"] and docs[0]["status"] == "published" and not docs[0]["is_reference"]
+    assert len(docs) == 1 and docs[0]["published"] and docs[0]["state"] == "published" and not docs[0]["is_reference"]
     assert world.post(f"/profiles/{draft['profile_id']}/reparse", {"mode": "fill"}, expect=422)["error"]["code"] == "PROFILE_NOT_APPROVED"
     approved = world.post(f"/profiles/{draft['profile_id']}/approve", {"application_id": app["application_id"]})
     assert approved["status"] == "approved" and approved["reparse_job"]["kind"] == "reparse"

@@ -9,6 +9,11 @@ from __future__ import annotations
 import copy
 import re
 
+try:  # 3.11+: sre_parse는 폐기 경고를 낸다.
+    from re import _parser as _sre
+except ImportError:  # pragma: no cover
+    import sre_parse as _sre
+
 from kg.v2.db import Problem as V2Problem
 from kg.v2.spec import MAX_ITEMS
 from kg.v2.spec import bounds as _v2_bounds
@@ -25,6 +30,8 @@ VALUE_TYPES = ("text", "decimal", "boolean", "date", "datetime")
 RELATION_KINDS = ("same_row", "same_column", "offset")
 DEFAULT_WITHIN, DEFAULT_CONTAINS_WITHIN = "A1:AZ100", "A1:AD30"
 FIND_CELL_LIMIT, REGEX_LIMIT = 10000, 256
+# 이 횟수 이상 반복하는 양화사는 '무제한'으로 보고 그 안의 반복/선택을 거부한다(ReDoS).
+REPEAT_NEST_LIMIT = 16
 LIMITS = {
     "bytes": 512000,
     "roles": 16,
@@ -58,14 +65,45 @@ def _name(value, what, limit=128):
     return value
 
 
+def _unbounded(op, arg):
+    return op in (_sre.MAX_REPEAT, _sre.MIN_REPEAT, getattr(_sre, "POSSESSIVE_REPEAT", None)) and arg[1] >= REPEAT_NEST_LIMIT
+
+
+def _nested_repeat(items, inside):
+    """재난적 역추적 후보: 무제한 반복 안의 또 다른 반복/선택(예: (a+)+, (a|a?)*). 파싱 트리를 재귀로 훑는다."""
+    for op, arg in items:
+        if op in (_sre.MAX_REPEAT, _sre.MIN_REPEAT, getattr(_sre, "POSSESSIVE_REPEAT", None)):
+            if inside and arg[1] > 1:
+                return True
+            if _nested_repeat(arg[2], inside or _unbounded(op, arg)):
+                return True
+        elif op == _sre.BRANCH:
+            if inside:
+                return True
+            if any(_nested_repeat(branch, inside) for branch in arg[1]):
+                return True
+        elif op == _sre.SUBPATTERN:
+            if _nested_repeat(arg[3], inside):
+                return True
+        elif op in (_sre.ASSERT, _sre.ASSERT_NOT):
+            if _nested_repeat(arg[1], inside):
+                return True
+    return False
+
+
 def compile_regex(pattern):
-    """`find.regex`·`name_regex` 공통 규칙: 256자 이하, re.compile 가능, 인라인 플래그만."""
+    """`find.regex`·`name_regex` 공통 규칙: 256자 이하, re.compile 가능, 인라인 플래그만, 중첩 반복 금지(ReDoS)."""
     if not isinstance(pattern, str) or not 1 <= len(pattern) <= REGEX_LIMIT:
         raise Problem("INVALID_REGEX", "정규식은 1~256자 문자열이어야 합니다.")
     try:
-        return re.compile(pattern)
-    except re.error as exc:
+        compiled = re.compile(pattern)
+        parsed = _sre.parse(pattern)
+    except (re.error, ValueError, OverflowError) as exc:
         raise Problem("INVALID_REGEX", f"정규식이 유효하지 않습니다: {exc}") from None
+    # 사용자 정규식은 Reader 프로세스에서 셀 1만 개 × 1,024자에 대해 돌므로 지수 역추적 패턴은 저장 단계에서 거른다.
+    if _nested_repeat(list(parsed), False):
+        raise Problem("INVALID_REGEX", "무제한 반복 안에 반복이나 선택(|)을 겹쳐 쓸 수 없습니다(예: (a+)+, (a|b)*). 반복 횟수를 제한하거나 패턴을 나누세요.")
+    return compiled
 
 
 def _texts(texts, limits, what, code="INVALID_SELECTOR"):

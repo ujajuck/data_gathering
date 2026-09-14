@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import threading
 import time
@@ -14,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -292,6 +293,13 @@ def _respond(status, body, headers):
     return JSONResponse(body, status_code=status, headers=headers)
 
 
+def require_token(authorization: Optional[str] = Header(default=None)):
+    """메인 API와 같은 접근 토큰(KG_V3_ACCESS_TOKEN→KG_V2_ACCESS_TOKEN). 토큰이 설정돼 있으면 모든 렌더 엔드포인트가 요구한다."""
+    token = env("ACCESS_TOKEN", "")
+    if token and not hmac.compare_digest(authorization or "", "Bearer " + token):
+        raise Problem("AUTH_REQUIRED", "서버 접근 토큰이 필요합니다.", 401)
+
+
 def create_render_app(root, event_source=None, worker: RenderWorker | None = None):
     worker = worker or RenderWorker(root, event_source=event_source)
 
@@ -301,7 +309,7 @@ def create_render_app(root, event_source=None, worker: RenderWorker | None = Non
         yield
         worker.close()
 
-    app = FastAPI(title="kg v3 render", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app = FastAPI(title="kg v3 render", docs_url=None, redoc_url=None, lifespan=lifespan, dependencies=[Depends(require_token)])
     app.state.worker = worker
 
     @app.exception_handler(Problem)
@@ -355,4 +363,7 @@ def create_render_app(root, event_source=None, worker: RenderWorker | None = Non
 def serve(root, host="127.0.0.1", port=8790):
     import uvicorn
 
+    if host not in ("127.0.0.1", "localhost", "::1") and not env("ACCESS_TOKEN", ""):
+        # 루프백 밖에 열면 누구나 snapshot을 읽고 Reader 프로세스를 띄울 수 있으므로 토큰 없이는 거부한다.
+        raise Problem("ACCESS_TOKEN_REQUIRED", "루프백이 아닌 주소로 렌더 서버를 열려면 KG_V3_ACCESS_TOKEN을 설정하세요.", 403)
     uvicorn.run(create_render_app(root), host=host, port=port, log_level="info")

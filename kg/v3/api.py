@@ -11,6 +11,8 @@ import heapq
 import hmac
 import os
 import re
+import threading
+import time
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -65,6 +67,50 @@ JobKind = Literal["register", "extract", "reparse", "build", "test", "queue_acti
 ProfileStatus = Literal["draft", "approved", "deprecated"]
 BuildFormat = Literal["csv", "xlsx", "sqlite"]
 FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+AUTHORIZE_TTL_SECONDS = 30
+THREAD_POOL_TOKENS = 200
+
+# pydantic 오류 유형 → 한국어 문구(ctx 값을 채운다). 원문 msg는 fields[].detail로 남긴다.
+VALIDATION_MESSAGES = {
+    "missing": "{field}은(는) 필수입니다.",
+    "extra_forbidden": "{field}은(는) 허용되지 않는 항목입니다.",
+    "less_than_equal": "{field}은(는) {le} 이하여야 합니다.",
+    "less_than": "{field}은(는) {lt} 미만이어야 합니다.",
+    "greater_than_equal": "{field}은(는) {ge} 이상이어야 합니다.",
+    "greater_than": "{field}은(는) {gt} 초과여야 합니다.",
+    "literal_error": "{field}은(는) {expected} 중 하나여야 합니다.",
+    "enum": "{field}은(는) {expected} 중 하나여야 합니다.",
+    "string_too_long": "{field}은(는) {max_length}자 이하여야 합니다.",
+    "string_too_short": "{field}은(는) {min_length}자 이상이어야 합니다.",
+    "too_long": "{field}은(는) {max_length}개 이하여야 합니다.",
+    "too_short": "{field}은(는) {min_length}개 이상이어야 합니다.",
+    "string_type": "{field}은(는) 문자열이어야 합니다.",
+    "int_type": "{field}은(는) 정수여야 합니다.",
+    "int_parsing": "{field}은(는) 정수여야 합니다.",
+    "float_type": "{field}은(는) 숫자여야 합니다.",
+    "float_parsing": "{field}은(는) 숫자여야 합니다.",
+    "bool_type": "{field}은(는) true/false여야 합니다.",
+    "bool_parsing": "{field}은(는) true/false여야 합니다.",
+    "list_type": "{field}은(는) 배열이어야 합니다.",
+    "dict_type": "{field}은(는) 객체여야 합니다.",
+    "model_type": "{field}은(는) 객체여야 합니다.",
+    "json_invalid": "요청 본문이 올바른 JSON이 아닙니다.",
+    "value_error": "{field}이(가) 유효하지 않습니다.",
+}
+
+
+def validation_message(error):
+    """pydantic 오류 하나를 사용자용 한국어 문장으로 옮긴다(다른 오류와 같은 언어)."""
+    loc = [str(part) for part in error.get("loc", ()) if part not in ("body", "query", "path", "header")]
+    field = ".".join(loc) or "요청"
+    ctx = dict(error.get("ctx") or {})
+    if "expected" in ctx:
+        ctx["expected"] = str(ctx["expected"]).replace("'", "")
+    template = VALIDATION_MESSAGES.get(error.get("type"), "{field}이(가) 유효하지 않습니다.")
+    try:
+        return field, template.format(field=field, **ctx)
+    except (KeyError, IndexError):
+        return field, f"{field}이(가) 유효하지 않습니다."
 
 
 # ---------------------------------------------------------------------------- 조회 도우미(읽기 전용 SQL)
@@ -321,9 +367,10 @@ def _field_usage(conn, schema_id):
         (schema_id,),
     ):
         usage.setdefault(r["field_id"], {})["profile_count"] = r["n"]
+    # 발행 실행 목록은 작고, (run_id, field_id) 쌍은 커버링 인덱스 value_by_run_field_record만으로 뽑힌다(값 행을 읽지 않는다).
     for r in conn.execute(
-        "SELECT v.field_id, count(DISTINCT d.document_id) n FROM parsing_application a JOIN document d ON d.current_snapshot_id=a.snapshot_id "
-        "JOIN extracted_value v ON v.run_id=a.published_run_id WHERE a.schema_id=? GROUP BY v.field_id",
+        "SELECT field_id, count(*) n FROM (SELECT DISTINCT p.run_id, v.field_id FROM (SELECT a.published_run_id run_id FROM parsing_application a JOIN document d ON d.current_snapshot_id=a.snapshot_id WHERE a.schema_id=? AND a.published_run_id IS NOT NULL) p "
+        "JOIN extracted_value v ON v.run_id=p.run_id) GROUP BY field_id",
         (schema_id,),
     ):
         usage.setdefault(r["field_id"], {})["document_count"] = r["n"]
@@ -592,9 +639,12 @@ def install(app: FastAPI, root, start_worker=True):
     async def validation_handler(request: Request, exc: RequestValidationError):
         if previous_validation is not None and not request.url.path.startswith("/api/v3/"):
             return await previous_validation(request, exc)
-        errors = [{"field": ".".join(map(str, e["loc"])), "message": e["msg"]} for e in exc.errors()]
+        errors = []
+        for e in exc.errors():
+            field, message = validation_message(e)
+            errors.append({"field": ".".join(map(str, e["loc"])), "name": field, "message": message, "detail": e.get("msg")})
         return JSONResponse(
-            {"error": {"code": "VALIDATION_ERROR", "message": "; ".join(e["field"] + ": " + e["message"] for e in errors), "fields": errors}},
+            {"error": {"code": "VALIDATION_ERROR", "message": " ".join(e["message"] for e in errors) or "요청이 유효하지 않습니다.", "fields": errors}},
             status_code=422,
         )
 
@@ -629,14 +679,27 @@ def install(app: FastAPI, root, start_worker=True):
         body = JobResponse(**job).model_dump()
         return JSONResponse(body, status_code=202 if body["state"] in ("queued", "running") else 200)
 
+    authorize_cache, authorize_lock = {}, threading.Lock()
+
     def authorize(context, user, required="view"):
-        """Reader authorize. local-xlsx는 4바이트 매직 검사뿐이라 프로세스 격리 없이 확인한다(창 응답 지연 없음)."""
+        """Reader authorize. local-xlsx는 4바이트 매직 검사뿐이라 프로세스 격리 없이 확인한다(창 응답 지연 없음).
+        다른 provider는 Reader 프로세스를 띄우므로 (principal, 원본, token, 권한)별로 짧게(30초) 결과를 기억한다."""
         if context["provider"] == "local-xlsx":
             from .readers import XlsxReader
 
             caps = XlsxReader(service.root, user).authorize(context["source_path"], required)
         else:
-            caps = service._read(context["provider"], user, "authorize", {"source_ref": context["source_path"], "required": required})
+            cache_key = (user, context["provider"], context["source_path"], context.get("change_token"), required)
+            with authorize_lock:
+                hit = authorize_cache.get(cache_key)
+            if hit and hit[0] > time.monotonic():
+                caps = hit[1]
+            else:
+                caps = service._read(context["provider"], user, "authorize", {"source_ref": context["source_path"], "required": required})
+                with authorize_lock:
+                    if len(authorize_cache) > 512:
+                        authorize_cache.clear()
+                    authorize_cache[cache_key] = (time.monotonic() + AUTHORIZE_TTL_SECONDS, caps)
         key = {"view": "can_view", "extract": "can_extract", "render": "can_render_web"}[required]
         if not isinstance(caps, dict) or not caps.get("can_view") or not caps.get(key):
             raise Problem("ACCESS_DENIED", "이 작업에 필요한 원본 접근 권한이 없습니다.", 403)
@@ -664,7 +727,8 @@ def install(app: FastAPI, root, start_worker=True):
         client = service.render
         return {
             "version": "3",
-            "workspace": str(service.root),
+            # 절대 경로 대신 작업 공간 이름만 노출한다(paths는 상대 경로).
+            "workspace": service.root.name,
             "principal": user,
             "access_token_required": bool(env("ACCESS_TOKEN", "")),
             "engine_version": ENGINE_VERSION,
@@ -951,8 +1015,8 @@ def install(app: FastAPI, root, start_worker=True):
         return job_response(service.reparse(profile_id, body.mode, user, wait))
 
     @router.get("/profiles/{profile_id}/documents")
-    def profile_documents(profile_id: str, user=Depends(principal)):
-        return {"items": service.profile_documents(profile_id), "has_more": False, "next_cursor": None}
+    def profile_documents(profile_id: str, cursor: Optional[str] = None, limit: int = Limit, user=Depends(principal)):
+        return service.profile_documents(profile_id, cursor, limit)
 
     # ---- 스키마 -------------------------------------------------------------------------------
     @router.get("/schemas")
@@ -1153,6 +1217,15 @@ def install(app: FastAPI, root, start_worker=True):
         async with previous_lifespan(application) as state:
             if start_worker:
                 service.jobs.start()
+            try:
+                # 동기 핸들러가 ?wait=로 스레드를 오래 잡아도 다른 요청이 굶지 않도록 스레드 풀을 넓힌다(기본 40).
+                import anyio
+
+                limiter = anyio.to_thread.current_default_thread_limiter()
+                if limiter.total_tokens < THREAD_POOL_TOKENS:
+                    limiter.total_tokens = THREAD_POOL_TOKENS
+            except Exception:  # pragma: no cover - anyio 버전 차이
+                pass
             try:
                 yield state
             finally:

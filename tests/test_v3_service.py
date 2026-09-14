@@ -240,7 +240,7 @@ def test_auto_approve_identical_and_review_compatible(world, approved):
     world.file("b.xlsx", temps=(1, 2, 3), lots=("X1", "X2", "X3"))
     doc_b = world.register("b.xlsx")
     assert world.calls == ["describe", "extract"], world.calls  # 등록 1회 + 자동 승인 추출 1회
-    assert doc_b["status"] == "normal" and [(a["compatibility"], a["state"]) for a in doc_b["applied"]] == [("identical", "approved")]
+    assert doc_b["status"] == "normal" and [(a["compatibility"], a["state"]) for a in doc_b["applied"]] == [("identical", "published")]
     app_b = s.application_summary(doc_b["applied"][0]["application_id"])
     assert app_b["origin"] == "auto" and app_b["published"] and app_b["heads_approved"] == 3
     reference_heads = {m["rule_key"]: m for m in s.application_mappings(approved["application"]["application_id"])}
@@ -248,7 +248,8 @@ def test_auto_approve_identical_and_review_compatible(world, approved):
     assert revisions[0]["origin"] == "auto" and revisions[0]["evidence"]["reference_revision_id"]
     with s.db.connect() as conn:
         ref = conn.execute("SELECT current_revision_id FROM mapping WHERE mapping_id=?", (reference_heads["lot"]["mapping_id"],)).fetchone()[0]
-        auto = conn.execute("SELECT auto_approved FROM extraction_run WHERE run_id=?", (app_b["published_run_id"],)).fetchone()[0]
+        published_run = conn.execute("SELECT published_run_id FROM parsing_application WHERE application_id=?", (app_b["application_id"],)).fetchone()[0]
+        auto = conn.execute("SELECT auto_approved FROM extraction_run WHERE run_id=?", (published_run,)).fetchone()[0]
     assert revisions[0]["evidence"]["reference_revision_id"] == ref and auto == 1
     values = s.snapshot_values(doc_b["snapshot"]["snapshot_id"], field_key="temperature")
     assert [v["value_text"] for v in values["items"]] == ["1", "2", "3"]
@@ -407,7 +408,7 @@ def test_document_query_filters_sort_cursor_and_search(world, approved):
     assert [d["document_name"] for d in s.document_query(schema_key="process_standard", sort="document_name")["items"]] == ["a.xlsx", "b.xlsx"]
     by_time = s.document_query()["items"]
     assert by_time[0]["document_name"] in ("other.xlsx", "b.xlsx") and len(by_time) == 3
-    docs = s.profile_documents(pid)
+    docs = s.profile_documents(pid)["items"]
     assert [(d["document_name"], d["is_reference"], d["published"]) for d in docs] == [("a.xlsx", True, True), ("b.xlsx", False, True)]
     found = s.search("온도")
     assert [(i["kind"], i["id"]) for i in found["items"]] == [("field", "temperature")]

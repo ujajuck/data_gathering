@@ -211,7 +211,7 @@ def test_manual_apply_draft_then_review_cas_reject_and_approve_all(world):
     assert done["approved"] == 9 and done["skipped"] == [] and done["extraction"]["state"] == "succeeded" and done["extraction"]["kind"] == "extract"
     assert world.calls == ["extract"]
     summary = world.get(f"/applications/{aid}")
-    assert summary["published"] and summary["heads_approved"] == summary["heads_total"] == 11 and summary["published_run_id"] == done["extraction"]["job_id"]
+    assert summary["published"] and summary["heads_approved"] == summary["heads_total"] == 11 and "published_run_id" not in summary
     assert all(m["value"] is not None for m in summary["mappings"])
     assert world.status_of(DOC_REF) == "normal"
     assert world.get("/status")["counts"]["review"] == 0
@@ -264,7 +264,7 @@ def test_identical_document_is_auto_approved_extracted_and_published(world):
     job, doc = world.register(DOC_SAME)
     # describe(매치 포함) 1회 + 추출 1회: 사람 개입 없이 발행까지.
     assert world.calls == ["describe", "extract"], world.calls
-    assert doc["status"] == "normal" and [(a["compatibility"], a["state"]) for a in doc["applied"]] == [("identical", "approved")]
+    assert doc["status"] == "normal" and [(a["compatibility"], a["state"]) for a in doc["applied"]] == [("identical", "published")]
     world.state["documents"][DOC_SAME] = doc
     apps = world.get(f"/snapshots/{doc['snapshot']['snapshot_id']}/applications")["items"]
     assert apps[0]["origin"] == "auto" and apps[0]["published"] and apps[0]["last_run"] == "succeeded"
@@ -306,7 +306,7 @@ def test_values_and_reverse_lookup(world):
     assert [v["value_text"] for v in by_rule][:2] == ["LOT-02-001", "LOT-02-002"] and len(by_rule) == 12
 
     value = world.get(f"/values/{first['value_id']}")
-    assert value["document"]["document_id"] == same["document_id"] and value["snapshot"]["snapshot_id"] == sid and value["run_id"] and value["mapping_id"]
+    assert value["document"]["document_id"] == same["document_id"] and value["snapshot"]["snapshot_id"] == sid and "run_id" not in value and value["mapping_id"]
     region = next(r for r in first["regions"] if r["role"] == "value")
     reverse = world.get(f"/regions/{region['region_id']}/values")
     assert reverse["region"]["range"] == "C9" and first["value_id"] in {v["value_id"] for v in reverse["values"]}

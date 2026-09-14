@@ -34,6 +34,10 @@ CREATE TABLE document (
 CREATE INDEX document_by_status_name ON document(status, document_name);
 CREATE INDEX document_by_status_updated ON document(status, updated_at DESC);
 CREATE INDEX document_current_snapshot ON document(current_snapshot_id);
+-- 문서 목록 정렬·keyset(§6 sort): 기본 정렬은 coalesce(last_processed_at,'') 식 인덱스, 이름·상태 정렬은 (열, document_id).
+CREATE INDEX document_by_processed ON document(coalesce(last_processed_at,'') DESC, document_id DESC);
+CREATE INDEX document_by_name ON document(document_name, document_id);
+CREATE INDEX document_by_status ON document(status, document_id);
 
 CREATE TABLE document_snapshot (
     snapshot_id TEXT PRIMARY KEY NOT NULL,
@@ -230,6 +234,7 @@ CREATE TABLE mapping (
         DEFERRABLE INITIALLY DEFERRED
 );
 CREATE INDEX mapping_by_rule ON mapping(rule_id);
+CREATE INDEX mapping_by_head ON mapping(current_revision_id);
 
 CREATE TABLE mapping_revision (
     mapping_revision_id TEXT PRIMARY KEY NOT NULL,
@@ -314,6 +319,10 @@ CREATE TABLE extracted_value (
 CREATE INDEX value_by_run_field_record ON extracted_value(run_id, field_id, record_key);
 CREATE INDEX value_by_revision ON extracted_value(mapping_revision_id);
 CREATE INDEX value_by_field ON extracted_value(field_id);
+-- 매핑 행 요약(리비전별 첫 값·개수), 필드 최근 값, 단위 충돌 큐가 실행 전체를 훑지 않게 한다.
+CREATE INDEX value_by_run_revision ON extracted_value(run_id, mapping_revision_id, group_key, item_index, value_id);
+CREATE INDEX value_by_field_created ON extracted_value(field_id, created_at DESC, value_id);
+CREATE INDEX value_unit_by_run ON extracted_value(run_id, field_id, unit_normalized) WHERE unit_normalized IS NOT NULL;
 
 CREATE TABLE extracted_value_region (
     value_id TEXT NOT NULL,

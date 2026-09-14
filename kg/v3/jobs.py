@@ -15,6 +15,9 @@ from datetime import datetime, timedelta, timezone
 from .db import Problem, digest, dump, insert, now, one, uid
 
 STREAM_OPERATIONS = ("extract", "render")
+READER_PRELOAD = ("kg.v3.readers",)
+_context_lock = threading.Lock()
+_context = None
 
 
 def env(name: str, default: str) -> str:
@@ -22,13 +25,39 @@ def env(name: str, default: str) -> str:
     return os.environ.get("KG_V3_" + name) or os.environ.get("KG_V2_" + name) or default
 
 
+def reader_context():
+    """Reader 프로세스 시작 방식. 기본은 forkserver(+readers 미리 import)라 연산마다 인터프리터를 새로 띄우지 않는다.
+
+    KG_V3_READER_CONTEXT=spawn 으로 되돌릴 수 있다. forkserver가 없는 플랫폼은 spawn."""
+    global _context
+    if _context is None:
+        with _context_lock:
+            if _context is None:
+                wanted = env("READER_CONTEXT", "forkserver")
+                if wanted not in multiprocessing.get_all_start_methods():
+                    wanted = "spawn"
+                context = multiprocessing.get_context(wanted)
+                if wanted == "forkserver":
+                    context.set_forkserver_preload(list(READER_PRELOAD))
+                _context = context
+    return _context
+
+
+def _reader_environment():
+    # forkserver 자식은 서버 프로세스의 환경을 물려받으므로 호출 시점의 KG_* 설정을 명시적으로 넘긴다.
+    return {k: v for k, v in os.environ.items() if k.startswith("KG_")}
+
+
 class Cancelled(Problem):
     def __init__(self):
         super().__init__("CANCELLED", "작업을 취소했습니다.", 409)
 
 
-def _reader_child(pipe, root, provider, principal, operation, payload):
+def _reader_child(pipe, environ, root, provider, principal, operation, payload):
     try:
+        for key in [k for k in os.environ if k.startswith("KG_") and k not in environ]:
+            del os.environ[key]
+        os.environ.update(environ)
         if os.name == "posix":
             import resource
 
@@ -72,11 +101,11 @@ def _reader_child(pipe, root, provider, principal, operation, payload):
 
 def reader_events(root, provider, principal, operation, payload, checkpoint=lambda: None):
     """격리 프로세스에서 Reader 연산을 실행하고 이벤트를 순서대로 돌려준다(시간·메모리·출력 한도)."""
-    context = multiprocessing.get_context("spawn")
+    context = reader_context()
     parent, child = context.Pipe(duplex=False)
     process = context.Process(
         target=_reader_child,
-        args=(child, str(root), provider, principal, operation, payload),
+        args=(child, _reader_environment(), str(root), provider, principal, operation, payload),
         daemon=True,
     )
     process.start()
@@ -153,6 +182,14 @@ class Jobs:
         self.wake = threading.Event()
         self.thread = None
         self.lock = threading.Lock()
+        # 완료 알림: wait()는 폴링 대신 이 조건 변수를 기다린다(세대 번호로 잃어버린 알림을 막는다).
+        self.done = threading.Condition()
+        self.done_seq = 0
+
+    def _notify_done(self):
+        with self.done:
+            self.done_seq += 1
+            self.done.notify_all()
 
     def start(self):
         if self.thread and self.thread.is_alive():
@@ -262,6 +299,7 @@ class Jobs:
                     "UPDATE runtime_job SET state='failed',error_code=?,error_message=?,finished_at=? WHERE job_id=?",
                     (error.code, error.message, now(), jid),
                 )
+        self._notify_done()
 
     @classmethod
     def public(cls, row):
@@ -278,9 +316,14 @@ class Jobs:
         return self.public(row)
 
     def wait(self, jid, seconds, principal=None):
-        """워커 스레드가 작업을 끝낼 때까지(최대 seconds) 기다린다. 워커가 없으면 직접 실행한다."""
+        """워커 스레드가 작업을 끝낼 때까지(최대 seconds) 기다린다. 워커가 없으면 직접 실행한다.
+
+        50ms 폴링 대신 완료 조건 변수를 기다린다: 대기 중인 요청 스레드가 SQLite 연결을 반복해 열지 않는다."""
         deadline = time.monotonic() + max(0.0, float(seconds))
+        self.wake.set()
         while True:
+            with self.done:
+                seen = self.done_seq
             current = self.get(jid, principal)
             if current["state"] not in ("queued", "running"):
                 return current
@@ -288,10 +331,13 @@ class Jobs:
                 if not self.run_one():
                     return self.get(jid, principal)
                 continue
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 return current
-            self.wake.set()
-            time.sleep(0.05)
+            with self.done:
+                if self.done_seq == seen:
+                    # 상한 1초: 워커가 죽는 등 알림이 오지 않는 경우에도 행 상태를 다시 읽는다.
+                    self.done.wait(min(remaining, 1.0))
 
     def cancel(self, jid, principal=None):
         with self.db.connect(write=True) as conn:
@@ -333,6 +379,10 @@ class Jobs:
                 Problem("INTERRUPTED", "서버 중단으로 작업이 완료되지 않았습니다. 다시 실행하세요.", 409),
             )
         with self.lock:
+            # 대기 행이 있는지는 읽기 연결로 먼저 본다: 유휴 워커가 0.5초마다 쓰기 잠금을 잡지 않게.
+            with self.db.connect() as conn:
+                if not conn.execute("SELECT 1 FROM runtime_job WHERE state='queued' LIMIT 1").fetchone():
+                    return False
             with self.db.connect(write=True) as conn:
                 row = conn.execute(
                     "SELECT * FROM runtime_job WHERE state='queued' ORDER BY created_at,job_id LIMIT 1"
@@ -371,6 +421,7 @@ class Jobs:
                         "UPDATE runtime_job SET state='succeeded',result_json=?,finished_at=?,completed=coalesce(total,completed) WHERE job_id=?",
                         (dump(result if result is not None else {}), now(), job["job_id"]),
                     )
+                self._notify_done()
             except Problem as exc:
                 self._fail(job, exc)
             except Exception:
@@ -399,3 +450,4 @@ class Jobs:
                     job["job_id"],
                 ),
             )
+        self._notify_done()

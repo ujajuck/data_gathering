@@ -48,6 +48,14 @@ CREATE TABLE IF NOT EXISTS snapshot_signature (
 CREATE INDEX IF NOT EXISTS snapshot_signature_sha ON snapshot_signature(signature_sha256);
 -- 값 목록 keyset(§6 /values): 실행 안에서 group_key·item_index 순으로 O(페이지) 탐색.
 CREATE INDEX IF NOT EXISTS value_by_run_group ON extracted_value(run_id, group_key, item_index, value_id);
+-- 아래는 코어 DDL(db/v3)에도 있는 인덱스다. 이전 DDL로 만든 DB에도 붙도록 IF NOT EXISTS로 한 번 더 선언한다.
+CREATE INDEX IF NOT EXISTS value_by_run_revision ON extracted_value(run_id, mapping_revision_id, group_key, item_index, value_id);
+CREATE INDEX IF NOT EXISTS value_by_field_created ON extracted_value(field_id, created_at DESC, value_id);
+CREATE INDEX IF NOT EXISTS value_unit_by_run ON extracted_value(run_id, field_id, unit_normalized) WHERE unit_normalized IS NOT NULL;
+CREATE INDEX IF NOT EXISTS mapping_by_head ON mapping(current_revision_id);
+CREATE INDEX IF NOT EXISTS document_by_processed ON document(coalesce(last_processed_at,'') DESC, document_id DESC);
+CREATE INDEX IF NOT EXISTS document_by_name ON document(document_name, document_id);
+CREATE INDEX IF NOT EXISTS document_by_status ON document(status, document_id);
 """
 
 

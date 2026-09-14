@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 
 from ..db import Problem
+from ..jobs import env
 from .cache import RenderCache
 from .server import RenderWorker
 
@@ -44,7 +45,10 @@ class RenderClient:
         self.http = None
         self.worker = None
         if self.mode == "http":
-            self.http = httpx.Client(base_url=self.url, timeout=TIMEOUT, transport=transport)
+            # 렌더 서버도 같은 접근 토큰을 요구하므로 매 요청에 실어 보낸다.
+            token = env("ACCESS_TOKEN", "")
+            headers = {"Authorization": "Bearer " + token} if token else None
+            self.http = httpx.Client(base_url=self.url, timeout=TIMEOUT, transport=transport, headers=headers)
         else:
             self.worker = worker or RenderWorker(self.root, RenderCache(self.root), event_source)
             self.worker.start()

@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import platform
+import posixpath
 import re
 import sqlite3
+import threading
 import time
 from importlib.metadata import version as package_version
 from pathlib import Path
@@ -32,6 +35,10 @@ SIGNATURE_LIMIT = 200
 FIELD_TYPES = ("text", "decimal", "boolean", "date", "datetime", "group")
 TYPE_ALIASES = {"number": "decimal", "string": "text", "bool": "boolean"}
 KEY_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
+# schema_key는 정의 파일 폴더 이름이 되므로 '.'/'..' 같은 경로 조각을 막는다(첫 글자는 영숫자).
+SCHEMA_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$")
+REPARSE_PAGE = 200
+log = logging.getLogger(__name__)
 TEST_TIMEOUT_SECONDS = 20
 VALUE_BATCH = 200
 VALUE_REGION_LIMIT = 1000
@@ -60,7 +67,30 @@ def _integrity(exc: sqlite3.IntegrityError) -> Problem:
         return Problem("SCHEMA_NAME_CONFLICT", "같은 이름의 파싱 스키마가 이미 있습니다.", 409)
     if "parsing_application.snapshot_id, parsing_application.profile_id" in text:
         return Problem("ALREADY_APPLIED", "이 프로파일은 이미 이 snapshot에 적용되어 있습니다.", 409)
-    return Problem("INTEGRITY_ERROR", "저장 규칙에 어긋나는 변경입니다: " + text, 409)
+    if "only a successful owned run" in text:
+        return Problem("RUN_NOT_PUBLISHABLE", "성공한 파싱 실행만 발행할 수 있습니다. 다시 추출하세요.", 409)
+    if "invalid extraction state transition" in text or "run identity and manifest" in text:
+        return Problem("INVALID_RUN_STATE", "이미 시작되었거나 끝난 파싱 실행입니다. 새로 추출하세요.", 409)
+    if "must start unpublished" in text or "is immutable" in text or "can only advance" in text or "is a projection" in text:
+        return Problem("IMMUTABLE_RECORD", "완료된 기록은 수정할 수 없습니다. 새 리비전이나 새 snapshot으로 변경하세요.", 409)
+    if "FOREIGN KEY" in text:
+        return Problem("REFERENCE_MISSING", "참조하는 항목이 없거나 다른 snapshot의 것입니다. 목록을 새로고침하세요.", 409)
+    # 나머지는 스키마 내부 문구이므로 서버 기록에만 남기고 사용자에게는 고정 문구를 준다.
+    log.warning("v3 integrity error: %s", text)
+    return Problem("INTEGRITY_ERROR", "저장 규칙에 어긋나는 변경입니다. 최신 상태를 다시 확인하세요.", 409)
+
+
+def normalize_source_ref(source_ref):
+    """'a.xlsx'·'./a.xlsx'·'sub/../a.xlsx'가 같은 문서로 등록되도록 provider 상대 참조를 정규화한다(절대 경로·상위 이동 금지)."""
+    if not isinstance(source_ref, str) or not source_ref or len(source_ref) > 2048:
+        raise Problem("INVALID_SOURCE", "원본 참조가 유효하지 않습니다.")
+    text = source_ref.replace("\\", "/")
+    if text.startswith("/") or re.match(r"^[A-Za-z]:", text):
+        raise Problem("INVALID_SOURCE", "원본 참조는 원본 폴더 기준 상대 경로여야 합니다.")
+    normalized = posixpath.normpath(text)
+    if normalized in (".", "..") or normalized.startswith("../"):
+        raise Problem("INVALID_SOURCE", "원본 참조는 원본 폴더 안을 가리켜야 합니다.")
+    return normalized
 
 
 def split_locator(text):
@@ -188,8 +218,8 @@ def validate_schema_definition(definition):
     if definition.get("format", "parsing-schema") != "parsing-schema" or str(definition.get("schema_version", "3.0")) != "3.0":
         raise Problem("INVALID_SCHEMA", "parsing-schema 3.0 형식만 지원합니다.")
     key, name = definition.get("schema_key"), definition.get("schema_name")
-    if not isinstance(key, str) or not KEY_RE.match(key):
-        raise Problem("INVALID_SCHEMA", "schema_key는 영문·숫자·_.-로 된 1~64자여야 합니다.")
+    if not isinstance(key, str) or not SCHEMA_KEY_RE.match(key) or key in (".", ".."):
+        raise Problem("INVALID_SCHEMA", "schema_key는 영문·숫자로 시작하는 영문·숫자·_.- 1~64자여야 합니다.")
     if not isinstance(name, str) or not 1 <= len(name) <= 200:
         raise Problem("INVALID_SCHEMA", "schema_name은 1~200자여야 합니다.")
     fields = definition.get("fields")
@@ -267,17 +297,20 @@ class Service:
         self.principal = env("PRINCIPAL", "local")
         self.jobs = Jobs(self.db, self.handle_job, self.fail_job)
         self._render = None
+        self._render_lock = threading.Lock()
         self._canonicals = {}
         if start_worker:
             self.jobs.start()
 
     @property
     def render(self):
-        # in-process 렌더 워커는 스레드를 띄우므로 처음 필요할 때 만든다.
+        # in-process 렌더 워커는 스레드를 띄우므로 처음 필요할 때 만든다(요청 스레드가 동시에 와도 하나만).
         if self._render is None:
-            from .render.client import RenderClient
+            with self._render_lock:
+                if self._render is None:
+                    from .render.client import RenderClient
 
-            self._render = RenderClient(self.root)
+                    self._render = RenderClient(self.root)
         return self._render
 
     def close(self):
@@ -318,6 +351,12 @@ class Service:
         return self.jobs.wait(job["job_id"], wait, principal) if wait else job
 
     # ---- 정의 파일 ------------------------------------------------------------------
+    def _definition_folder(self, kind, key):
+        folder = self.root / kind / key
+        if folder.resolve().parent != (self.root / kind).resolve():
+            raise Problem("INVALID_SCHEMA" if kind == "schemas" else "INVALID_PROFILE", "정의 키에 경로 문자를 쓸 수 없습니다.")
+        return folder
+
     def _write_definition(self, folder: Path, rev: int, canonical):
         folder.mkdir(parents=True, exist_ok=True)
         text = json.dumps(canonical, ensure_ascii=False, indent=2, sort_keys=True)
@@ -328,6 +367,26 @@ class Service:
         tmp.write_text(text, encoding="utf-8")
         os.replace(tmp, current)
         return path
+
+    @staticmethod
+    def _discard_definition(folder: Path, rev: int, previous_current, fresh):
+        """projection 커밋이 실패하면 방금 쓴 r%04d.json을 지우고 current.json을 되돌린다(파일이 진실이므로 유령 리비전 금지)."""
+        try:
+            (folder / f"r{rev:04d}.json").unlink(missing_ok=True)
+            current = folder / "current.json"
+            if previous_current is None:
+                current.unlink(missing_ok=True)
+            else:
+                current.write_bytes(previous_current)
+            if fresh and folder.is_dir() and not any(folder.iterdir()):
+                folder.rmdir()
+        except OSError:
+            log.exception("definition rollback failed: %s r%s", folder, rev)
+
+    @staticmethod
+    def _current_bytes(folder: Path):
+        current = folder / "current.json"
+        return current.read_bytes() if current.is_file() else None
 
     def _read_definition(self, folder: Path, rev: int):
         path = folder / f"r{rev:04d}.json"
@@ -383,39 +442,49 @@ class Service:
         canonical = validate_schema_definition(definition)
         key = canonical["schema_key"]
         sha = digest(canonical)
-        with self.db.connect(write=True) as conn:
-            schema = conn.execute("SELECT * FROM parsing_schema WHERE schema_key=?", (key,)).fetchone()
-            if schema and schema["definition_sha256"] == sha:
-                return {"schema_id": schema["schema_id"], "schema_key": key, "current_rev": schema["current_rev"], "unchanged": True}
-            rev = (schema["current_rev"] + 1) if schema else 1
-            path = self._write_definition(self.root / "schemas" / key, rev, canonical)
-            stamp = now()
-            try:
-                if schema:
-                    sid = schema["schema_id"]
-                    conn.execute(
-                        "UPDATE parsing_schema SET schema_name=?,description=?,definition_path=?,current_rev=?,definition_sha256=?,status='active',updated_at=? WHERE schema_id=?",
-                        (canonical["schema_name"], canonical.get("description"), str(path.relative_to(self.root)), rev, sha, stamp, sid),
-                    )
-                else:
-                    sid = uid()
-                    insert(
-                        conn,
-                        "parsing_schema",
-                        schema_id=sid,
-                        schema_key=key,
-                        schema_name=canonical["schema_name"],
-                        description=canonical.get("description"),
-                        definition_path=str(path.relative_to(self.root)),
-                        current_rev=rev,
-                        definition_sha256=sha,
-                        status="active",
-                        created_at=stamp,
-                        updated_at=stamp,
-                    )
-                counts = self._project_schema(conn, sid, canonical, stamp)
-            except sqlite3.IntegrityError as exc:
-                raise _integrity(exc) from None
+        folder = self._definition_folder("schemas", key)
+        previous_current, written = self._current_bytes(folder), None
+        try:
+            with self.db.connect(write=True) as conn:
+                schema = conn.execute("SELECT * FROM parsing_schema WHERE schema_key=?", (key,)).fetchone()
+                if schema and schema["definition_sha256"] == sha:
+                    return {"schema_id": schema["schema_id"], "schema_key": key, "current_rev": schema["current_rev"], "unchanged": True}
+                rev = (schema["current_rev"] + 1) if schema else 1
+                relative = str((folder / f"r{rev:04d}.json").relative_to(self.root))
+                stamp = now()
+                try:
+                    if schema:
+                        sid = schema["schema_id"]
+                        conn.execute(
+                            "UPDATE parsing_schema SET schema_name=?,description=?,definition_path=?,current_rev=?,definition_sha256=?,status='active',updated_at=? WHERE schema_id=?",
+                            (canonical["schema_name"], canonical.get("description"), relative, rev, sha, stamp, sid),
+                        )
+                    else:
+                        sid = uid()
+                        insert(
+                            conn,
+                            "parsing_schema",
+                            schema_id=sid,
+                            schema_key=key,
+                            schema_name=canonical["schema_name"],
+                            description=canonical.get("description"),
+                            definition_path=relative,
+                            current_rev=rev,
+                            definition_sha256=sha,
+                            status="active",
+                            created_at=stamp,
+                            updated_at=stamp,
+                        )
+                    counts = self._project_schema(conn, sid, canonical, stamp)
+                except sqlite3.IntegrityError as exc:
+                    raise _integrity(exc) from None
+                # projection이 통과한 뒤(커밋 직전)에 파일을 쓴다. 거부된 가져오기는 파일을 남기지 않는다.
+                written = (rev, schema is None)
+                self._write_definition(folder, rev, canonical)
+        except BaseException:
+            if written:
+                self._discard_definition(folder, written[0], previous_current, written[1])
+            raise
         return {"schema_id": sid, "schema_key": key, "current_rev": rev, "unchanged": False, **counts}
 
     def _project_schema(self, conn, schema_id, canonical, stamp):
@@ -527,13 +596,15 @@ class Service:
             canonical["profile_name"] = profile_name
             rev = (profile["current_rev"] + 1) if profile else 1
             pid = profile["profile_id"] if profile else uid()
-            path = self._write_definition(self.root / "profiles" / pid, rev, canonical)
+            folder = self._definition_folder("profiles", pid)
+            previous_current = self._current_bytes(folder)
+            relative = str((folder / f"r{rev:04d}.json").relative_to(self.root))
             sha, stamp = digest(canonical), now()
             try:
                 if profile:
                     conn.execute(
                         "UPDATE parsing_profile SET profile_name=?,description=?,definition_path=?,current_rev=?,definition_sha256=?,updated_at=? WHERE profile_id=?",
-                        (profile_name, canonical.get("description"), str(path.relative_to(self.root)), rev, sha, stamp, pid),
+                        (profile_name, canonical.get("description"), relative, rev, sha, stamp, pid),
                     )
                 else:
                     insert(
@@ -543,7 +614,7 @@ class Service:
                         profile_name=profile_name,
                         description=canonical.get("description"),
                         schema_id=schema["schema_id"],
-                        definition_path=str(path.relative_to(self.root)),
+                        definition_path=relative,
                         current_rev=rev,
                         definition_sha256=sha,
                         status="draft",
@@ -554,6 +625,13 @@ class Service:
             except sqlite3.IntegrityError as exc:
                 raise _integrity(exc) from None
             status = profile["status"] if profile else "draft"
+            # projection 통과 뒤(커밋 직전) 파일 쓰기; 쓰기·커밋이 실패하면 파일을 되돌린다.
+            try:
+                self._write_definition(folder, rev, canonical)
+                conn.commit()
+            except BaseException:
+                self._discard_definition(folder, rev, previous_current, profile is None)
+                raise
         self._canonicals[(pid, rev)] = copy.deepcopy(canonical)
         return {"profile_id": pid, "profile_name": profile_name, "current_rev": rev, "status": status, "schema_key": schema_key, "report": report, **counts}
 
@@ -637,6 +715,7 @@ class Service:
         for n, ref in enumerate(refs):
             checkpoint(n, len(refs), force=True)
             try:
+                ref = normalize_source_ref(ref)
                 results.append(self.register(ref, payload.get("provider", "local-xlsx"), principal, payload.get("document_id"), checkpoint))
             except Cancelled:
                 raise
@@ -681,8 +760,7 @@ class Service:
     def register(self, source_ref, provider="local-xlsx", principal=None, document_id=None, checkpoint=lambda *a, **k: None):
         """§4.1 describe(profiles=approved) 1회 → document/snapshot/sheet/signature → §4.4 승계 → §4.3 auto_apply → 상태 갱신."""
         principal = principal or self.principal
-        if not isinstance(source_ref, str) or not source_ref or len(source_ref) > 2048:
-            raise Problem("INVALID_SOURCE", "원본 참조가 유효하지 않습니다.")
+        source_ref = normalize_source_ref(source_ref)
         with self.db.connect() as conn:
             approved = self._approved_profiles(conn)
         profiles = [self._reader_profile(p) for p in approved]
@@ -719,6 +797,13 @@ class Service:
         for application_id in to_extract:
             self._extract_now(application_id, principal, checkpoint, auto_approved=1)
         status = self.refresh_document_status(document["document_id"])
+        # applied[].state는 추출·발행까지 끝난 최종 상태(문서 목록의 profiles[].state와 같은 어휘)로 돌려준다.
+        if applied:
+            with self.db.connect() as conn:
+                aggs = self._application_aggregates(conn, "a.snapshot_id=?", (snapshot["snapshot_id"],))
+            states = {a["application_id"]: _app_state(a) for a in aggs}
+            for a in applied:
+                a["state"] = states.get(a["application_id"], a["state"])
         return {
             "document_id": document["document_id"],
             "document_name": document["document_name"],
@@ -1167,24 +1252,38 @@ class Service:
             out.setdefault(r["value_id"], {"sheet_id": r["sheet_id"], "sheet_name": r["sheet_name"], "range": r["range"]})
         return out
 
-    def _mapping_rows(self, conn, application_id, run_id):
+    def _mapping_rows(self, conn, application_id, run_id, mapping_id=None):
+        where, params = "m.application_id=?", [application_id]
+        if mapping_id:
+            where, params = where + " AND m.mapping_id=?", [application_id, mapping_id]
         heads = rows(
             conn,
-            "SELECT m.mapping_id, m.edit_seq, m.current_revision_id, r.rule_key, r.rule_name, r.ordinal, v.mapping_revision_id, v.revision_no, v.status, v.origin, v.observed_key, v.effective_spec_json, v.field_id, f.field_key, f.field_name, f.value_type, f.canonical_unit FROM mapping m JOIN parsing_rule r ON r.rule_id=m.rule_id LEFT JOIN mapping_revision v ON v.mapping_revision_id=m.current_revision_id LEFT JOIN parsing_field f ON f.field_id=v.field_id WHERE m.application_id=? ORDER BY r.ordinal, r.rule_key",
-            (application_id,),
+            "SELECT m.mapping_id, m.edit_seq, m.current_revision_id, r.rule_key, r.rule_name, r.ordinal, v.mapping_revision_id, v.revision_no, v.status, v.origin, v.observed_key, v.effective_spec_json, v.field_id, f.field_key, f.field_name, f.value_type, f.canonical_unit "
+            f"FROM mapping m JOIN parsing_rule r ON r.rule_id=m.rule_id LEFT JOIN mapping_revision v ON v.mapping_revision_id=m.current_revision_id LEFT JOIN parsing_field f ON f.field_id=v.field_id WHERE {where} ORDER BY r.ordinal, r.rule_key",
+            tuple(params),
         )
         regions = self._regions_of_revisions(conn, [h["mapping_revision_id"] for h in heads if h["mapping_revision_id"]])
         values = {}
-        if run_id:
-            for h in heads:
-                if not h["mapping_revision_id"]:
-                    continue
-                first = conn.execute(
-                    "SELECT * FROM extracted_value WHERE run_id=? AND mapping_revision_id=? ORDER BY group_key, item_index LIMIT 1", (run_id, h["mapping_revision_id"])
-                ).fetchone()
-                if first:
-                    count = conn.execute("SELECT count(*) FROM extracted_value WHERE run_id=? AND mapping_revision_id=?", (run_id, h["mapping_revision_id"])).fetchone()[0]
-                    values[h["mapping_revision_id"]] = (dict(first), count)
+        wanted = {h["mapping_revision_id"] for h in heads if h["mapping_revision_id"]}
+        if run_id and wanted:
+            # 실행당 두 문장: 리비전별 (개수, 첫 값 id) → 첫 값 행. 인덱스 value_by_run_revision로 O(리비전).
+            stats = [
+                s
+                for s in rows(
+                    conn,
+                    "SELECT g.mapping_revision_id, count(*) n, "
+                    "(SELECT v.value_id FROM extracted_value v WHERE v.run_id=g.run_id AND v.mapping_revision_id=g.mapping_revision_id ORDER BY v.group_key, v.item_index, v.value_id LIMIT 1) first_id "
+                    "FROM extracted_value g WHERE g.run_id=? GROUP BY g.mapping_revision_id",
+                    (run_id,),
+                )
+                if s["mapping_revision_id"] in wanted
+            ]
+            if stats:
+                by_id = {
+                    r["value_id"]: r
+                    for r in rows(conn, "SELECT * FROM extracted_value WHERE value_id IN (%s)" % ",".join("?" for _ in stats), tuple(s["first_id"] for s in stats))
+                }
+                values = {s["mapping_revision_id"]: (by_id[s["first_id"]], s["n"]) for s in stats if s["first_id"] in by_id}
             firsts = self._first_regions(conn, [v[0]["value_id"] for v in values.values()])
         out = []
         for h in heads:
@@ -1235,7 +1334,6 @@ class Service:
             "origin": app["origin"],
             "compatibility": app["compatibility"],
             "published": bool(app["published_run_id"]),
-            "published_run_id": app["published_run_id"],
             "heads_approved": sum(m["status"] == "approved" for m in mappings),
             "heads_total": len(mappings),
             "document": {"document_id": app["document_id"], "document_name": app["document_name"]},
@@ -1255,7 +1353,7 @@ class Service:
         with self.db.connect() as conn:
             row = one(conn, "SELECT application_id FROM mapping WHERE mapping_id=?", (mapping_id,), "매핑을 찾을 수 없습니다.")
             app = self._application_row(conn, row["application_id"])
-            items = [m for m in self._mapping_rows(conn, app["application_id"], self._value_run(conn, app)) if m["mapping_id"] == mapping_id]
+            items = self._mapping_rows(conn, app["application_id"], self._value_run(conn, app), mapping_id)
         return {**items[0], "application_id": app["application_id"]}
 
     def mapping_revisions(self, mapping_id):
@@ -1323,10 +1421,19 @@ class Service:
         rule, anchors = copy.deepcopy(given), {}
 
         def register(area_like, hint):
+            # 클라이언트 JSON은 형태를 보장하지 않으므로 여기서 422로 거른다(KeyError/TypeError → 500 금지).
             name = area_like.get("anchor_name") or hint
+            if not isinstance(name, str) or not name:
+                raise Problem("INVALID_RULE", f"{hint}: anchor_name은 문자열이어야 합니다.")
+            if not isinstance(area_like.get("sheet_role"), str):
+                raise Problem("INVALID_RULE", f"{hint}: 앵커 영역에 sheet_role이 필요합니다.")
             if "all_of" in area_like:
                 members = []
+                if not isinstance(area_like["all_of"], list) or not area_like["all_of"]:
+                    raise Problem("INVALID_RULE", f"{hint}: all_of는 앵커 목록이어야 합니다.")
                 for n, member in enumerate(area_like["all_of"]):
+                    if not isinstance(member, dict):
+                        raise Problem("INVALID_RULE", f"{hint}: all_of 항목은 객체여야 합니다.")
                     mname = f"{name}.{n}"
                     anchors[mname] = {"sheet_role": area_like["sheet_role"], "find": validate_find(member.get("find"), f"앵커 {mname}")}
                     members.append(mname)
@@ -1336,18 +1443,23 @@ class Service:
             return name
 
         selector = rule.get("selector") if isinstance(rule.get("selector"), dict) else {}
-        for role, selection in selector.items():
-            areas = selection.get("areas") if isinstance(selection, dict) else None
-            for n, area in enumerate(areas or []):
-                if not isinstance(area, dict):
-                    continue
-                if "all_of" in area or ("find" in area and "anchor_name" in area):
-                    name = register(area, f"{role}{n}")
-                    areas[n] = {"sheet_role": area.get("sheet_role"), "anchor": name}
-                elif isinstance(area.get("relative"), dict) and isinstance(area["relative"].get("anchor"), dict):
-                    inner = area["relative"]["anchor"]
-                    inner.setdefault("sheet_role", area.get("sheet_role"))
-                    area["relative"]["anchor"] = register(inner, f"{role}{n}.base")
+        try:
+            for role, selection in selector.items():
+                areas = selection.get("areas") if isinstance(selection, dict) else None
+                if areas is not None and not isinstance(areas, list):
+                    raise Problem("INVALID_RULE", f"{role}.areas는 배열이어야 합니다.")
+                for n, area in enumerate(areas or []):
+                    if not isinstance(area, dict):
+                        continue
+                    if "all_of" in area or ("find" in area and "anchor_name" in area):
+                        name = register(area, f"{role}{n}")
+                        areas[n] = {"sheet_role": area.get("sheet_role"), "anchor": name}
+                    elif isinstance(area.get("relative"), dict) and isinstance(area["relative"].get("anchor"), dict):
+                        inner = area["relative"]["anchor"]
+                        inner.setdefault("sheet_role", area.get("sheet_role"))
+                        area["relative"]["anchor"] = register(inner, f"{role}{n}.base")
+        except (KeyError, TypeError, AttributeError):
+            raise Problem("INVALID_RULE", "effective_spec의 selector 형태가 유효하지 않습니다.") from None
         rule.pop("anchor_name", None)
         rule["rule_key"] = ctx["rule_key"]
         rule["relations"] = head_spec.get("relations") or []
@@ -1634,24 +1746,53 @@ class Service:
         self.refresh_document_status(run["document_id"])
         return {"run_id": run_id, "application_id": run["application_id"], "snapshot_id": run["snapshot_id"], "group_count": len(groups), "value_count": count, "published": True}
 
+    @staticmethod
+    def _ensure_regions(conn, snapshot_id, pending, cache):
+        """배치의 새 영역을 3문(INSERT OR IGNORE executemany + SELECT)으로 만든다(값마다 SELECT/INSERT 왕복 금지)."""
+        stamp = now()
+        conn.executemany(
+            "INSERT OR IGNORE INTO source_region (region_id,snapshot_id,sheet_id,kind,locator_key,r1,c1,r2,c2,created_at) VALUES (?,?,?,'cells',?,?,?,?,?,?)",
+            [(uid(), snapshot_id, sheet_id, key, r1, c1, r2, c2, stamp) for (sheet_id, key), (r1, c1, r2, c2) in pending.items()],
+        )
+        keys = list(pending)
+        for start in range(0, len(keys), 400):
+            chunk = keys[start : start + 400]
+            for r in conn.execute(
+                "SELECT sheet_id, locator_key, region_id FROM source_region WHERE kind='cells' AND sheet_id IN (%s) AND locator_key IN (%s)"
+                % (",".join("?" for _ in {s for s, _ in chunk}), ",".join("?" for _ in chunk)),
+                (*{s for s, _ in chunk}, *(k for _, k in chunk)),
+            ):
+                cache[(r["sheet_id"], r["locator_key"])] = r["region_id"]
+
     def _store_values(self, conn, run, group, items, by_name, cache):
         revision, group_key, _ = group
         spec = load(revision["effective_spec_json"])
         derivation_default = dump({"value_spec": spec.get("value_spec"), "combine": spec["selector"]["value"].get("combine", "ordered_union"), "record_spec": spec.get("record_spec")})
         value_rows, region_rows, stamp = [], [], now()
+        located, pending = [], {}
         for item in items:
             regions = item.get("regions") or {}
             if sum(len(v) for v in regions.values()) > VALUE_REGION_LIMIT:
                 raise Problem("ATOMIC_REGION_LIMIT", "한 값에 1,000개를 초과하는 출처가 있습니다. 결합을 나누세요.", 413)
-            vid, identities = uid(), []
+            parts_of = []
             for role, parts in regions.items():
                 for n, region in enumerate(parts):
                     sheet = by_name.get(region.get("sheet"))
                     if not sheet:
                         raise Problem("REGION_SHEET_MISMATCH", "원본 영역이 적용 건의 시트를 벗어났습니다.")
-                    rid = ensure_region(conn, run["snapshot_id"], sheet["sheet_id"], region["range"], cache)
-                    identities.append([role, n, sheet["sheet_id"], list(bounds(region["range"]))])
-                    region_rows.append((vid, run["snapshot_id"], rid, role, n))
+                    r1, c1, r2, c2 = bounds(region["range"])
+                    key = (sheet["sheet_id"], address(r1, c1, r2, c2))
+                    if key not in cache:
+                        pending[key] = (r1, c1, r2, c2)
+                    parts_of.append((role, n, key, [r1, c1, r2, c2]))
+            located.append(parts_of)
+        if pending:
+            self._ensure_regions(conn, run["snapshot_id"], pending, cache)
+        for item, parts_of in zip(items, located):
+            vid, identities = uid(), []
+            for role, n, key, box in parts_of:
+                identities.append([role, n, key[0], box])
+                region_rows.append((vid, run["snapshot_id"], cache[key], role, n))
             value_rows.append(
                 (
                     vid, run["run_id"], run["snapshot_id"], revision["mapping_revision_id"], revision["field_id"], group_key,
@@ -1788,42 +1929,69 @@ class Service:
         return self.job_result(job, wait, principal)
 
     def execute_reparse(self, profile_id, mode, principal, checkpoint):
+        app_where = "a.profile_id=? AND d.current_snapshot_id=a.snapshot_id"
+        unmatched_where = "d.status='unmatched' AND NOT EXISTS (SELECT 1 FROM parsing_application a WHERE a.snapshot_id=d.current_snapshot_id AND a.profile_id=?)"
         with self.db.connect() as conn:
             profile = self._profile_row(conn, profile_id)
             if profile["status"] != "approved":
                 raise Problem("PROFILE_NOT_APPROVED", "승인된 프로파일만 재파싱할 수 있습니다.")
-            apps = self._application_aggregates(conn, "a.profile_id=? AND d.current_snapshot_id=a.snapshot_id", (profile_id,))
-            unmatched = []
-            if mode == "rematch":
-                unmatched = rows(
-                    conn,
-                    "SELECT d.*, s.change_token FROM document d JOIN document_snapshot s ON s.snapshot_id=d.current_snapshot_id WHERE d.status='unmatched' AND NOT EXISTS (SELECT 1 FROM parsing_application a WHERE a.snapshot_id=d.current_snapshot_id AND a.profile_id=?) ORDER BY d.document_name",
-                    (profile_id,),
-                )
-        queued, skipped, total = 0, [], len(apps) + len(unmatched)
-        for n, agg in enumerate(apps):
+            app_total = conn.execute("SELECT count(*) FROM parsing_application a JOIN document d ON d.current_snapshot_id=a.snapshot_id WHERE a.profile_id=?", (profile_id,)).fetchone()[0]
+            unmatched_total = conn.execute(f"SELECT count(*) FROM document d WHERE {unmatched_where}", (profile_id,)).fetchone()[0] if mode == "rematch" else 0
+        queued, skipped, total, n = 0, [], app_total + unmatched_total, 0
+        # 적용 건은 (document_name, application_id) keyset으로 페이지마다 읽는다(메모리 O(페이지); 처리 중 정렬 키는 바뀌지 않는다).
+        for agg in self._application_pages(app_where, (profile_id,)):
             checkpoint(n, total, force=True)
+            n += 1
             outcome = self._reparse_application(profile, agg, mode, principal, checkpoint)
             if outcome is None:
                 queued += 1
             else:
                 skipped.append({"document_id": agg["document_id"], "document_name": agg["document_name"], "reason": outcome})
-        for n, doc in enumerate(unmatched):
-            checkpoint(len(apps) + n, total, force=True)
-            outcome = self._reparse_unmatched(profile, doc, principal, checkpoint)
-            if outcome is None:
-                queued += 1
-            else:
-                skipped.append({"document_id": doc["document_id"], "document_name": doc["document_name"], "reason": outcome})
+        if mode == "rematch":
+            after = None
+            while True:
+                with self.db.connect() as conn:
+                    batch = rows(
+                        conn,
+                        f"SELECT d.*, s.change_token FROM document d JOIN document_snapshot s ON s.snapshot_id=d.current_snapshot_id WHERE {unmatched_where}"
+                        + (" AND (d.document_name, d.document_id) > (?,?)" if after else "")
+                        + " ORDER BY d.document_name, d.document_id LIMIT ?",
+                        (profile_id, *(after or ()), REPARSE_PAGE),
+                    )
+                for doc in batch:
+                    checkpoint(n, total, force=True)
+                    n += 1
+                    outcome = self._reparse_unmatched(profile, doc, principal, checkpoint)
+                    if outcome is None:
+                        queued += 1
+                    else:
+                        skipped.append({"document_id": doc["document_id"], "document_name": doc["document_name"], "reason": outcome})
+                if len(batch) < REPARSE_PAGE:
+                    break
+                after = (batch[-1]["document_name"], batch[-1]["document_id"])
         checkpoint(total, total, force=True)
         return {"queued": queued, "skipped": skipped}
+
+    def _application_pages(self, where, params, size=REPARSE_PAGE):
+        after = None
+        while True:
+            with self.db.connect() as conn:
+                batch = self._application_aggregates(conn, where, params, after=after, limit=size)
+            yield from batch
+            if len(batch) < size:
+                return
+            after = (batch[-1]["document_name"], batch[-1]["application_id"])
 
     def _reparse_application(self, profile, agg, mode, principal, checkpoint):
         """반환 None = 처리(큐/추출/리비전), 문자열 = 건너뜀 사유."""
         all_approved = agg["heads_total"] and agg["unapproved"] == 0
+        if (agg["inherited"] or 0) > 0:
+            # §4.4 새 snapshot 승계는 사람이 approve_all로 검수한다. rematch가 대신 승인하지 않는다(decisions §1).
+            return "review_required"
         if agg["published_run_id"] and all_approved and mode == "fill":
             return "published"
-        if all_approved and not agg["published_run_id"]:
+        if all_approved and not agg["published_run_id"] and (mode == "fill" or agg["profile_rev"] == profile["current_rev"]):
+            # 헤드가 이미 현재 rev 스펙이면 재매치 없이 추출만 하면 된다. 오래된 rev는 rematch 경로에서 새 스펙을 받는다.
             self._extract_now(agg["application_id"], principal, checkpoint)
             return None
         if mode == "fill":
@@ -1849,7 +2017,8 @@ class Service:
         if match["compatibility"] == "identical":
             if changed == 0 and agg["published_run_id"]:
                 return "up_to_date"
-            self._extract_now(agg["application_id"], principal, checkpoint)
+            # 자동 승인(origin auto) 뒤의 실행이므로 실패 큐가 '자동 승인 뒤 실패'로 표시할 수 있게 표시한다(§1.5).
+            self._extract_now(agg["application_id"], principal, checkpoint, auto_approved=1)
             return None
         return None if changed else "review_required"
 
@@ -1860,7 +2029,7 @@ class Service:
         heads = {
             r["rule_id"]: dict(r)
             for r in conn.execute(
-                "SELECT m.mapping_id, m.rule_id, m.edit_seq, v.mapping_revision_id, v.status, v.field_id, v.observed_key, v.effective_spec_json FROM mapping m LEFT JOIN mapping_revision v ON v.mapping_revision_id=m.current_revision_id WHERE m.application_id=?",
+                "SELECT m.mapping_id, m.rule_id, m.edit_seq, v.mapping_revision_id, v.status, v.origin, v.field_id, v.observed_key, v.effective_spec_json FROM mapping m LEFT JOIN mapping_revision v ON v.mapping_revision_id=m.current_revision_id WHERE m.application_id=?",
                 (app["application_id"],),
             )
         }
@@ -1871,10 +2040,13 @@ class Service:
             if head is None:
                 mid = uid()
                 insert(conn, "mapping", mapping_id=mid, application_id=app["application_id"], snapshot_id=app["snapshot_id"], rule_id=rule["rule_id"], created_at=now())
-                head = {"mapping_id": mid, "edit_seq": 0, "mapping_revision_id": None, "status": None, "field_id": None, "observed_key": None, "effective_spec_json": None}
+                head = {"mapping_id": mid, "edit_seq": 0, "mapping_revision_id": None, "status": None, "origin": None, "field_id": None, "observed_key": None, "effective_spec_json": None}
             field_id = head["field_id"] or rule["default_field_id"]
             spec = specs[rule["rule_key"]]
-            if identical and field_id:
+            # identical은 승인 헤드(또는 사람 손을 거치지 않은 profile/auto 제안)를 새 rev 스펙으로 복제한다.
+            # 승계(inherited)·수동 proposed·rejected 헤드는 검수 중이므로 proposed로만 올린다(§4.4·§4.9, decisions §1).
+            auto_ok = head["status"] == "approved" or (head["status"] in (None, "proposed") and head.get("origin") in (None, "profile", "auto"))
+            if identical and field_id and auto_ok:
                 status, origin = "approved", "auto"
             else:
                 status, origin = "proposed", "profile"
@@ -1913,8 +2085,12 @@ class Service:
         return None if created else "already_applied"
 
     # ---- 문서 상태(§4.12) ------------------------------------------------------------------
-    def _application_aggregates(self, conn, where, params):
-        """application별 헤드/실행 집계(문서 목록·상태·프로파일 문서 목록이 공유)."""
+    def _application_aggregates(self, conn, where, params, after=None, limit=None):
+        """application별 헤드/실행 집계(문서 목록·상태·프로파일 문서 목록이 공유). after/limit는 (document_name, application_id) keyset."""
+        order = "d.document_name, a.application_id" if (after or limit) else "d.document_name, a.created_at, a.application_id"
+        if after:
+            where, params = f"({where}) AND (d.document_name, a.application_id) > (?,?)", (*params, *after)
+        tail = f" LIMIT {int(limit)}" if limit else ""
         return rows(
             conn,
             "SELECT a.application_id, a.snapshot_id, a.profile_id, a.compatibility, a.origin, a.published_run_id, a.profile_rev, a.created_at, "
@@ -1929,7 +2105,7 @@ class Service:
             "FROM parsing_application a JOIN parsing_profile p ON p.profile_id=a.profile_id JOIN parsing_schema ps ON ps.schema_id=a.schema_id "
             "JOIN document_snapshot s ON s.snapshot_id=a.snapshot_id JOIN document d ON d.document_id=s.document_id "
             "LEFT JOIN mapping m ON m.application_id=a.application_id LEFT JOIN mapping_revision v ON v.mapping_revision_id=m.current_revision_id "
-            f"WHERE {where} GROUP BY a.application_id ORDER BY d.document_name, a.created_at",
+            f"WHERE {where} GROUP BY a.application_id ORDER BY {order}{tail}",
             params,
         )
 
@@ -2075,7 +2251,7 @@ class Service:
         with self.db.connect() as conn:
             row = one(
                 conn,
-                "SELECT v.*, m.mapping_id, a.application_id, a.profile_id, r.rule_key, f.field_key, f.field_name, f.value_type field_type, f.canonical_unit, d.document_id, d.document_name, s.revision_no, s.captured_at "
+                "SELECT v.*, m.mapping_id, a.application_id, a.profile_id, a.published_run_id, r.rule_key, f.field_key, f.field_name, f.value_type field_type, f.canonical_unit, d.document_id, d.document_name, s.revision_no, s.captured_at "
                 "FROM extracted_value v JOIN extraction_run x ON x.run_id=v.run_id JOIN parsing_application a ON a.application_id=x.application_id JOIN mapping_revision mr ON mr.mapping_revision_id=v.mapping_revision_id "
                 "JOIN mapping m ON m.mapping_id=mr.mapping_id JOIN parsing_rule r ON r.rule_id=m.rule_id JOIN parsing_field f ON f.field_id=v.field_id "
                 "JOIN document_snapshot s ON s.snapshot_id=v.snapshot_id JOIN document d ON d.document_id=s.document_id WHERE v.value_id=?",
@@ -2085,7 +2261,8 @@ class Service:
             regions = self._value_regions(conn, [value_id])
             firsts = self._first_regions(conn, [value_id])
         out = self._value_public(row, regions, firsts)
-        out.update(document={"document_id": row["document_id"], "document_name": row["document_name"]}, snapshot={"snapshot_id": row["snapshot_id"], "revision_no": row["revision_no"], "captured_at": row["captured_at"]}, mapping_id=row["mapping_id"], run_id=row["run_id"])
+        # 실행 ID는 사용자에게 보이지 않는다(§7); 매핑 ID는 '검수 열기'의 문서화된 핸들이라 남긴다.
+        out.update(document={"document_id": row["document_id"], "document_name": row["document_name"]}, snapshot={"snapshot_id": row["snapshot_id"], "revision_no": row["revision_no"], "captured_at": row["captured_at"]}, mapping_id=row["mapping_id"], published=row["published_run_id"] == row["run_id"])
         return out
 
     def region_values(self, region_id, limit=200):
@@ -2095,7 +2272,7 @@ class Service:
             region = one(conn, "SELECT sr.*, s.sheet_name FROM source_region sr JOIN sheet s ON s.sheet_id=sr.sheet_id WHERE sr.region_id=?", (region_id,), "원본 위치를 찾을 수 없습니다.")
             values = rows(
                 conn,
-                "SELECT v.value_id, er.role, v.run_id, v.mapping_revision_id, a.application_id, a.published_run_id, r.rule_key, f.field_key, f.field_name, v.value_text, v.display_text, v.value_state, v.record_key, v.item_index "
+                "SELECT v.value_id, er.role, (a.published_run_id = v.run_id) published, a.application_id, r.rule_key, f.field_key, f.field_name, v.value_text, v.display_text, v.value_state, v.record_key, v.item_index "
                 "FROM extracted_value_region er JOIN extracted_value v ON v.value_id=er.value_id JOIN extraction_run x ON x.run_id=v.run_id JOIN parsing_application a ON a.application_id=x.application_id "
                 "JOIN mapping_revision mr ON mr.mapping_revision_id=v.mapping_revision_id JOIN mapping m ON m.mapping_id=mr.mapping_id JOIN parsing_rule r ON r.rule_id=m.rule_id JOIN parsing_field f ON f.field_id=v.field_id "
                 "WHERE er.region_id=? ORDER BY (a.published_run_id = v.run_id) DESC, v.created_at DESC LIMIT ?",
@@ -2104,7 +2281,7 @@ class Service:
             # 매핑은 값보다 넓은 영역(C9:C73)을 참조하므로 "이 셀을 참조하는 매핑"은 같은 시트에서 교차하는 영역으로 찾는다.
             mappings = rows(
                 conn,
-                "SELECT mr.role, mr.mapping_revision_id, v.mapping_id, v.status, (m.current_revision_id = v.mapping_revision_id) is_head, m.application_id, r.rule_key, r.rule_name, sr.locator_key range "
+                "SELECT mr.role, v.mapping_id, v.status, v.revision_no, (m.current_revision_id = v.mapping_revision_id) is_head, m.application_id, r.rule_key, r.rule_name, sr.locator_key range "
                 "FROM source_region sr JOIN mapping_region mr ON mr.region_id=sr.region_id "
                 "JOIN mapping_revision v ON v.mapping_revision_id=mr.mapping_revision_id JOIN mapping m ON m.mapping_id=v.mapping_id JOIN parsing_rule r ON r.rule_id=m.rule_id "
                 "WHERE sr.sheet_id=? AND sr.kind='cells' AND sr.r1<=? AND sr.c1<=? AND sr.r2>=? AND sr.c2>=? ORDER BY is_head DESC, v.created_at DESC LIMIT ?",
@@ -2112,7 +2289,7 @@ class Service:
             )
         return {
             "region": {"region_id": region["region_id"], "snapshot_id": region["snapshot_id"], "sheet_id": region["sheet_id"], "sheet_name": region["sheet_name"], "kind": region["kind"], "range": region["locator_key"]},
-            "values": [{**v, "published": v["published_run_id"] == v["run_id"], "field": {"key": v.pop("field_key"), "name": v.pop("field_name")}} for v in values],
+            "values": [{**v, "published": bool(v["published"]), "field": {"key": v.pop("field_key"), "name": v.pop("field_name")}} for v in values],
             "mappings": [{**m, "is_head": bool(m["is_head"])} for m in mappings],
         }
 
@@ -2226,12 +2403,16 @@ class Service:
             aggs = self._application_aggregates(conn, "a.snapshot_id=?", (snapshot_id,))
         return [{**a, "state": _app_state(a), "published": bool(a["published_run_id"])} for a in aggs]
 
-    def profile_documents(self, profile_id):
-        """GET /profiles/{id}/documents: 현재 snapshot에 이 프로파일이 적용된 문서."""
+    def profile_documents(self, profile_id, cursor=None, limit=50):
+        """GET /profiles/{id}/documents: 현재 snapshot에 이 프로파일이 적용된 문서((document_name, application_id) keyset 페이지)."""
+        limit = max(1, min(int(limit or 50), 200))
+        scope = ["profile-documents", profile_id]
+        after = decode_cursor(cursor, scope, 2)
         with self.db.connect() as conn:
             profile = self._profile_row(conn, profile_id)
-            aggs = self._application_aggregates(conn, "a.profile_id=? AND d.current_snapshot_id=a.snapshot_id", (profile_id,))
-        return [
+            aggs = self._application_aggregates(conn, "a.profile_id=? AND d.current_snapshot_id=a.snapshot_id", (profile_id,), after=after, limit=limit + 1)
+        result = page(aggs, limit, ("document_name", "application_id"), scope)
+        result["items"] = [
             {
                 "document_id": a["document_id"],
                 "document_name": a["document_name"],
@@ -2244,11 +2425,12 @@ class Service:
                 "heads_total": a["heads_total"] or 0,
                 "published": bool(a["published_run_id"]),
                 "is_reference": a["application_id"] == profile["reference_application_id"],
-                "status": _app_state(a),
+                "state": _app_state(a),
                 "document_status": a["document_status"],
             }
-            for a in aggs
+            for a in result["items"]
         ]
+        return result
 
     # ---- 검색·상태 ---------------------------------------------------------------------
     def search(self, q, per_kind=5):
@@ -2283,4 +2465,5 @@ class Service:
                 "jobs_running": conn.execute("SELECT count(*) FROM runtime_job WHERE state IN ('queued','running')").fetchone()[0],
                 "review": conn.execute("SELECT count(*) FROM document WHERE status IN ('review','changed')").fetchone()[0],
             }
-        return {"version": "3", "workspace": str(self.root), "counts": counts}
+        # 절대 경로는 서버 파일 배치를 드러내므로 작업 공간 이름만 준다.
+        return {"version": "3", "workspace": self.root.name, "counts": counts}

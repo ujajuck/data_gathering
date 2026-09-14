@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 
@@ -551,15 +552,32 @@ def preview(service, request):
 # ---------------------------------------------------------------------------- 산출물 writer
 
 
+FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_safe(text):
+    """원본 셀 텍스트가 스프레드시트에서 수식/DDE로 실행되지 않게 한다(=,+,-,@,탭,CR로 시작하면 작은따옴표 접두). 숫자('-5')는 그대로."""
+    if text is None:
+        return ""
+    text = str(text)
+    if text and text[0] in FORMULA_LEAD:
+        try:
+            Decimal(text.strip())
+            return text
+        except (InvalidOperation, ValueError):
+            return "'" + text
+    return text
+
+
 class _CsvWriter:
     def __init__(self, path, columns, row_mode):
         self.columns, self.row_mode = columns, row_mode
         self.file = open(path, "w", encoding="utf-8-sig", newline="")
         self.writer = csv.writer(self.file, lineterminator="\r\n")
-        self.writer.writerow(_headers(columns, row_mode))
+        self.writer.writerow([csv_safe(h) for h in _headers(columns, row_mode)])
 
     def write(self, row):
-        self.writer.writerow(["" if t is None else t for t in _row_texts(row, self.columns, self.row_mode)])
+        self.writer.writerow([csv_safe(t) for t in _row_texts(row, self.columns, self.row_mode)])
 
     def close(self, manifest=None):
         self.file.close()
@@ -576,6 +594,15 @@ class _XlsxWriter:
         self.sheet = self.book.create_sheet("data")
         self.headers = _headers(columns, row_mode)
         self.buffer, self.started = [], False
+
+    def _text_cell(self, text):
+        # '=...'로 시작하는 문자열은 openpyxl이 수식(data_type 'f')으로 저장하므로 문자열 타입을 강제한다.
+        from openpyxl.cell import WriteOnlyCell
+
+        cell = WriteOnlyCell(self.sheet, value=text)
+        if cell.data_type == "f":
+            cell.data_type = "s"
+        return cell
 
     def _cells(self, row):
         out, texts = [], _row_texts(row, self.columns, self.row_mode)
@@ -596,7 +623,7 @@ class _XlsxWriter:
             elif kind == "boolean" and text in ("true", "false"):
                 out.append(text == "true")
             else:
-                out.append("" if text is None else str(text))
+                out.append(self._text_cell("" if text is None else str(text)))
         return out
 
     def _start(self):
@@ -607,12 +634,12 @@ class _XlsxWriter:
         widths = [len(h) for h in self.headers]
         for cells in self.buffer:
             for n, value in enumerate(cells):
-                widths[n] = max(widths[n], min(60, len(str(value))))
+                widths[n] = max(widths[n], min(60, len(str(getattr(value, "value", value)))))
         for n, width in enumerate(widths):
             self.sheet.column_dimensions[get_column_letter(n + 1)].width = min(60, max(8, width * 1.2 + 2))
         header = []
         for text in self.headers:
-            cell = WriteOnlyCell(self.sheet, value=text)
+            cell = self._text_cell(text)
             cell.font = Font(bold=True)
             header.append(cell)
         self.sheet.append(header)
@@ -713,6 +740,15 @@ def _read_manifest(folder):
         return None
 
 
+# 같은 build_key의 동기 빌드가 겹치면 같은 .tmp를 두 번 쓰므로 build_key별로 직렬화한다.
+_BUILD_LOCKS, _BUILD_LOCKS_GUARD = {}, threading.Lock()
+
+
+def _build_lock(build_key):
+    with _BUILD_LOCKS_GUARD:
+        return _BUILD_LOCKS.setdefault(build_key, threading.Lock())
+
+
 def _existing(service, plan, format):
     """같은 입력(build_key)의 산출물이 이미 있으면 그대로 돌려준다."""
     folder = export_folder(service, plan["build_key"])
@@ -784,21 +820,22 @@ def build(service, request, principal=None, wait=0):
     # 계획과 실행은 같은 연결에서(TEMP 테이블·읽기 snapshot 공유).
     with service.db.connect() as conn:
         plan = _plan(service, conn, request)
-        existing = _existing(service, plan, request["format"])
-        if existing:
-            return existing
-        if len(plan["usable"]) > SYNC_DOCUMENT_LIMIT or plan["row_count"] > SYNC_ROW_LIMIT:
-            job = service.jobs.submit("build", request, principal, f"{plan['build_key']}:{request['format']}", target_kind="build", target_id=plan["build_key"], label=_label(plan, request))
-        else:
-            job = None
-            jid = service.jobs.record_sync("build", principal, "build", plan["build_key"], _label(plan, request), request)
-            try:
-                result = _execute(service, conn, plan, request, units, lambda *a, **k: None)
-            except Problem as exc:
-                service.jobs.finish_sync(jid, error=exc)
-                raise
-            service.jobs.finish_sync(jid, {"build_key": result["build_key"], "download_url": result["download_url"], "row_count": result["row_count"]})
-            return {**result, "job_id": jid}
+        with _build_lock(plan["build_key"]):
+            existing = _existing(service, plan, request["format"])
+            if existing:
+                return existing
+            if len(plan["usable"]) > SYNC_DOCUMENT_LIMIT or plan["row_count"] > SYNC_ROW_LIMIT:
+                job = service.jobs.submit("build", request, principal, f"{plan['build_key']}:{request['format']}", target_kind="build", target_id=plan["build_key"], label=_label(plan, request))
+            else:
+                job = None
+                jid = service.jobs.record_sync("build", principal, "build", plan["build_key"], _label(plan, request), request)
+                try:
+                    result = _execute(service, conn, plan, request, units, lambda *a, **k: None)
+                except Problem as exc:
+                    service.jobs.finish_sync(jid, error=exc)
+                    raise
+                service.jobs.finish_sync(jid, {"build_key": result["build_key"], "download_url": result["download_url"], "row_count": result["row_count"]})
+                return {**result, "job_id": jid}
     job = service.job_result(job, wait, principal)
     if job["state"] == "succeeded":
         return {**job["result"], "manifest": _read_manifest(export_folder(service, job["result"]["build_key"])), "path": str(export_folder(service, job["result"]["build_key"]) / FORMATS[request["format"]][0]), "job": job}
@@ -813,11 +850,12 @@ def execute_build(service, payload, principal, checkpoint):
     units = load_units(service.root)
     with service.db.connect() as conn:
         plan = _plan(service, conn, request)
-        existing = _existing(service, plan, request["format"])
-        if existing:
-            return {"build_key": existing["build_key"], "download_url": existing["download_url"], "row_count": existing["row_count"], "format": request["format"], "reused": True}
-        checkpoint(0, plan["row_count"], force=True)
-        result = _execute(service, conn, plan, request, units, checkpoint)
+        with _build_lock(plan["build_key"]):
+            existing = _existing(service, plan, request["format"])
+            if existing:
+                return {"build_key": existing["build_key"], "download_url": existing["download_url"], "row_count": existing["row_count"], "format": request["format"], "reused": True}
+            checkpoint(0, plan["row_count"], force=True)
+            result = _execute(service, conn, plan, request, units, checkpoint)
     return {"build_key": result["build_key"], "download_url": result["download_url"], "row_count": result["row_count"], "format": request["format"], "reused": False}
 
 

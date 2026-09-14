@@ -9,6 +9,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from kg.v2.db import Problem as V2Problem
+from kg.v2.readers import SIGNATURE_COLS, SIGNATURE_ROWS, SIGNATURE_SHEETS, SIGNATURE_TERMS, signature_terms
 from kg.v2.readers import XlsxReader as V2XlsxReader
 from kg.v2.readers import file_hash  # noqa: F401  (v2 계약 테스트·서비스가 같은 이름을 쓴다)
 
@@ -47,45 +48,88 @@ class XlsxReader(V2XlsxReader):
             raise Problem(exc.code, exc.message, exc.status) from None
 
     def describe(self, source_ref, profiles=()):
-        """v2 describe 결과 + (profiles가 있으면 같은 프로세스에서) matches[]."""
+        """v2 describe와 같은 결과(+ profiles가 있으면 matches[]). 워크북은 한 번만 열고 해시는 시작·끝 두 번만 계산한다."""
+        path, token = self._check(source_ref)
+        capabilities = self.authorize(source_ref, "extract")
+        wb = load_workbook(path, data_only=True, keep_links=False)
         try:
-            result = super().describe(source_ref)
-        except V2Problem as exc:
-            raise Problem(exc.code, exc.message, exc.status) from None
-        if profiles:
-            path, token = self._check(source_ref, result["token"])
-            result["matches"] = self._matches(path, profiles)
-            self._check(source_ref, token)
+            sheets = [
+                {
+                    "name": s.title,
+                    "ordinal": n,
+                    "visibility": {"veryHidden": "very_hidden"}.get(s.sheet_state, s.sheet_state),
+                    "estimated_rows": s.max_row,
+                    "estimated_cols": s.max_column,
+                }
+                for n, s in enumerate(wb.worksheets)
+            ]
+            if len(sheets) > 2000:
+                raise Problem("SHEET_LIMIT", "시트 수가 Reader 한도를 초과했습니다.", 413)
+            result = {
+                "token": token,
+                "filename": path.name,
+                "author": wb.properties.creator,
+                "authored_at": wb.properties.created.isoformat() if wb.properties.created else None,
+                "excel_date_system": "1904" if wb.epoch.year == 1904 else "1900",
+                "byte_size": path.stat().st_size,
+                "sheets": sheets,
+                # 등록 경로가 별도 authorize 호출 없이 재사용할 수 있도록 추출 권한 기준으로 돌려준다.
+                "capabilities": capabilities,
+            }
+            # 구조 서명 실패는 등록을 막지 않는다(필드 생략).
+            try:
+                result["signature"] = self._signature_of(wb, token)
+            except Exception:
+                pass
+            if profiles:
+                result["matches"] = self._matches(wb, profiles)
+        finally:
+            wb.close()
+        if file_hash(path) != token:
+            raise Problem("SOURCE_VERSION_CHANGED", "읽는 동안 원본이 변경되었습니다.", 409)
         return result
 
     @staticmethod
-    def _matches(path, profiles):
-        wb = load_workbook(path, data_only=True, keep_links=False)
-        try:
-            sheets = _sheets_of(wb)
-            out = []
-            for profile in profiles:
-                item = {"profile_id": profile.get("profile_id"), "profile_rev": profile.get("profile_rev")}
-                try:
-                    item.update(
-                        engine.match_profile(
-                            profile["canonical"], wb, sheets, profile.get("reference"), profile.get("profile_rev")
-                        )
-                    )
-                except Problem as exc:
-                    item.update(
-                        bindings={},
-                        compatibility="incompatible",
-                        match_signature=None,
-                        match_signature_json=None,
-                        missing=["*"],
-                        resolved={},
-                        error=exc.code,
-                    )
-                out.append(item)
-            return out
-        finally:
-            wb.close()
+    def _signature_of(wb, token, rows=SIGNATURE_ROWS, cols=SIGNATURE_COLS):
+        """v2 `_signature`와 같은 결과를 이미 열린 워크북에서 계산한다(파일을 다시 열지 않는다)."""
+        sheets = []
+        for n, ws in enumerate(wb.worksheets[:SIGNATURE_SHEETS]):
+            grid = [
+                list(row)
+                for row in ws.iter_rows(min_row=1, max_row=min(rows, ws.max_row or 1), min_col=1, max_col=min(cols, ws.max_column or 1), values_only=True)
+            ]
+            merged = [m for m in ws.merged_cells.ranges if m.min_row <= rows and m.min_col <= cols]
+            sheets.append(
+                {
+                    "name": ws.title,
+                    "ordinal": n,
+                    "visibility": {"veryHidden": "very_hidden"}.get(ws.sheet_state, ws.sheet_state),
+                    "dims": {"rows": ws.max_row, "cols": ws.max_column},
+                    "headers": signature_terms(grid, {(m.min_row, m.min_col) for m in merged}),
+                    "merges": sorted(str(m) for m in merged)[:SIGNATURE_TERMS],
+                }
+            )
+        return {"token": token, "sheets": sheets}
+
+    @staticmethod
+    def _matches(wb, profiles):
+        if not hasattr(wb, "worksheets"):
+            # 경로를 받은 호출(match): 여기서 열고 닫는다.
+            opened = load_workbook(wb, data_only=True, keep_links=False)
+            try:
+                return XlsxReader._matches(opened, profiles)
+            finally:
+                opened.close()
+        sheets = _sheets_of(wb)
+        out = []
+        for profile in profiles:
+            item = {"profile_id": profile.get("profile_id"), "profile_rev": profile.get("profile_rev")}
+            try:
+                item.update(engine.match_profile(profile["canonical"], wb, sheets, profile.get("reference"), profile.get("profile_rev")))
+            except Problem as exc:
+                item.update(bindings={}, compatibility="incompatible", match_signature=None, match_signature_json=None, missing=["*"], resolved={}, error=exc.code)
+            out.append(item)
+        return out
 
     def match(self, source_ref, expected_token, profiles):
         path, token = self._check(source_ref, expected_token)
