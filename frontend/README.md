@@ -1,75 +1,36 @@
 # Semantic Excel Integration — React Frontend
 
-이 시스템의 **웹 프런트엔드**다 (React + TypeScript + Vite). 기본 화면은 `src/v3/`의
-문서 · 파싱 프로파일 · 파싱 스키마 · 데이터 빌드 · 작업 내역(좌측 사이드바) + Source Review 오버레이이며,
-파일·라우트·픽스처 설명은 [src/v3/README.md](src/v3/README.md), 계약은 [docs/design/v3-contracts.md §7](../docs/design/v3-contracts.md)에 있다.
-`?v2=1`은 v2 화면(`src/v2/`), `?v1=1`은 v1 화면(`src/screens/`), `?legacy=1`은 PDF 근거 뷰어를 연다.
+이 시스템의 **웹 프런트엔드**다 (React + TypeScript + Vite). 화면은 `src/app/`의
+문서 · 파싱 프로파일 · 파싱 스키마 · 데이터 빌드 · 작업 내역(좌측 사이드바) + Source Review 오버레이 하나뿐이다.
+파일·라우트·픽스처 설명은 [src/app/README.md](src/app/README.md), 계약은 [docs/design/contracts.md §7](../docs/design/contracts.md)에 있다.
 빌드 산출물(`dist/`)이 커밋되어 서버가 루트 `/`에 바로 서빙한다 — 프론트를 고치면 `npm run build` 후 dist까지 커밋한다.
-
-```bash
-# v3 샘플과 백엔드 (개발 프록시 대상)
-python -m kg.v3 seed-demo --workspace /tmp/v3-demo
-python -m kg.v3 serve --ws /tmp/v3-demo --port 8010
-npm ci && npm run dev        # Vite, /api → 127.0.0.1:8010 프록시
-npm test                     # vitest: v2 + v3 컴포넌트 회귀
-npm run build                # tsc -b && vite build → dist/
-```
-
-## v2 화면 (`?v2=1`)
-
-`src/v2/`의 파일 분석·개념 탐색·원본 데이터·통합 DB·템플릿 관리 5탭. 구조는 [../docs/ARCHITECTURE_V2.md](../docs/ARCHITECTURE_V2.md),
-실행은 `python -m examples.schema_v2.runtime_demo --workspace /tmp/data-gathering-v2-demo && python -m kg.v2 --ws /tmp/data-gathering-v2-demo --port 8010`.
-
-## 기존 화면 (`?v1=1`)
-
-5탭 구성:
-
-1. **파일 분석** — 등록 파일 표(문서군 배지·DRM/Render/Parse 상태) + 파일명·
-   작성자 검색/작성일 필터/정렬, 미등록(raw) 파일의 분석 → 문서군 제안 →
-   레시피 이식 등록, 잠긴 파일의 정식 DRM 해제 요청.
-2. **개념 탐색** — 온톨로지 트리 + 문서군 커버리지 그래프(확대/축소),
-   문서군 상세는 `양식(템플릿) → 문서` 계층(미배정은 '기타', 문서 수 클릭 →
-   우측 문서 표), 추출 레시피 스냅샷·이력·롤백, 재크롤링 폴링, 개념
-   편집기(별칭/관계/폐기/복원).
-3. **원본 데이터** — 셀 렌더(병합/스타일/이미지/텍스트박스 앵커) + Semantic
-   Overlay 토글, 검수 큐, Source Inspector("추출된 키 → 값" 표, 승인/반려/
-   재매핑/통합 포함, 양식 provenance, PDF Preview 링크), 문서군으로 돌아가기.
-4. **통합 DB** — ①개념 트리 체크(상위 체크 시 하위 일괄 선택) → ②스키마
-   확인 → ③생성·다운로드(.db/.csv). 양식 카드에서 전처리(자동/원값/
-   normalizers.yaml 프리셋)·문서별 가감(`kg_cart_v3` localStorage).
-5. **템플릿 관리** — 파싱 템플릿 생성/버전/라이프사이클, 문서 배정·해제.
-   문서:템플릿은 N:M (템플릿마다 파싱 관점이 다르다).
 
 ## 실행
 
 ```bash
-# v2 샘플과 백엔드 (개발 프록시 대상)
-python -m examples.schema_v2.runtime_demo --workspace /tmp/data-gathering-v2-demo
-python -m kg.v2 --ws /tmp/data-gathering-v2-demo --port 8010
+# 샘플 작업 공간과 백엔드 (개발 프록시 대상)
+python -m schema seed-demo --workspace /tmp/schema-demo
+python -m schema serve --ws /tmp/schema-demo --port 8010
 
-# 개발 서버 (Vite, /api → 127.0.0.1:8010 프록시)
 npm ci
-npm run dev
-
-# 프로덕션: 빌드하면 kg.webapp이 / 에 서빙 (base: "./", dist는 커밋 대상)
-npm run build
+npm run dev                  # Vite, /api → 127.0.0.1:8010 프록시
+npm test                     # vitest 컴포넌트 회귀
+npm run build                # tsc -b && vite build → dist/ (base: "./", dist는 커밋 대상)
 ```
 
 ## 구조
 
-- `src/v2/` — 기본 v2 작업 화면, 범위별 원본 표시, 검수 초안, 작업 상태, 사용자 DB
-- `tests/workbench.test.tsx` — v2 화면 컴포넌트 상호작용 회귀 테스트
-- `tests/restoration.test.tsx` — 기존 제품 표현·필터·전처리·검수 큐·개념 선택 회귀
-- `../e2e/v2/` — 실제 서버·가상 XLSX를 사용하는 Playwright/CI
-- `src/lib/api.ts` — fetch 헬퍼 + colName/parseRange + cart 저장소
-- `src/lib/store.tsx` — 5탭 공유 상태
-- `src/screens/` — FilesScreen / KgScreen(+kg/) / SourceScreen(+source/) / DbScreen / TemplatesScreen
-- `src/webkg.css` — 앱 스타일(`.wk` 스코프)
+- `src/App.tsx` · `src/main.tsx` — 진입점. 작업 화면 하나만 lazy 로드한다.
+- `src/app/` — 화면 · `client.ts`(API `/api` 접두, 캐시, 라우팅) · `app.css`
+- `src/product.ts` — 제품명 상수
+- `tests/` — Vitest + jsdom 컴포넌트 회귀와 정적 규칙 검사(용어·import·ID 비노출·진입 호출 수·접근성)
+- `../e2e/` — 실제 서버·실제 XLSX를 쓰는 Playwright 스펙
 
 ## 컴포넌트 검증
 
 ```bash
 npm ci
+npx tsc -b
 npm test
 npm run build
 ```
@@ -77,22 +38,11 @@ npm run build
 테스트 환경은 Node 24.19.0이다. 잠금 파일의 jsdom은 Node 22.22.2 이상(22.x) 또는
 24.15.0 이상(24.x), 26 이상을 요구한다. Vitest·jsdom·React Testing Library로 실제
 화면 컴포넌트를 마운트하고 가상 API 응답만 제공하며 외부 네트워크를 사용하지 않는다.
-
-병합 셀의 키보드 선택과 포인터 이벤트, 여러 영역/시트의 검수 초안·개념·승인 저장,
-늦은 표시 작업 취소, 확대 시 재조회 방지, 30개 단위 페이지 이동,
-DB 생성 요청과 선택한 출처로의 이동, 집계 변경 시 타입/단위 복원을 검증한다.
-jsdom에는 레이아웃·히트 테스트가 없으므로 실제 브라우저의 시각·마우스 드래그 검증과 구분한다.
-
-## 레거시 PDF 근거 뷰어
-
-기존 PDF.js 기반 read-only 뷰어는 `?legacy=1` 로 접근한다
-(`src/LegacyViewer.tsx`, lazy 로드). `src/viewer/ViewerAdapter.ts` 가 엔진
-경계 계약이며, LibreOffice 렌더는 인가된 해제본 + XLSX 검증 통과 후에만
-프리뷰를 제공한다.
+jsdom에는 레이아웃·히트 테스트가 없으므로 실제 브라우저의 시각·마우스 드래그 검증은 E2E가 맡는다.
 
 ## License notes
 
 Runtime dependencies are pinned for reproducible review. React is MIT licensed;
-PDF.js is Apache-2.0 licensed; Vite is MIT licensed. LibreOffice is an external
-rendering process and is not bundled by this package. Deployment owners should
-regenerate and review third-party notices for the exact deployed dependency tree.
+Vite is MIT licensed. LibreOffice is an external rendering process and is not
+bundled by this package. Deployment owners should regenerate and review
+third-party notices for the exact deployed dependency tree.

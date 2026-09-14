@@ -1,7 +1,7 @@
 [project]
 name = "excel-canonical"
 version = "0.1.0"
-description = "단일 공정 반정형 Excel 통합·DB화·DVC 변경추적 시스템"
+description = "단일 공정 반정형 Excel 통합·DB화 시스템"
 requires-python = ">=3.10"
 dependencies = [
     "openpyxl>=3.1",
@@ -10,9 +10,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dvc = ["dvc[s3]>=3.0"]    # 원본 binary 버전 remote 보존 (미설치 시 sha256 fallback)
-web = ["fastapi>=0.115", "uvicorn>=0.30", "pydantic>=2.7,<3"]   # v2 요청 계약은 Pydantic 2 API를 사용
-test = ["pytest>=8.0", "httpx>=0.27", "pglast>=7"]   # pglast: PostgreSQL DDL/AGE 스크립트 구문 검증
+web = ["fastapi>=0.115", "uvicorn>=0.30", "pydantic>=2.7,<3"]   # 요청 계약은 Pydantic 2 API를 사용
+test = ["pytest>=8.0", "httpx>=0.27", "pglast>=7"]   # pglast: PostgreSQL DDL 스크립트 구문 검증
+
+[tool.setuptools]
+packages = ["schema", "schema.render"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

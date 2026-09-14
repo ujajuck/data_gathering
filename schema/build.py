@@ -328,9 +328,9 @@ def _convert(units, value, target_unit, field_unit):
     if not shared:
         return value["value_text"], unit, f"{unit} → {target_unit} 변환식이 단위 변환표에 없습니다."
     dimension = sorted(shared)[0]
-    # UnitRegistry.convert는 float 산술이라 26.850000000000023 같은 잡음이 생기므로 같은 계수로 Decimal 계산한다.
-    f_from, o_from = units._params[(dimension, source)]
-    f_to, o_to = units._params[(dimension, target)]
+    # float 산술은 26.850000000000023 같은 잡음이 생기므로 변환표의 계수만 받아 Decimal로 계산한다.
+    f_from, o_from = units.factor_offset(dimension, source)
+    f_to, o_to = units.factor_offset(dimension, target)
     try:
         with localcontext() as ctx:
             ctx.prec = 15

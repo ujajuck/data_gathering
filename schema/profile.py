@@ -366,7 +366,7 @@ def _validate_selection(source, role, roles, anchors, rule_key):
     allowed = {"scalar": {"none"}, "list": {"down", "right"}, "matrix": {"row_major", "column_major"}}
     if cardinality not in allowed or axis not in allowed[cardinality]:
         raise Problem("INVALID_DIRECTION", "값 모양과 가로/세로 방향이 일치하지 않습니다.")
-    # v2 XlsxReader.extract의 런타임 기본값: list+down → one_per_row, list+right → one_per_column, 그 외 each_cell.
+    # engine.extract의 런타임 기본값: list+down → one_per_row, list+right → one_per_column, 그 외 each_cell.
     layout = source.get(
         "element_layout",
         "one_per_row" if (cardinality, axis) == ("list", "down") else "one_per_column" if (cardinality, axis) == ("list", "right") else "each_cell",

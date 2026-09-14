@@ -1,4 +1,4 @@
-"""v3 전처리 파이프라인: split_delimiter 단독·혼합·version, v2 op 위임, 검증 오류."""
+"""전처리 파이프라인: split_delimiter 단독·혼합·version, 기본 op, 검증 오류."""
 
 import pytest
 
@@ -25,7 +25,7 @@ def test_split_delimiter_no_fragment_is_null_and_non_string_passes():
     assert prepare(12.5, normal, "decimal") == (12.5, None, False)
 
 
-def test_split_delimiter_mixed_with_v2_ops_keeps_last_unit():
+def test_split_delimiter_mixed_with_base_ops_keeps_last_unit():
     normal = pipeline(
         {"op": "trim_text"},
         {"op": "split_delimiter", "delimiter": "/", "index": 0},
@@ -39,7 +39,7 @@ def test_split_delimiter_mixed_with_v2_ops_keeps_last_unit():
     assert prepare("x | 50%", normal, "decimal") == ("0.5", "%", True)
 
 
-def test_v2_ops_delegate_and_errors_are_v3_problems():
+def test_base_ops_run_and_errors_are_problems():
     assert prepare("1,234.5", pipeline({"op": "strip_thousands"}), "decimal") == ("1234.5", None, False)
     assert prepare(" a ", {"operation": "identity"}, "text") == (" a ", None, False)
     with pytest.raises(Problem) as exc:

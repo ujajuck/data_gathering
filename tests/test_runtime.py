@@ -1,4 +1,4 @@
-"""v3 API 통합 시나리오(계약 §11 `test_v3_runtime.py`) + 성능 회귀(문서 2,000건 목록 페이지 < 50ms).
+"""API 통합 시나리오(계약 §10 `test_runtime.py`) + 성능 회귀(문서 2,000건 목록 페이지 < 50ms).
 
 한 작업 공간 위에서 순서대로 진행한다(모듈 fixture `world`, 테스트 함수는 파일 순서대로 실행된다):
 스키마·초안 프로파일 → 등록(Reader 프로세스 1회, approved 프로파일만 자동 적용 → 초안뿐이면 unmatched) → 수동 적용(draft) →
@@ -82,7 +82,7 @@ class World:
 
 @pytest.fixture(scope="module")
 def world(tmp_path_factory):
-    root = tmp_path_factory.mktemp("v3-runtime")
+    root = tmp_path_factory.mktemp("runtime")
     raw = root / "data/raw"
     raw.mkdir(parents=True)
     demo.build_process_workbook(raw / DOC_REF, 1)
@@ -112,7 +112,7 @@ def world(tmp_path_factory):
     app = create_app(root, start_worker=False)
     try:
         with TestClient(app) as client:
-            service = app.state.v3
+            service = app.state.service
             service._render = RenderClient(root, event_source=inprocess_source)
             env = World(root, client, service)
             env.calls = calls
@@ -555,7 +555,7 @@ def test_search_and_document_status_transitions(world):
 def test_document_list_page_under_50ms_with_2000_documents(tmp_path):
     app = create_app(tmp_path / "ws", start_worker=False)
     with TestClient(app) as client:
-        service = app.state.v3
+        service = app.state.service
         stamp = now()
         docs, snaps = [], []
         statuses = ("normal", "review", "unmatched", "changed", "failed", "not_extracted")

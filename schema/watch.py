@@ -1,4 +1,4 @@
-"""raw 폴더의 XLSX를 v3 문서로 자동 등록한다(계약 §10 `watch`: 등록 + 자동 적용).
+"""raw 폴더의 XLSX를 문서로 자동 등록한다(계약 §9 `watch`: 등록 + 자동 적용).
 
 기본으로 하위 폴더까지 감시한다(`**/*.xlsx`; `--no-recursive`면 최상위만). source_ref는 data/raw 기준 상대 경로라 하위 폴더도 그대로 통한다.
 제외 규칙은 §4.1.1 폴더 스캔과 같다: 심볼릭 링크와 `.`으로 시작하는 폴더(.git·.dvc·휴지통 등) 안의 파일은 등록하지 않는다 —
@@ -21,7 +21,7 @@ from .jobs import env
 from .service import Service
 
 REGISTER_WAIT = 600  # 등록 작업(추출 포함)이 끝날 때까지 기다리는 상한(초). 워커 스레드가 없으면 run_one으로 직접 실행된다.
-RECURSIVE_PATTERNS = ("**/*.xlsx", "**/*.xlsm")  # 기본: 하위 폴더까지(계약 §10 watch)
+RECURSIVE_PATTERNS = ("**/*.xlsx", "**/*.xlsm")  # 기본: 하위 폴더까지(계약 §9 watch)
 FLAT_PATTERNS = ("*.xlsx", "*.xlsm")  # --no-recursive
 
 

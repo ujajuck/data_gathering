@@ -198,7 +198,7 @@ class Jobs:
         if self.thread and self.thread.is_alive():
             return
         self.stop.clear()
-        self.thread = threading.Thread(target=self._loop, name="kg-v3-worker", daemon=True)
+        self.thread = threading.Thread(target=self._loop, name="schema-worker", daemon=True)
         self.thread.start()
 
     def close(self):
@@ -447,7 +447,7 @@ class Jobs:
             except Exception:
                 import logging
 
-                logging.getLogger(__name__).exception("v3 job failed: %s", job["job_id"])
+                logging.getLogger(__name__).exception("job failed: %s", job["job_id"])
                 self._fail(
                     job,
                     Problem("JOB_FAILED", "작업 처리에 실패했습니다. 서버 기록을 확인하세요.", 500),

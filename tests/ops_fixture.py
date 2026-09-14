@@ -1,4 +1,4 @@
-"""tests/test_v3_build.py · tests/test_v3_operations.py가 공유하는 작업 공간 도우미(openpyxl 생성 문서 + 실제 Reader 격리)."""
+"""tests/test_build.py · tests/test_operations.py가 공유하는 작업 공간 도우미(openpyxl 생성 문서 + 실제 Reader 격리)."""
 
 from __future__ import annotations
 

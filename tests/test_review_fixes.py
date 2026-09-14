@@ -1,6 +1,7 @@
 """적대적 리뷰 반영 회귀 테스트: 승계 헤드 보호(§4.4), 정의 파일 원자성(§1.3), 실패 큐·auto_approved, 응답 형태(§6·§7),
 빌드 수식 주입 방지, 정규식 ReDoS 차단, schema_key 경로 조작, 잘못된 effective_spec, 커서·원본 참조 정규화,
-렌더 서버 토큰, 작업 대기 알림, 프로파일 문서 페이지, 한국어 검증 오류, 큐 next_action, describe 1회 로드, 목록 인덱스."""
+렌더 서버 토큰, 작업 대기 알림, 프로파일 문서 페이지, 한국어 검증 오류, 큐 next_action, describe 1회 로드, 목록 인덱스,
+옛 배치 DB 감지."""
 
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from schema import build as build_module
 from schema import operations
 from schema import readers as readers_module
 from schema.api import create_app
-from schema.db import Problem, encode_cursor
+from schema.db import PREVIOUS_DB_PATH, Database, Problem, encode_cursor
 from schema.profile import compile_regex
 from schema.render.client import RenderClient
 from schema.render.server import RenderWorker, create_render_app
@@ -381,3 +382,24 @@ def test_document_list_sorts_use_indexes(world):
             assert "TEMP B-TREE" not in plan, (column, plan)
         for name in ("value_by_run_revision", "mapping_by_head", "value_by_field_created", "value_unit_by_run", "document_by_processed"):
             assert conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone()
+
+
+def test_previous_workspace_db_is_detected_instead_of_creating_an_empty_one(tmp_path):
+    """옛 배치의 DB가 남아 있는 작업 공간을 열면 빈 DB를 만들지 않고 멈춘다(자동 이관은 하지 않는다)."""
+    ws = tmp_path / "ws"
+    Database(ws)  # 새 작업 공간 — <ws>/workspace.db를 만든다
+    previous = ws / PREVIOUS_DB_PATH
+    previous.parent.mkdir(parents=True, exist_ok=True)
+    for stray in ws.glob("workspace.db-*"):
+        stray.unlink()
+    (ws / "workspace.db").rename(previous)
+
+    with pytest.raises(Problem) as exc:
+        Database(ws)
+    assert exc.value.code == "WORKSPACE_DB_MOVED" and exc.value.status == 409
+    assert "workspace.db" in exc.value.message
+    assert not (ws / "workspace.db").exists()  # 빈 DB를 만들지 않았다
+
+    # 안내대로 옮기면 그대로 열린다.
+    previous.rename(ws / "workspace.db")
+    assert Database(ws).path == (ws / "workspace.db").resolve()

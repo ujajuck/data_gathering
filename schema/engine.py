@@ -1,4 +1,4 @@
-"""v3 실행 엔진(계약 §3.1·§3.3) — 열린 openpyxl 워크북 위에서 동작하는 순수 함수.
+"""실행 엔진(계약 §3.1·§3.3) — 열린 openpyxl 워크북 위에서 동작하는 순수 함수.
 
 - resolve_area/resolve_anchor: range·find(texts|regex)·relative(anchor|key 기준)·이름 앵커(composite 포함) 해결.
 - extract: effective_spec 목록 → 'group'/'values' 이벤트 스트림(리스트/행렬/병합/stop/결합/업무키 +

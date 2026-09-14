@@ -5,51 +5,63 @@ NASCA/DRM 등으로 보호된 사내 Excel 문서를 **검증된 파싱 스키�
 Agent는 원본의 물리 양식·DRM·병합 셀·단위를 알 필요 없이 표준 테이블만 소비하고, 모든 추출값은
 원본 Sheet/Range까지 추적된다. 최종 CSV/XLSX/SQLite는 필요할 때 만드는 산출물이지 새로운 Source of Truth가 아니다.
 
-현행 런타임은 **v3**(`kg/v3/`, `db/v3/`, `frontend/src/v3/`)다. 설계 근거와 결정은 `docs/`에 있다.
+런타임은 `schema/` 하나다. 설계 근거와 결정은 `docs/`에 있다.
 
 | 문서 | 내용 |
 |---|---|
-| [docs/ARCHITECTURE_V3.md](docs/ARCHITECTURE_V3.md) | ERD(22개 테이블·트리거 35개)·모듈·시퀀스·API 지도·프런트 구조·운영 |
-| [docs/design/v3-contracts.md](docs/design/v3-contracts.md) | 코드 단위 계약(테이블·DSL·서비스 규칙·렌더 서버·API·화면·E2E·이관) |
-| [docs/design/v3-decisions.md](docs/design/v3-decisions.md) | 설계 문서끼리 갈린 지점의 결정과 근거 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | ERD·모듈·시퀀스·API 지도·프런트 구조·운영 |
+| [docs/design/contracts.md](docs/design/contracts.md) | 코드 단위 계약(테이블·DSL·서비스 규칙·렌더 서버·API·화면·E2E·CLI·테스트) |
+| [docs/design/decisions.md](docs/design/decisions.md) | 설계 문서끼리 갈린 지점의 결정과 근거 |
 | [docs/design/system-identity-and-scope.md](docs/design/system-identity-and-scope.md) · [parsing-core-schema.md](docs/design/parsing-core-schema.md) · [ui-development-spec.md](docs/design/ui-development-spec.md) · [drm-viewer-render-architecture.md](docs/design/drm-viewer-render-architecture.md) | 시스템 정체성 · 18개 코어 스키마 · 승인된 UI 기준안 · 렌더 서버 아키텍처 |
-| [docs/e2e-results-v3.md](docs/e2e-results-v3.md) | v3 브라우저 E2E 실행 결과와 완료 조건 대조표 |
+| [docs/e2e-results.md](docs/e2e-results.md) | 브라우저 E2E 실행 결과와 완료 조건 대조표 |
 
 ## 구성
 
 ```
-kg/v3/       v3 런타임 — 파싱 스키마/프로파일 projection, Reader 계약(격리 프로세스), DSL 3.0 검증·컴파일,
-             Import Adapter(3.0·v2·v1·generic), 추출 엔진, 매핑 검수(CAS)·발행, 데이터 빌드, 검수 큐,
-             FastAPI /api/v3, 렌더 서버(kg/v3/render/), v2→v3 이관, raw 감시
-db/v3/       코어 18개 테이블 DDL(SQLite + PostgreSQL 번역) — 불변성·CAS·발행 조건 트리거
-frontend/    React + TypeScript. 기본 화면은 src/v3/(문서 · 파싱 프로파일 · 파싱 스키마 · 데이터 빌드 · 작업 내역 + Source Review 오버레이).
-             빌드(dist)가 커밋되어 서버가 루트 /에 바로 서빙한다. ?v2=1 → v2 화면, ?v1=1 → v1 화면
-e2e/         Playwright 브라우저 시나리오 — v3(e2e/v3, 렌더 서버 별도 프로세스), v2(e2e/v2), v1(run_all.mjs)
-examples/schema_v3/  E2E·데모용 가상 작업 공간 시드(스키마·프로파일·문서 7종)
-kg/, kg/v2/, src/, domains/  이전 런타임(v1 Fixed Domain KG, v2 versioned extraction)과 파서 라이브러리 — 이관 완료까지 유지
-tests/       회귀 전체 (python -m pytest) — v1 · v2 · v3
+schema/      런타임 — 파싱 스키마/프로파일 projection, Reader 계약(격리 프로세스), DSL 3.0 검증·컴파일,
+             Import Adapter(3.0·이전 세대 템플릿·generic), 추출 엔진, 매핑 검수(CAS)·발행, 데이터 빌드,
+             검수 큐, FastAPI /api, 렌더 서버(schema/render/), 원본 폴더 감시(schema/filewatch.py)
+db/          코어 18개 테이블 DDL — schema_sqlite.sql(SQLite) · schema_postgres.sql(PostgreSQL 번역)
+frontend/    React + TypeScript. 화면은 src/app/(문서 · 파싱 프로파일 · 파싱 스키마 · 데이터 빌드 · 작업 내역
+             + Source Review 오버레이). 빌드(dist)가 커밋되어 서버가 루트 /에 바로 서빙한다
+e2e/         Playwright 브라우저 시나리오(e2e/specs, 렌더 서버 별도 프로세스)
+examples/demo/  E2E·데모용 가상 작업 공간 시드(스키마·프로파일·문서 6종)
+tests/       백엔드 회귀 (python -m pytest)
 ```
 
-## 빠른 시작 (v3)
+작업 공간(`<ws>`) 레이아웃 — 정의 파일이 진실이고 DB는 projection, `data/` 아래는 모두 다시 만들 수 있다.
+
+```
+<ws>/workspace.db        런타임 SQLite (schema_meta.version = 3)
+<ws>/schemas/<schema_key>/r0001.json    파싱 스키마 정의(리비전별) + current.json
+<ws>/profiles/<profile_id>/r0001.json   파싱 프로파일 정의(리비전별) + current.json
+<ws>/data/raw/           원본 문서(하위 폴더 허용)
+<ws>/data/exports/<build_key>/  데이터 빌드 산출물 + manifest.json
+<ws>/data/render-cache/  렌더 밴드 캐시(스냅샷별, 재생성 가능)
+<ws>/config/units.yaml   단위 변환표(선택 — 없으면 같은 단위만 출력)
+<ws>/.env                이 작업 공간에만 적용할 환경변수(선택)
+```
+
+## 빠른 시작
 
 ```bash
 pip install -e ".[web,test]"
 
 # 가상 문서·스키마·프로파일이 들어 있는 작업 공간을 만든다 (사용자 원본을 읽지 않는다)
-python -m kg.v3 seed-demo --workspace /tmp/v3-demo
+python -m schema seed-demo --workspace /tmp/demo-ws
 
 # 렌더 서버(별도 프로세스)와 메인 API/UI
-python -m kg.v3 render-serve --ws /tmp/v3-demo --port 8032 &
-KG_V3_RENDER_URL=http://127.0.0.1:8032 python -m kg.v3 serve --ws /tmp/v3-demo --port 8010
-#  → http://localhost:8010/   (KG_V3_RENDER_URL이 없으면 같은 프로세스 안의 렌더 워커를 쓴다)
+python -m schema render-serve --ws /tmp/demo-ws --port 8032 &
+SCHEMA_RENDER_URL=http://127.0.0.1:8032 python -m schema serve --ws /tmp/demo-ws --port 8010
+#  → http://localhost:8010/   (SCHEMA_RENDER_URL이 없으면 같은 프로세스 안의 렌더 워커를 쓴다)
 ```
 
-실제 작업 공간은 `<ws>/data/raw/`에 원본을 두고 `문서 → + 문서 등록`(또는 `python -m kg.v3 watch --ws <ws>`)으로 등록한다.
+실제 작업 공간은 `<ws>/data/raw/`에 원본을 두고 `문서 → + 문서 등록`(또는 `python -m schema watch --ws <ws>`)으로 등록한다.
 원본 폴더(하위 포함)를 한 번에 등록: `문서 → + 문서 등록 → 폴더 → 이 폴더 전체 등록`,
-또는 `python -m kg.v3 register --ws <ws> --directory <폴더>`. 미리보기는 Reader 없이 stat·해시 캐시만 보므로 파일이 수천 개라도 빠르고,
+또는 `python -m schema register --ws <ws> --directory <폴더>`. 미리보기는 Reader 없이 stat·해시 캐시만 보므로 파일이 수천 개라도 빠르고,
 변경 없는 문서는 건너뛰어 같은 폴더를 다시 돌리는 비용이 싸다(다시 읽으려면 `변경 없는 문서·잠긴 문서도 다시 읽기` 또는 `--include-unchanged`).
 등록은 Reader 프로세스 1회로 시트·구조 서명·approved 프로파일 매치를 함께 계산하고, 매치가 `identical`이면 사람 개입 없이
-자동 승인·추출·발행한다(근거는 [v3-decisions §1](docs/design/v3-decisions.md)). 나머지는 `작업 내역`의 검수 큐로 간다.
+자동 승인·추출·발행한다(근거는 [decisions.md §1](docs/design/decisions.md)). 나머지는 `작업 내역`의 검수 큐로 간다.
 
 ## 5개 화면 + Source Review
 
@@ -63,30 +75,36 @@ KG_V3_RENDER_URL=http://127.0.0.1:8032 python -m kg.v3 serve --ws /tmp/v3-demo -
 ## CLI
 
 ```bash
-python -m kg.v3 serve | render-serve | watch | register | migrate | import-schema | import-profile | build | seed-demo
-python -m kg.v3 register --ws /tmp/v3 --directory 2024/공정        # 폴더 아래 전부 등록(요약 JSON, 실패 행이 있으면 종료 코드 1)
-python -m kg.v3 watch --ws /tmp/v3                                 # raw 폴더 감시 → 등록 + 자동 적용(기본 하위 폴더 포함, --no-recursive로 최상위만)
-python -m kg.v3 migrate --ws /tmp/v3 --from-ws domains/financier --report report.json   # v2 작업 공간 이관
+python -m schema serve | render-serve | watch | register | import-schema | import-profile | build | seed-demo
+
+python -m schema register --ws <ws> --directory 2024/공정   # 폴더 아래 전부 등록(요약 JSON, 실패 행이 있으면 종료 코드 1)
+python -m schema watch --ws <ws>                            # raw 폴더 감시 → 등록 + 자동 적용(기본 하위 폴더 포함, --no-recursive로 최상위만)
+python -m schema import-schema --ws <ws> --file schema.json # 정의 파일 → 새 리비전
+python -m schema build --ws <ws> --schema <schema_key> --documents <id> ... --format xlsx --out ./out
 ```
 
-환경변수는 [.env.sample](.env.sample) 참고(`KG_V3_RENDER_URL`, `KG_V3_READER_FACTORY`(DRM Reader), `KG_V3_ACCESS_TOKEN` 등). `kg.webapp`(v1 서버)에도 `/api/v3`가 함께 설치된다.
+서브커맨드를 생략하면 `serve`로 해석한다(`python -m schema --ws <ws> --port 8010`).
+모든 명령은 시작할 때 `<ws>/.env`와 `./.env`를 읽는다([schema/env.py](schema/env.py); 이미 export된 변수가 우선).
+키 목록은 [.env.sample](.env.sample)에 있다 — `SCHEMA_RENDER_URL`, `SCHEMA_READER_FACTORY`(DRM Reader),
+`SCHEMA_ACCESS_TOKEN`, `SCHEMA_REGISTER_DIRECTORY_LIMIT` 등.
 
 ## 테스트
 
 ```bash
-python -m pytest                       # 백엔드 전체 (v1 · v2 · v3)
-cd frontend && npm test                # 컴포넌트 (v2 · v3 — 용어·ID 비노출·진입 호출 수 규칙 포함)
-cd e2e && npm run test:v3              # v3 브라우저 시나리오 (임시 작업 공간 + 렌더 서버 8032)
-cd e2e && npm run test:v2              # v2 브라우저 시나리오 (?v2=1)
+python -m pytest                       # 백엔드 회귀
+cd frontend && npm ci && npm test      # 컴포넌트 (용어·import 금지·ID 비노출·진입 호출 수 규칙 포함)
+cd frontend && npm run build           # dist/ 갱신 (dist는 커밋 대상)
+cd e2e && npm ci && npm test           # 브라우저 시나리오 (임시 작업 공간 + 렌더 서버 8032)
 ```
 
-CI: [.github/workflows/v3.yml](.github/workflows/v3.yml)이 push/PR마다 위 전부를 실행한다. 사전 설치 Chromium을 쓰려면 `KG_E2E_CHROMIUM_PATH`를 지정한다([e2e/README.md](e2e/README.md)).
+CI: [.github/workflows/ci.yml](.github/workflows/ci.yml)이 push/PR마다 위 전부를 실행한다.
+사전 설치 Chromium을 쓰려면 `SCHEMA_E2E_CHROMIUM_PATH`를 지정한다([e2e/README.md](e2e/README.md)).
 
-## 이전 런타임 (v1 · v2)
+## 운영
 
-- **v2** — versioned extraction(`kg/v2/`, 34테이블). `python -m kg.v2 --ws <ws>`로 실행, 화면은 `?v2=1`. 구조와 결정은 [docs/ARCHITECTURE_V2.md](docs/ARCHITECTURE_V2.md)·[docs/design/v2-decisions.md](docs/design/v2-decisions.md). v3 이관은 `python -m kg.v3 migrate`.
-- **v1** — Fixed Domain KG(`kg/`, `kg.db`). `python -m kg.webapp --ws domains/financier --port 8010`, 화면은 `?v1=1`. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)·[kg/README.md](kg/README.md)·[docs/MIGRATION.md](docs/MIGRATION.md).
-- 파서 라이브러리 `src/`(Inspector/RegionDetector/UnitRegistry/RecordBuilder)는 v1·v3 빌드가 재사용한다.
-
-운영 참고: DRM(암호화) 문서는 운영자가 등록한 Reader factory(`KG_V3_READER_FACTORY`)로만 읽으며, 해제본 파일이나 SaveAs 우회를 만들지 않는다.
-사내 DRM 컨테이너 판별 시그니처는 `KG_DRM_MAGIC`으로 주입한다. 작업 이력은 [docs/PROGRESS.md](docs/PROGRESS.md).
+- DRM(암호화) 문서는 운영자가 등록한 Reader factory(`SCHEMA_READER_FACTORY`)로만 읽으며, 해제본 파일이나 SaveAs 우회를 만들지 않는다.
+  Reader는 시간·메모리 한도가 걸린 격리 프로세스에서 돌고(`SCHEMA_READER_TIMEOUT_SECONDS`·`SCHEMA_READER_MEMORY_MB`),
+  기본 Reader는 `local-xlsx`(평문 xlsx)만 다룬다.
+- 백업 대상은 `<ws>/schemas/`·`<ws>/profiles/`(정의 = 진실)와 `<ws>/data/raw/`다. `<ws>/workspace.db`와
+  `<ws>/data/exports/`·`<ws>/data/render-cache/`는 정의와 원본에서 다시 만들 수 있어 Git에 넣지 않는다(.gitignore).
+- 작업 이력은 [docs/PROGRESS.md](docs/PROGRESS.md).

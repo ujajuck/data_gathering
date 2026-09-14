@@ -1,51 +1,31 @@
-# 파이프라인 산출물 (재현 가능 — kg.cli ingest/build로 재생성)
+# 런타임 산출물 — 작업 공간의 DB(<ws>/workspace.db)와 빌드/렌더 캐시는 git에 넣지 않는다
 *.db
-
-# DVC 사용 시 raw는 DVC가 추적한다 (지금은 예시 3종을 git에 포함)
-# data/raw/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+data/exports/
+data/render-cache/
 
 # Virtual environment
 .venv/
-
 
 # IDE / OS
 __pycache__/
 *.pyc
 .pytest_cache/
-.dvc/cache
 .idea/
 .vscode/
 *.swp
 
-# Domain workspace runtime data
-domains/*/data/
-domains/*/server.log
-domains/*/ingest_log.txt
-
-# KG reference (derived)
-data/kg_reference.json
-
-# Frontend
-frontend/node_modules/
-e2e/node_modules/
-e2e/playwright-report/
-e2e/test-results/
-
 # 환경변수 (샘플: .env.sample)
 .env
 
-# v2 runtime outputs (source data and DB artifacts never enter git)
-data/kg/
-data/v2-builds/
-*.sqlite-wal
-*.sqlite-shm
-# python -m kg.v2 export / age-projection 기본 출력 경로와 사용자 DB 파일 (dvc add 전에는 git에 두지 않는다)
-exports/
-age/
-*.sqlite
+# Frontend / E2E
+frontend/node_modules/
+e2e/node_modules/
+e2e/playwright-report*/
+e2e/test-results*/
+e2e/.workspace*
 
 # pip install -e 산출물
 *.egg-info/
-e2e/v3/.workspace*
-e2e/playwright-report-v3*/
-e2e/test-results-v3*/

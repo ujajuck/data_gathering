@@ -339,7 +339,7 @@ def client(tmp_path):
     make_tree(root)
     app = create_app(root, start_worker=False)
     with TestClient(app) as test_client:
-        app.state.v3._render = types.SimpleNamespace(
+        app.state.service._render = types.SimpleNamespace(
             invalidate=lambda *_: None, close=lambda: None, mode="inprocess", url=None, status=lambda: {}
         )
         yield test_client

@@ -1,4 +1,4 @@
-"""v3 엔진: regex find·이름 앵커·composite·AMBIGUOUS_ANCHOR·relative.anchor·relations·list/matrix/merged/stop·
+"""실행 엔진: regex find·이름 앵커·composite·AMBIGUOUS_ANCHOR·relative.anchor·relations·list/matrix/merged/stop·
 match_profile(within 밖 앵커, missing, identical/compatible/incompatible)·Reader describe(profiles)/extract/render."""
 
 import copy
@@ -235,7 +235,7 @@ def test_ambiguous_anchor(tmp_path):
     fixed["anchors"]["hdr_temp"]["find"]["occurrence"] = 0
     canonical = validate_profile(fixed, FIELDS)
     assert engine.match_profile(canonical, cached)["compatibility"] == "compatible"
-    # 일반 find 영역은 v2대로 모든 히트를 돌려준다.
+    # 일반 find 영역은 모든 히트를 돌려준다.
     spec = definition(rules=[{"rule_key": "all", "selector": {"key": {"areas": [{"sheet_role": "main", "range": "A1"}]}, "value": {"areas": [{"sheet_role": "main", "find": {"texts": ["온도"], "within": "A1:Z60"}}], "cardinality": "list", "axis": "down"}}}])
     groups, values = run({"raw": raw, "cached": cached}, validate_profile(spec, FIELDS), {"main": ["공정 기록"], "common": ["공통"], "exp": ["10C"]})
     _, items = only(groups, values, "all")
@@ -574,13 +574,12 @@ def test_reader_extract_stream_ends_with_verified(reader_root):
     assert exc.value.code == "SOURCE_VERSION_CHANGED"
 
 
-def test_make_reader_factory_fallback(reader_root, monkeypatch):
+def test_make_reader_requires_registered_factory(reader_root, monkeypatch):
     monkeypatch.delenv("SCHEMA_READER_FACTORY", raising=False)
-    monkeypatch.delenv("KG_V2_READER_FACTORY", raising=False)
     with pytest.raises(Problem) as exc:
         make_reader(reader_root, "drm-x", "tester")
     assert exc.value.code == "DRM_READER_REQUIRED"
-    monkeypatch.setenv("KG_V2_READER_FACTORY", "tests.v2_reader_fixture:factory")
+    monkeypatch.setenv("SCHEMA_READER_FACTORY", "tests.reader_fixture:factory")
     assert make_reader(reader_root, "revocable-xlsx", "tester").__class__.__name__ == "Revocable"
 
 

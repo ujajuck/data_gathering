@@ -1,8 +1,8 @@
-"""단위 파싱·변환 — 빌드가 값을 표준 단위로 맞출 때 쓴다.
+"""단위 변환표(`<ws>/config/units.yaml`) — 빌드가 값을 표준 단위로 맞출 때 쓴다.
 
-원본값·원본단위와 정규화값·표준단위를 모두 보존하는 결정론적 변환만 수행한다.
-선형(factor)과 아핀(factor+offset — K, °F) 변환을 지원한다:
-    base = value * factor + offset
+단위 이름 정규화(별칭·조건 표기 제거), 단위가 속한 차원 조회, 차원 안의 변환 계수 제공만 한다.
+선형(factor)과 아핀(factor+offset — K, °F)을 지원한다: `base = value * factor + offset`.
+계산은 호출자(`schema/build.py`)가 Decimal로 한다 — 원본값·원본단위와 정규화값·표준단위를 모두 보존한다.
 """
 from __future__ import annotations
 
@@ -13,9 +13,6 @@ import yaml
 
 # "cP@25℃", "cP @25℃", "kWh/톤" 같은 조건/부가 표기를 떼어낸 코어 단위
 _CONDITION_RE = re.compile(r"\s*@.*$")
-
-# 값에 단위가 내장된 표기: "180 ℃", "24℃", "8 h" — 숫자부 + 짧은 단위부
-_VALUE_UNIT_RE = re.compile(r"^\s*([-+]?\d+(?:\.\d+)?)\s*([^\s\d]{1,8})\s*$")
 
 
 def _parse_entry(entry) -> tuple[float, float]:
@@ -54,39 +51,6 @@ class UnitRegistry:
         u = self.normalize_unit(unit)
         return set(self._unit_dims.get(u, set())) if u else set()
 
-    def dimension_of(self, unit: str | None) -> str | None:
-        """대표 차원 하나 (다중 차원이면 임의) — 존재 여부 확인용."""
-        dims = self.dimensions_of(unit)
-        return sorted(dims)[0] if dims else None
-
-    def in_dimension(self, unit: str | None, dimension: str) -> bool:
-        return dimension in self.dimensions_of(unit)
-
-    def compatible(self, unit_a: str | None, unit_b: str | None) -> bool:
-        return bool(self.dimensions_of(unit_a) & self.dimensions_of(unit_b))
-
-    def parse_value(self, text) -> tuple[float, str] | None:
-        """'180 ℃' / '24℃' / '8 h' → (숫자, 등록된 단위). 등록 단위가 아니면 None."""
-        if not isinstance(text, str):
-            return None
-        m = _VALUE_UNIT_RE.match(text)
-        if not m:
-            return None
-        unit = self.normalize_unit(m.group(2))
-        if unit and self.dimensions_of(unit):
-            return float(m.group(1)), unit
-        return None
-
-    def convert(self, value: float, from_unit: str, to_unit: str) -> float:
-        """Convert within one shared dimension; raises on incompatible units."""
-        fu, tu = self.normalize_unit(from_unit), self.normalize_unit(to_unit)
-        if fu == tu:
-            return value
-        shared = self.dimensions_of(fu) & self.dimensions_of(tu)
-        if not shared:
-            raise ValueError(f"incompatible units: {from_unit} -> {to_unit}")
-        dim = sorted(shared)[0]
-        f_from, o_from = self._params[(dim, fu)]
-        f_to, o_to = self._params[(dim, tu)]
-        base = value * f_from + o_from
-        return (base - o_to) / f_to
+    def factor_offset(self, dimension: str, unit: str) -> tuple[float, float]:
+        """한 차원 안에서 `base = value * factor + offset`의 계수. 산술은 호출자가 한다(빌드는 Decimal)."""
+        return self._params[(dimension, unit)]

@@ -1,7 +1,7 @@
-"""v3 E2E 작업 공간 시드(계약 §8) — openpyxl로 가상 문서를 만들고 실제 `schema.service.Service`로 등록·승인·발행까지 돌린다.
+"""E2E·데모 작업 공간 시드(계약 §8) — openpyxl로 가상 문서를 만들고 실제 `schema.service.Service`로 등록·승인·발행까지 돌린다.
 
-python -m examples.demo.demo --workspace /tmp/data-gathering-v3-demo
-python -m schema serve --ws /tmp/data-gathering-v3-demo --port 8031
+python -m examples.demo.demo --workspace /tmp/data-gathering-demo
+python -m schema serve --ws /tmp/data-gathering-demo --port 8031
 
 시나리오: 스키마 `공정 데이터 표준` → 프로파일 `공정데이터_A양식`(대표 문서 `공정데이터_2024_01.xlsx`로 승인) →
 같은 양식 문서 3개(자동 적용·승인·발행), 앵커가 이동한 문서 1개(compatible → 검수), 다른 양식 1개(unmatched),
@@ -345,7 +345,7 @@ def _register(service, names, principal):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="v3 데모 작업 공간 시드")
+    parser = argparse.ArgumentParser(description="데모 작업 공간 시드")
     parser.add_argument("--workspace", type=Path, required=True)
     args = parser.parse_args(argv)
     print(json.dumps(seed(args.workspace), ensure_ascii=False, indent=2))

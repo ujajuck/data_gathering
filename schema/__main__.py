@@ -7,7 +7,7 @@ python -m schema import-profile --ws <ws> --schema <schema_key> --file profile.j
 python -m schema build --ws <ws> --schema <schema_key> --documents <id> ... [--columns field_key[=header[:unit]] ...] [--row-mode record] --format xlsx --out DIR
 python -m schema seed-demo --workspace <ws>
 
-모두 시작 시 `.env`를 읽는다(schema/env.py). 계약 §10."""
+모두 시작 시 `.env`를 읽는다(schema/env.py). 계약 §9."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from .db import Problem
-from .env import load_env
+from .env import load_env, warn_legacy_env
 
 COMMANDS = ("serve", "render-serve", "watch", "register", "import-schema", "import-profile", "build", "seed-demo")
 # 폴더 일괄 등록은 워커 스레드 없이 같은 프로세스에서 돌린다(jobs.wait → run_one). 큰 폴더도 끝까지 기다린다.
@@ -173,6 +173,7 @@ def run_register(args) -> int:
 def main(argv=None):
     args = parse(argv)
     load_env(getattr(args, "ws", None) or getattr(args, "workspace", None) or ".", ".")
+    warn_legacy_env()  # 옛 접두(KG_*) 값은 읽지 않는다 — 조용히 기본값으로 떨어지지 않게 한 번 알린다.
     if args.command == "serve":
         import uvicorn
 

@@ -18,11 +18,13 @@ from uuid import uuid4
 SCHEMA_VERSION = 3
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = REPO_ROOT / "db/schema_sqlite.sql"
+# 런타임 경로가 아니다 — 옛 배치의 DB를 새 위치로 옮기지 않은 작업 공간에서 빈 DB를 만들지 않으려고만 본다.
+PREVIOUS_DB_PATH = "data/kg/v3.db"
 
 RUNTIME_DDL = """
 CREATE TABLE IF NOT EXISTS runtime_job (
   job_id TEXT PRIMARY KEY NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('register','extract','reparse','build','test','queue_action','migrate')),
+  kind TEXT NOT NULL CHECK (kind IN ('register','extract','reparse','build','test','queue_action')),
   state TEXT NOT NULL CHECK (state IN ('queued','running','succeeded','failed','cancelled')),
   principal TEXT NOT NULL, payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
   result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
@@ -189,6 +191,14 @@ class Database:
     def __init__(self, root: Path, schema_path: Path | None = None):
         self.root = Path(root).resolve()
         self.path = self.root / "workspace.db"
+        if not self.path.exists() and (self.root / PREVIOUS_DB_PATH).exists():
+            # 옛 배치의 DB가 있는데 새 위치가 비어 있다 — 빈 DB를 만들면 문서·승인·발행이 사라진 것처럼 보인다.
+            raise Problem(
+                "WORKSPACE_DB_MOVED",
+                f"DB 파일 위치가 <작업 공간>/workspace.db로 바뀌었습니다. "
+                f"`mv {self.root / PREVIOUS_DB_PATH} {self.path}` 후 다시 실행하세요.",
+                409,
+            )
         self.root.mkdir(parents=True, exist_ok=True)
         schema = Path(schema_path) if schema_path else SCHEMA_PATH
         with self.connect() as conn:

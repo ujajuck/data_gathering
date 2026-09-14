@@ -1,5 +1,5 @@
--- data_gathering v3 코어 스키마의 PostgreSQL 번역본(계약 §1.8). schema_sqlite.sql과 테이블·컬럼·트리거·뷰 이름이 1:1이다.
--- 변환 규칙(v2와 같음): 애플리케이션 발급 uuid4 TEXT id → UUID, ISO TEXT 시각 → TIMESTAMPTZ, 0/1 → BOOLEAN,
+-- data_gathering 코어 스키마의 PostgreSQL 번역본(계약 §1.8). schema_sqlite.sql과 테이블·컬럼·트리거·뷰 이름이 1:1이다.
+-- 변환 규칙: 애플리케이션 발급 uuid4 TEXT id → UUID, ISO TEXT 시각 → TIMESTAMPTZ, 0/1 → BOOLEAN,
 --   json_valid() TEXT → JSONB, byte_size → BIGINT, IS NOT → IS DISTINCT FROM, RAISE(ABORT) → RAISE EXCEPTION.
 --   제공자가 보고한 naive 시각(document_snapshot.authored_at)은 시간대를 추정하지 않기 위해 TEXT를 유지한다.
 --   논리 키(schema_key/field_key/rule_key/role_key/scope_key)와 해시·토큰·서명 문자열은 TEXT를 유지한다.
@@ -13,7 +13,7 @@ CREATE TABLE schema_meta (
     version INTEGER PRIMARY KEY CHECK (version = 3),
     description TEXT NOT NULL
 );
-INSERT INTO schema_meta VALUES (3, 'Parsing Schema / Parsing Profile runtime v3; PostgreSQL translation of schema_sqlite.sql');
+INSERT INTO schema_meta VALUES (3, 'Parsing Schema / Parsing Profile runtime; schema revision 3; PostgreSQL translation of schema_sqlite.sql');
 
 -- §1.1 문서. current_snapshot_id FK는 document_snapshot 생성 뒤 ALTER TABLE로 붙인다(상호 참조).
 CREATE TABLE document (

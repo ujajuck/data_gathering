@@ -91,7 +91,7 @@ class RenderWorker:
             return
         self.stop.clear()
         self.threads = [
-            threading.Thread(target=self._loop, name=f"kg-v3-render-{n}", daemon=True)
+            threading.Thread(target=self._loop, name=f"schema-render-{n}", daemon=True)
             for n in range(max(1, self.concurrency))
         ]
         for thread in self.threads:
@@ -262,7 +262,7 @@ class RenderWorker:
             self._finish(job, None if exc.code == "CANCELLED" else exc)
             return
         except Exception:
-            log.exception("v3 render failed: %s/%s", key[0], key[1])
+            log.exception("render failed: %s/%s", key[0], key[1])
             self._finish(job, Problem("RENDER_FAILED", "렌더에 실패했습니다. 서버 기록을 확인하세요.", 500))
             return
         self._finish(job, None)
@@ -309,7 +309,7 @@ def create_render_app(root, event_source=None, worker: RenderWorker | None = Non
         yield
         worker.close()
 
-    app = FastAPI(title="kg v3 render", docs_url=None, redoc_url=None, lifespan=lifespan, dependencies=[Depends(require_token)])
+    app = FastAPI(title="Semantic Excel Integration render", docs_url=None, redoc_url=None, lifespan=lifespan, dependencies=[Depends(require_token)])
     app.state.worker = worker
 
     @app.exception_handler(Problem)

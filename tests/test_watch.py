@@ -1,4 +1,4 @@
-"""raw 폴더 감시(계약 §10 watch): 파일을 넣으면 등록되고, approved 프로파일과 identical이면 자동 적용·추출·발행된다."""
+"""raw 폴더 감시(계약 §9 watch): 파일을 넣으면 등록되고, approved 프로파일과 identical이면 자동 적용·추출·발행된다."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def test_dropped_file_is_registered_and_auto_applied(approved):
 
 
 def test_watch_covers_subfolders_by_default(approved):
-    """계약 §10: watch는 기본으로 하위 폴더까지 감시한다(source_ref는 data/raw 기준 상대 경로)."""
+    """계약 §9: watch는 기본으로 하위 폴더까지 감시한다(source_ref는 data/raw 기준 상대 경로)."""
     root, service = approved["root"], approved["service"]
     (root / "data/raw/하위/더").mkdir(parents=True)
     build_workbook(root / "data/raw/하위/더/e.xlsx", temps=(41, 42, 43), lots=("Y1", "Y2", "Y3"))
@@ -98,7 +98,7 @@ def test_watch_covers_subfolders_by_default(approved):
 
 
 def test_watch_skips_hidden_folders(approved):
-    """계약 §10: watch도 §4.1.1 스캔과 같은 제외 규칙을 쓴다 — 숨김 폴더(.dvc·휴지통 등) 안의 파일은 등록하지 않는다."""
+    """계약 §9: watch도 §4.1.1 스캔과 같은 제외 규칙을 쓴다 — 숨김 폴더(.dvc·휴지통 등) 안의 파일은 등록하지 않는다."""
     root, service = approved["root"], approved["service"]
     (root / "data/raw/.dvc").mkdir()
     build_workbook(root / "data/raw/.dvc/cache.xlsx", temps=(9, 9, 9), lots=("Z1", "Z2", "Z3"))

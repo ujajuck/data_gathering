@@ -1,4 +1,4 @@
-"""v3 PostgreSQL DDL 번역본의 구문/구조 검증(계약 §1.8). 실제 PostgreSQL 서버는 없으므로 pglast 파싱과 SQLite DDL과의 객체 집합 비교만 한다."""
+"""PostgreSQL DDL 번역본의 구문/구조 검증(계약 §1.8). 실제 PostgreSQL 서버는 없으므로 pglast 파싱과 SQLite DDL과의 객체 집합 비교만 한다."""
 
 from __future__ import annotations
 

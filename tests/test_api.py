@@ -1,4 +1,4 @@
-"""v3 API 통합(계약 §6, 빌드·큐 제외): examples.demo.demo.seed 작업 공간 위에서 TestClient로 엔드포인트를 검증한다.
+"""API 통합(계약 §6, 빌드·큐 제외): examples.demo.demo.seed 작업 공간 위에서 TestClient로 엔드포인트를 검증한다.
 
 상태·검색·설정 · 문서 목록(필터·정렬·커서·상태 칩) · 상세 탭 · 등록(+wait) · 수동 적용 · 렌더 프록시(202→200→304, asset) ·
 프로파일(목록·상세·리비전·export·import-preview v1/v2·생성·수정 SCHEMA_IMMUTABLE·테스트·승인·재파싱) · 스키마(목록·상세·트리·그래프·
@@ -46,7 +46,7 @@ def poll(client, path, timeout=15.0):
 
 @pytest.fixture(scope="session")
 def seeded(tmp_path_factory):
-    root = tmp_path_factory.mktemp("v3-seed")
+    root = tmp_path_factory.mktemp("seed")
     return root, demo.seed(root)
 
 
@@ -57,7 +57,7 @@ def world(tmp_path, seeded):
     shutil.copytree(source, root)
     app = create_app(root, start_worker=False)
     with TestClient(app) as client:
-        service = app.state.v3
+        service = app.state.service
         service._render = RenderClient(root, event_source=inprocess_source)
         yield Env(client, root, copy.deepcopy(summary), service)
 
@@ -534,10 +534,10 @@ def test_jobs_list_filters_cursor_and_auth(world, monkeypatch):
     assert world.client.get("/api/status", headers={"Authorization": "Bearer wrong"}).status_code == 401
     assert world.client.get("/api/status", headers={"Authorization": "Bearer secret"}).status_code == 200
     assert world.client.get("/api/settings", headers={"Authorization": "Bearer secret"}).json()["access_token_required"]
+    # 토큰을 설정하지 않으면 공개다(대체 환경변수는 없다).
     monkeypatch.delenv("SCHEMA_ACCESS_TOKEN")
-    monkeypatch.setenv("KG_V2_ACCESS_TOKEN", "fallback")
-    assert world.client.get("/api/status").status_code == 401
-    assert world.client.get("/api/status", headers={"Authorization": "Bearer fallback"}).status_code == 200
+    assert world.client.get("/api/status").status_code == 200
+    assert not world.client.get("/api/settings").json()["access_token_required"]
 
 
 def test_body_limit_and_validation_shapes(world):
@@ -546,18 +546,3 @@ def test_body_limit_and_validation_shapes(world):
     broken = world.client.post("/api/profiles/import-preview", content=b"{not json", headers={"content-type": "application/json"})
     assert broken.status_code == 422 and broken.json()["error"]["code"] == "VALIDATION_ERROR"
     assert world.post("/profiles", {"schema_key": "process_standard"}, expect=422)["error"]["fields"][0]["field"].endswith("definition")
-
-
-def test_install_into_webapp_alongside_v2(tmp_path, seeded):
-    from kg.webapp import create_app as create_webapp
-
-    source, _ = seeded
-    root = tmp_path / "ws"
-    shutil.copytree(source, root)
-    app = create_webapp(root)
-    with TestClient(app) as client:
-        assert client.get("/api/status").json()["counts"]["documents"] == 6
-        assert client.get("/api/v2/status").status_code == 200
-        v2_error = client.get("/api/v2/jobs/nope")
-        assert v2_error.status_code == 404 and v2_error.json()["error"]["code"]
-        assert client.get("/api/documents?status=bogus").json()["error"]["code"] == "VALIDATION_ERROR"

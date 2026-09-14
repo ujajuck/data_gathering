@@ -1,4 +1,4 @@
-"""v3 API 쓰기 본문 계약(§6). 모든 모델은 extra=forbid이며 위치·의미 검증은 service/profile이 수행한다."""
+"""API 쓰기 본문 계약(§6). 모든 모델은 extra=forbid이며 위치·의미 검증은 service/profile이 수행한다."""
 
 from __future__ import annotations
 

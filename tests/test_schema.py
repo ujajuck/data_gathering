@@ -1,4 +1,4 @@
-"""v3 코어 DDL(db/schema_sqlite.sql)의 불변식 검증(계약 §1, §11 첫 항목). 서비스/API가 아니라 DB가 막는지를 본다."""
+"""코어 DDL(db/schema_sqlite.sql)의 불변식 검증(계약 §1, §10 첫 항목). 서비스/API가 아니라 DB가 막는지를 본다."""
 
 from __future__ import annotations
 
@@ -115,7 +115,7 @@ def create_fixture(conn):
     conn.commit()
 
 
-class SchemaV3Tests(unittest.TestCase):
+class CoreSchemaTests(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")
         self.addCleanup(self.conn.close)

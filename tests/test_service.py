@@ -1,4 +1,4 @@
-"""v3 서비스(§4.1–§4.9, §4.12): 정의 가져오기 projection, 등록(Reader 1회), 수동 적용·검수·승인·rematch 소급,
+"""서비스(§4.1–§4.9, §4.12): 정의 가져오기 projection, 등록(Reader 1회), 수동 적용·검수·승인·rematch 소급,
 자동 승인·추출·발행, compatible 검수, CAS 충돌, 역방향 조회, 새 snapshot 승계, 잠긴 파일, dry-run, 목록·검색."""
 
 from __future__ import annotations

@@ -2,12 +2,19 @@
 
 이미 설정된 환경 변수는 덮어쓰지 않는다(운영 환경의 export가 우선). 값은 저장소에 두지 않고
 `.env`(git 미추적)에 두며, `.env.sample`이 키 목록의 기준이다.
+
+읽는 접두는 `SCHEMA_` 하나뿐이다. 옛 접두는 폴백하지 않고 `warn_legacy_env()`가 시작할 때 한 번 짚어 준다
+(옛 이름만 설정돼 있으면 접근 토큰·렌더 주소가 조용히 꺼지므로).
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+
+# 더 이상 읽지 않는 옛 접두 — 값이 남아 있으면 기본값으로 떨어지는 것을 알린다.
+LEGACY_PREFIXES = ("KG_V3_", "KG_V2_", "KG_E2E_", "KG_DRM_")
 
 
 def parse_env(text: str) -> dict[str, str]:
@@ -51,3 +58,31 @@ def load_env(*directories: os.PathLike[str] | str, environ: dict[str, str] | Non
                 env[key] = value
                 applied.append(key)
     return applied
+
+
+def legacy_env_keys(environ: dict[str, str] | None = None) -> list[str]:
+    """설정돼 있지만 이제 읽지 않는 옛 접두 환경변수 이름(정렬)."""
+    env = os.environ if environ is None else environ
+    return sorted(k for k in env if k.startswith(LEGACY_PREFIXES))
+
+
+def renamed_key(key: str) -> str:
+    """옛 이름 → 지금 이름. `KG_V3_X`·`KG_V2_X` → `SCHEMA_X`, `KG_E2E_X`·`KG_DRM_X` → `SCHEMA_E2E_X`·`SCHEMA_DRM_X`."""
+    for prefix in ("KG_V3_", "KG_V2_"):
+        if key.startswith(prefix):
+            return "SCHEMA_" + key[len(prefix) :]
+    return "SCHEMA_" + key[len("KG_") :]
+
+
+def warn_legacy_env(environ: dict[str, str] | None = None, stream=None) -> list[str]:
+    """옛 접두 환경변수가 남아 있으면 stderr로 알린다(폴백하지 않는다). 알린 키 목록을 돌려준다."""
+    keys = legacy_env_keys(environ)
+    if keys:
+        renamed = ", ".join(f"{k} → {renamed_key(k)}" for k in keys)
+        print(
+            f"[경고] 더 이상 읽지 않는 환경변수 {len(keys)}개가 설정돼 있습니다: {renamed}. "
+            "값은 무시되고 기본값이 쓰입니다 — 접근 토큰은 인증이 꺼지고, 렌더 주소는 같은 프로세스 렌더로 내려갑니다. "
+            "`SCHEMA_` 접두로 바꾸세요.",
+            file=sys.stderr if stream is None else stream,
+        )
+    return keys

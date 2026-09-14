@@ -1,4 +1,4 @@
-"""렌더 서버(계약 §5, §11 test_v3_render.py): 밴드·창 불변식·asset 격리·202/200/304·멱등 큐·invalidate 세대·격리 중 창 응답."""
+"""렌더 서버(계약 §5, §10 test_render.py): 밴드·창 불변식·asset 격리·202/200/304·멱등 큐·invalidate 세대·격리 중 창 응답."""
 
 from __future__ import annotations
 

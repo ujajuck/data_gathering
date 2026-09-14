@@ -3,26 +3,71 @@
 작업 단위(=커밋)마다 한 항목씩 기록한다. 상세 근거·검증 방법은 각 커밋
 메시지에 있고, 여기는 흐름을 한눈에 보는 색인이다. 최신이 위.
 
-## 2026-09-14 — v3 재설계 (claude/system-redesign-e2e-docs)
+## 2026-09-14 — 재설계·레거시 정리 (claude/system-redesign-e2e-docs)
 
-- **Codex 설계 문서 기반 v3 재설계·구현·E2E** (이 브랜치의 커밋 묶음)
-  - 입력: `claude/data-gathering-schema-review-6kf0n9`의 Codex 문서군(시스템 정체성·18개 코어 스키마·
+- **정리 리뷰 반영 — 이름공간 잔재·죽은 코드 제거 + 조용한 실패 방지 2건** (이 커밋 — 아래 정리 항목에 대한 리뷰 반영)
+  - 프런트 이름공간: 경로만 바뀌고 남아 있던 `v3` 이름을 실제 이름까지 옮겼다 —
+    CSS 루트 클래스 `.v3` → `.app`, 클래스·DOM id 접두 `v3-` → `app-`, 토큰 `--v3-*` → `--app-*`,
+    브라우저 저장소 키 `v3.token`·`v3.build.draft`·`v3.build.columns`·`v3.profile.draft` → `schema.*`,
+    테스트 픽스처 `v3Fixture` → `appFixture`. `frontend/src`·`frontend/tests`·`e2e/specs` 세 곳을 같은 커밋에서 바꿔
+    셀렉터 계약이 어긋나지 않는다. 남은 `v3`는 스키마·프로파일 **리비전 표시**(`… v3`)뿐이다
+  - 죽은 값 제거: 이관 도구를 지웠는데 남아 있던 작업 종류 `migrate`를 DDL CHECK·API `JobKind`·
+    화면 라벨·계약 문서에서 함께 뺐다(작업 내역의 빈 '마이그레이션' 필터가 사라진다).
+    `UnitRegistry`는 빌드가 실제로 쓰는 것만 남기고(`load`·`normalize_unit`·`dimensions_of` + 새 `factor_offset`),
+    `build.py`가 private `_params`를 뚫던 자리를 공개 접근자로 바꿨다(Decimal 산술은 그대로).
+    v1 시절 작업 공간 파일 `config/concepts.yaml`·`relations.yaml`·`parser_rules.yaml`과
+    `profileDraft.ts`의 호출자 없는 export를 지웠다
+  - 조용한 실패 방지(호환 껍데기가 아니라 한 번 짚고 멈추는 안전장치): 옛 위치(`<ws>/data/kg/v3.db`)에 DB가 있는데
+    `<ws>/workspace.db`가 없으면 빈 DB를 만들지 않고 409 `WORKSPACE_DB_MOVED`로 멈춘다(문서가 전부 사라진 것처럼 보이던 경로).
+    옛 접두(`KG_V3_*`·`KG_V2_*`·`KG_E2E_*`·`KG_DRM_*`) 환경변수가 설정돼 있으면 시작할 때 stderr로 한 번 경고한다
+    (옛 이름만 남은 배포에서 접근 토큰이 소리 없이 꺼지던 경로). 폴백은 만들지 않았다
+  - 계약 절 번호 정리: 이관 절 삭제 뒤 §10 CLI → §9 · §11 테스트 → §10으로 바뀐 것을 코드·테스트 주석 9곳에 반영,
+    없는 심볼을 가리키던 계약 §2.1 `readers.XlsxReader.region` → `engine.region`
+  - 검증: `python3 -m pytest tests -q` **205 passed · 47 subtests**(45.2s) ·
+    `frontend: npx vitest run` **15 files / 150 tests passed**(32.0s) + `npm run build` ·
+    `e2e: npm test` **21 passed**(2.7m, 연속 3회). `docs/e2e-results.md` §3 로그·§5 수치를 현재 트리 실행으로 교체
+
+- **레거시 삭제 · `kg` → `schema` 개명 · 작업 공간 경로 정리** (이 커밋)
+  - 무엇: 저장소에 함께 있던 이전 세대 런타임을 전부 지우고, 남은 하나의 이름을 구조에 맞췄다.
+    `kg/`(v1 모듈 · `kg/v2/` 전부) · 파서 라이브러리 `src/` · 예제 작업 공간 `domains/` · v2→v3 이관 도구
+    (`migrate.py`, CLI `migrate`, 관련 테스트·문서) · v1·v2 프런트 자산 · `e2e/v1`·`e2e/v2` · v1·v2 문서를 삭제했다.
+    현행이 실제로 쓰던 것만 새 위치로 옮겼다: `spec.py`·`normalization.py`·`readers.py`(상속 없이 한 클래스)·
+    `filewatch.py`·`units.py`. 하위 호환 shim(구 경로 re-export · 구 환경변수 폴백 · `/api/v3` 별칭)은 두지 않았다.
+  - 이름: `kg/v3/*` → `schema/*`(v3 하위 패키지 없이 평탄화), `db/v3/*.sql` → `db/*.sql`,
+    `frontend/src/v3/` → `frontend/src/app/`, `e2e/v3/` → `e2e/specs/` + `e2e/serve.py`,
+    `tests/test_v3_*.py` → `tests/test_*.py`, API 접두 `/api/v3` → `/api`,
+    환경변수 `KG_V3_*`·`KG_E2E_*` → `SCHEMA_*`·`SCHEMA_E2E_*`(폴백 없음), CLI `python -m kg.v3` → `python -m schema`
+  - 작업 공간: DB 파일을 `<ws>/data/kg/v3.db` → **`<ws>/workspace.db`**로 옮겼다. `data/` 아래에는 다시 만들 수 있는
+    것만 남는다(`raw/` 입력, `exports/`·`render-cache/` 파생). 런타임 경로·`.gitignore`·화면 어디에도 `data/kg`를 쓰지 않는다
+    (옛 위치를 가리키는 곳은 `schema/db.py`의 안전장치 상수 하나와 그 근거를 적은 문서뿐이다).
+    `schema_meta.version = 3`은 스키마 리비전 번호라 그대로 둔다
+  - 검증: `python -m pytest -q` **205 passed · 47 subtests** (45.2s) · `cd frontend && npm test`
+    **15 files / 150 tests passed** (32.0s). 브라우저 스위트는 `docs/e2e-results.md` 참고
+  - 문서: v1·v2 문서 삭제(`ARCHITECTURE_V2.md`·`MIGRATION.md`·`IMPLEMENTATION_PLAN.md`·`design/db-schema-v2*`·
+    `design/v2-*`·`design/ui-screen-definition.md`·`design/ui-wireframes.md`·`design/*dvc-minimal*`),
+    `ARCHITECTURE_V3.md` → `ARCHITECTURE.md` · `e2e-results-v3.md` → `e2e-results.md` ·
+    `design/v3-contracts.md` → `design/contracts.md` · `design/v3-decisions.md` → `design/decisions.md`(§12 추가),
+    README 재작성(작업 공간 레이아웃 포함), CI `.github/workflows/v3.yml` → `ci.yml`(v2 단계 제거),
+    `.claude/settings.json` deny 경로 갱신
+
+- **설계 문서 기반 재설계·구현·E2E** (이 브랜치의 커밋 묶음)
+  - 입력: `claude/data-gathering-schema-review-6kf0n9`의 설계 문서군(시스템 정체성·18개 코어 스키마·
     개발 기준안+승인 목업·렌더 서버 아키텍처)을 fast-forward 병합. 코드 단위 계약
-    `docs/design/v3-contracts.md`(적대적 검증 45건 반영), 문서 간 충돌 결정 `docs/design/v3-decisions.md`
-  - 백엔드 `kg/v3/`·`db/v3/`: 18개 코어 테이블(+런타임 2) DDL SQLite/PostgreSQL, 트리거 35개(불변·CAS·
+    `docs/design/contracts.md`(적대적 검증 45건 반영), 문서 간 충돌 결정 `docs/design/decisions.md`
+  - 백엔드 `schema/`·`db/`: 18개 코어 테이블(+런타임 2) DDL SQLite/PostgreSQL, 트리거 35개(불변·CAS·
     발행 조건·projection 보호), Parsing Profile DSL 3.0(이름 앵커·composite·regex·relations·split_delimiter),
     Import Adapter(3.0/v2/v1/generic), 추출 엔진·매치 판정, Reader 격리(forkserver), 서비스(등록 1회 Reader →
     자동 적용/승계/검수 CAS/추출/발행/프로파일 테스트·승인·재파싱/문서 상태 캐시), 데이터 빌드(CSV/XLSX/SQLite+manifest),
-    검수 큐 5종(묶음 처리), FastAPI `/api/v3`, 별도 렌더 서버(밴드 캐시·창 응답·asset·ETag/304·인증),
+    검수 큐 5종(묶음 처리), FastAPI `/api`, 별도 렌더 서버(밴드 캐시·창 응답·asset·ETag/304·인증),
     v2→v3 이관, raw 감시. 적대적 리뷰 32건 중 31건 반영
-  - 프런트 `frontend/src/v3/`: 좌측 사이드바 5화면(문서·파싱 프로파일·파싱 스키마·데이터 빌드·작업 내역)+설정,
+  - 프런트 `frontend/src/app/`: 좌측 사이드바 5화면(문서·파싱 프로파일·파싱 스키마·데이터 빌드·작업 내역)+설정,
     Source Review 오버레이, 창 단위 가상화 SheetViewer, 출력 Header 편집, 트리/그래프 토글, 큐 묶음 처리;
     규칙 테스트(금지 용어·ID 비노출·v2 import 금지·진입 호출 ≤3·접근성). 기본 화면 v3, `?v2=1`/`?v1=1` 유지
-  - E2E `e2e/v3/`: 감독 러너(렌더 서버 별도 프로세스, 스펙 파일마다 작업 공간 리셋), 스펙 7개·테스트 19개,
-    결과·완료 조건 대조·측정값은 `docs/e2e-results-v3.md`
+  - E2E `e2e/specs/`: 감독 러너(렌더 서버 별도 프로세스, 스펙 파일마다 작업 공간 리셋), 스펙 7개·테스트 19개,
+    결과·완료 조건 대조·측정값은 `docs/e2e-results.md`
   - 검증: `python -m pytest` 443 passed(DRM e2e 제외 시) · `npm test` 180 passed · `npm run test:v3` 19 passed(연속 3회) ·
     `npm run test:v2` 3 passed. CI `.github/workflows/v3.yml`
-  - 문서: `docs/ARCHITECTURE_V3.md`(ERD·모듈·시퀀스·API 지도), README/e2e/frontend/kg README, `.env.sample`
+  - 문서: `docs/ARCHITECTURE.md`(ERD·모듈·시퀀스·API 지도), README/e2e/frontend/kg README, `.env.sample`
 - **폴더 일괄 등록 — 루트 폴더 하나로 하위 파일 전부 등록** (이 커밋)
   - 무엇: 파일을 하나씩 고르는 대신 원본 폴더 하나를 지정하면 하위 폴더까지 전부 등록한다(계약 §4.1.1).
     미리보기는 Reader 프로세스 없이 stat과 내용 해시(Reader `change_token`과 같은 SHA-256)만 보고,
@@ -30,13 +75,13 @@
     기본 대상은 새 파일 + 변경된 문서라 같은 폴더 재실행이 싸고, 변경 없음·잠김은 체크박스로 다시 읽는다.
     작업은 진행률(completed/total)을 올리고, 파일 하나의 실패는 그 행의 사유로 남으며 요약이 결과물이다
     (전부 실패해도 작업은 succeeded, 스캔 자체의 실패만 failed). 새 snapshot은 여전히 검수 대기(proposed)다
-  - 어디: `kg/v3/service.py`(`scan_sources`·`register_directory`·`source_digest` 캐시), `kg/v3/db.py`(런타임 테이블 `source_digest`),
-    `kg/v3/api.py`(`GET /sources/scan` · `POST /documents/register-directory`), `kg/v3/__main__.py`(`register` 명령),
-    `kg/v3/watch.py`(기본 하위 폴더 감시, `--no-recursive`), `frontend/src/v3/DocumentRegister.tsx`(폴더 미리보기·진행·요약 모드)
-  - 테스트: `tests/test_v3_register_directory.py` 17건 + `tests/test_v3_watch.py` 5건 → `python -m pytest tests/test_v3_register_directory.py tests/test_v3_watch.py -q` **22 passed**.
-    브라우저 시나리오는 `e2e/v3/register-directory.spec.ts`(결과는 `docs/e2e-results-v3.md`)
-  - 문서: `docs/ARCHITECTURE_V3.md`(ERD에 `source_digest` — 22개 테이블·인덱스 39개, §2.1 일괄 등록 시퀀스, API 지도·프런트·테스트·운영),
-    `docs/design/v3-decisions.md` §11(변경 판정·실패 처리·잠긴 파일·승인 정책), README 빠른 시작·CLI, `.env.sample`(`KG_V3_REGISTER_DIRECTORY_LIMIT`)
+  - 어디: `schema/service.py`(`scan_sources`·`register_directory`·`source_digest` 캐시), `schema/db.py`(런타임 테이블 `source_digest`),
+    `schema/api.py`(`GET /sources/scan` · `POST /documents/register-directory`), `schema/__main__.py`(`register` 명령),
+    `schema/watch.py`(기본 하위 폴더 감시, `--no-recursive`), `frontend/src/app/DocumentRegister.tsx`(폴더 미리보기·진행·요약 모드)
+  - 테스트: `tests/test_register_directory.py` 17건 + `tests/test_watch.py` 5건 → `python -m pytest tests/test_register_directory.py tests/test_watch.py -q` **22 passed**.
+    브라우저 시나리오는 `e2e/specs/register-directory.spec.ts`(결과는 `docs/e2e-results.md`)
+  - 문서: `docs/ARCHITECTURE.md`(ERD에 `source_digest` — 22개 테이블·인덱스 39개, §2.1 일괄 등록 시퀀스, API 지도·프런트·테스트·운영),
+    `docs/design/decisions.md` §11(변경 판정·실패 처리·잠긴 파일·승인 정책), README 빠른 시작·CLI, `.env.sample`(`SCHEMA_REGISTER_DIRECTORY_LIMIT`)
 
 ## 2026-09-07
 
@@ -56,7 +101,7 @@
     Document KG→Semantic Layer), 모듈 처분표(Parser library 코어 유지 /
     이관 완료 / kg가 흡수 / 유지보수 모드), 단계·규칙(레거시에 신규 기능
     금지, Parser library의 kg 비의존)
-  - watcher 이관: src/watch → kg/watch.py, `kg.cli watch` 신설(raw 폴링→
+  - watcher 이관: src/watch → schema/filewatch.py, `kg.cli watch` 신설(raw 폴링→
     자동 ingest+map, DRM 잠김 스킵+해제본 도착 감지, 삭제 이벤트 무시).
     src.watch는 re-export 셔틀로 하위호환
   - DVC 현행화: dvc.yaml을 kg_ingest 스테이지(멱등 재적재)로 교체,
@@ -106,7 +151,7 @@
   - kg/normalize.py: 원자 정규화기 카탈로그(trim_text/strip_thousands/
     percent_to_ratio/split_unit_suffix) — 코드는 작은 순수 연산만, 선언적
     파라미터만 허용(임의 코드 금지). 조합·선택은 전부 데이터:
-    domains/<d>/config/normalizers.yaml 프리셋 + 빌드 config rules
+    <작업 공간>/config/normalizers.yaml 프리셋 + 빌드 config rules
   - value_normalize DAG 블록: 노드/컬럼 단위 선언 적용, 분리된 단위는
     lineage.unit으로 unit_convert에 전달, 적용 이력(normalized)도 lineage에
   - GET /api/normalizers(카탈로그+프리셋), BuildReq.normalize_rules(프리셋

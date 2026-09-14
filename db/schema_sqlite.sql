@@ -1,4 +1,4 @@
--- data_gathering v3 코어 스키마(계약 docs/design/v3-contracts.md §1). 새 DB 전용이며 v2 DB를 이관하지 않는다.
+-- data_gathering 코어 스키마(계약 docs/design/contracts.md §1). schema_meta.version = 3(스키마 리비전).
 -- ID는 애플리케이션이 만드는 UUID 문자열, 시각은 ISO-8601 UTC 문자열, JSON 컬럼은 json_valid CHECK.
 -- snapshot 바인딩(§1.9): 자식 테이블마다 snapshot_id를 비정규화하고 복합 FK로 부모와 같은 snapshot임을 강제한다.
 -- 런타임 테이블(runtime_job·snapshot_signature)은 schema/db.py가 만든다(§1.6).
@@ -9,7 +9,7 @@ CREATE TABLE schema_meta (
     version INTEGER PRIMARY KEY CHECK (version = 3),
     description TEXT NOT NULL
 );
-INSERT INTO schema_meta VALUES (3, 'Parsing Schema / Parsing Profile runtime v3; separate database; no v2 migration');
+INSERT INTO schema_meta VALUES (3, 'Parsing Schema / Parsing Profile runtime; schema revision 3; one database per workspace');
 
 -- §1.1 문서. document ↔ document_snapshot은 상호 참조라 current_snapshot_id FK는 지연 검사한다.
 CREATE TABLE document (

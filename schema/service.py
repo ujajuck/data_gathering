@@ -1,4 +1,4 @@
-"""v3 서비스 규칙(계약 §4.1–§4.9, §4.12) — 정의 파일이 진실, DB는 projection, 값은 불변.
+"""서비스 규칙(계약 §4.1–§4.9, §4.12) — 정의 파일이 진실, DB는 projection, 값은 불변.
 
 흐름: register(describe 1회 → snapshot → auto_apply → 추출·발행) · import_schema/import_profile(파일 + projection) ·
 revise/approve_all/rollback(CAS 리비전) · extract(격리 Reader → 값 배치 저장 → 발행) · test_profile(dry-run) ·
@@ -85,7 +85,7 @@ def _integrity(exc: sqlite3.IntegrityError) -> Problem:
     if "FOREIGN KEY" in text:
         return Problem("REFERENCE_MISSING", "참조하는 항목이 없거나 다른 snapshot의 것입니다. 목록을 새로고침하세요.", 409)
     # 나머지는 스키마 내부 문구이므로 서버 기록에만 남기고 사용자에게는 고정 문구를 준다.
-    log.warning("v3 integrity error: %s", text)
+    log.warning("integrity error: %s", text)
     return Problem("INTEGRITY_ERROR", "저장 규칙에 어긋나는 변경입니다. 최신 상태를 다시 확인하세요.", 409)
 
 

@@ -65,7 +65,7 @@ NO_CACHE = "private, no-cache"
 DocumentStatus = Literal["not_extracted", "locked", "unmatched", "review", "changed", "failed", "normal"]
 DocumentSort = Literal["document_name", "status", "last_processed_at", "-document_name", "-status", "-last_processed_at"]
 JobState = Literal["queued", "running", "succeeded", "failed", "cancelled"]
-JobKind = Literal["register", "extract", "reparse", "build", "test", "queue_action", "migrate"]
+JobKind = Literal["register", "extract", "reparse", "build", "test", "queue_action"]
 
 
 class RegisterDirectoryRequest(Contract):
@@ -636,7 +636,7 @@ def snapshot_context(service, snapshot_id):
 
 def install(app: FastAPI, root, start_worker=True):
     service = Service(root)
-    app.state.v3 = service
+    app.state.service = service
     router = APIRouter(prefix="/api")
     previous_validation = app.exception_handlers.get(RequestValidationError)
 
@@ -1273,7 +1273,7 @@ class SpaStaticFiles(StaticFiles):
 
 
 def create_app(root, start_worker=True):
-    app = FastAPI(title="Semantic Excel Integration v3")
+    app = FastAPI(title="Semantic Excel Integration")
     install(app, root, start_worker)
     dist = Path(__file__).resolve().parents[1] / "frontend/dist"
     if dist.is_dir():
