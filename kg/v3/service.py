@@ -2101,11 +2101,14 @@ class Service:
                 "WHERE er.region_id=? ORDER BY (a.published_run_id = v.run_id) DESC, v.created_at DESC LIMIT ?",
                 (region_id, limit),
             )
+            # 매핑은 값보다 넓은 영역(C9:C73)을 참조하므로 "이 셀을 참조하는 매핑"은 같은 시트에서 교차하는 영역으로 찾는다.
             mappings = rows(
                 conn,
-                "SELECT mr.role, mr.mapping_revision_id, v.mapping_id, v.status, (m.current_revision_id = v.mapping_revision_id) is_head, m.application_id, r.rule_key, r.rule_name "
-                "FROM mapping_region mr JOIN mapping_revision v ON v.mapping_revision_id=mr.mapping_revision_id JOIN mapping m ON m.mapping_id=v.mapping_id JOIN parsing_rule r ON r.rule_id=m.rule_id WHERE mr.region_id=? ORDER BY is_head DESC, v.created_at DESC LIMIT ?",
-                (region_id, limit),
+                "SELECT mr.role, mr.mapping_revision_id, v.mapping_id, v.status, (m.current_revision_id = v.mapping_revision_id) is_head, m.application_id, r.rule_key, r.rule_name, sr.locator_key range "
+                "FROM source_region sr JOIN mapping_region mr ON mr.region_id=sr.region_id "
+                "JOIN mapping_revision v ON v.mapping_revision_id=mr.mapping_revision_id JOIN mapping m ON m.mapping_id=v.mapping_id JOIN parsing_rule r ON r.rule_id=m.rule_id "
+                "WHERE sr.sheet_id=? AND sr.kind='cells' AND sr.r1<=? AND sr.c1<=? AND sr.r2>=? AND sr.c2>=? ORDER BY is_head DESC, v.created_at DESC LIMIT ?",
+                (region["sheet_id"], region["r2"], region["c2"], region["r1"], region["c1"], limit),
             )
         return {
             "region": {"region_id": region["region_id"], "snapshot_id": region["snapshot_id"], "sheet_id": region["sheet_id"], "sheet_name": region["sheet_name"], "kind": region["kind"], "range": region["locator_key"]},

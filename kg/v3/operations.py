@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from .db import Problem, decode_cursor, encode_cursor, load, one, page, uid
+from .db import Problem, decode_cursor, digest, encode_cursor, load, one, page, uid
 from .jobs import Cancelled
 
 KINDS = ("unmatched", "review", "failed", "changed", "conflict")
@@ -397,9 +397,17 @@ def queue_action(service, kind, group_key, action, profile_id=None, sheet_bindin
     if action == "reparse" and mode not in (None, "fill", "rematch"):
         raise Problem("INVALID_MODE", "mode는 fill/rematch 중 하나여야 합니다.")
     payload = {"kind": kind, "group_key": group_key, "action": action, "profile_id": profile_id, "sheet_bindings": sheet_bindings, "extract": bool(extract), "mode": mode, "count": found["count"]}
-    job = service.jobs.submit(
-        "queue_action", payload, principal, uid(), target_kind="queue_group", target_id=f"{kind}/{group_key}", label=f"{found['label']} · {ACTION_LABELS[action]}"
-    )
+    target_id = f"{kind}/{group_key}"
+    # 같은 묶음에 같은 처리가 아직 대기·진행 중이면 그 작업을 돌려준다(묶음당 작업 1개; 두 번 눌러도 중복 처리 없음).
+    with service.db.connect() as conn:
+        active = conn.execute(
+            "SELECT * FROM runtime_job WHERE target_kind='queue_group' AND target_id=? AND kind='queue_action' AND state IN ('queued','running') AND request_hash=? ORDER BY created_at LIMIT 1",
+            (target_id, digest(payload)),
+        ).fetchone()
+    if active:
+        job = service.jobs.public(dict(active))
+    else:
+        job = service.jobs.submit("queue_action", payload, principal, uid(), target_kind="queue_group", target_id=target_id, label=f"{found['label']} · {ACTION_LABELS[action]}")
     return service.job_result(job, wait, principal)
 
 

@@ -328,7 +328,8 @@ def test_builds_candidates_preview_three_formats_manifest_and_header_validation(
     assert candidates["summary"] == {"total": 7, "usable": 2, "excluded": 5}
     reasons = {d["document_name"]: d.get("reason") for d in candidates["documents"] if not d["usable"]}
     assert reasons[DOC_SHIFTED] == "review_required" and reasons[DOC_OTHER] == "unmatched" and reasons[DOC_LOCKED] == "locked" and reasons[DOC_KELVIN] == "failed"
-    assert reasons["missing-doc"] == "not_found"
+    missing = next(d for d in candidates["documents"] if d["document_id"] == "missing-doc")
+    assert missing["reason"] == "not_found" and missing["document_name"] is None and not missing["usable"]
     fields = {f["field_key"]: f for f in candidates["fields"]}
     assert fields["temperature"]["document_count"] == 2 and fields["temperature"]["unit"] == "°C" and "basic" not in fields
     usable = [d["document_id"] for d in candidates["documents"] if d["usable"]]
@@ -391,7 +392,7 @@ def test_builds_candidates_preview_three_formats_manifest_and_header_validation(
         columns_in_db = [r[1] for r in conn.execute("PRAGMA table_info(data)")]
         assert {"제품", "LOT", "온도", "판정", "_source_온도", "_document", "_snapshot", "_record_key"} <= set(columns_in_db)
         assert conn.execute("SELECT count(*) FROM data").fetchone()[0] == 24
-        assert conn.execute('SELECT "_source_온도" FROM data ORDER BY "_document", "_record_key" LIMIT 1').fetchone()[0] == f"{demo.MAIN_SHEET}!C9"
+        assert conn.execute('SELECT "_source_온도" FROM data ORDER BY rowid LIMIT 1').fetchone()[0] == f"{demo.MAIN_SHEET}!C9"
     assert world.get(f"/builds/{key}/download?format=pdf", expect=422)["error"]["code"] == "VALIDATION_ERROR"
     assert world.get("/builds/0123456789abcdef/manifest", expect=404)["error"]["code"] == "NOT_FOUND"
     assert world.get("/builds/../etc/download", expect=404)
@@ -455,7 +456,8 @@ def test_new_snapshot_inherits_proposed_then_approve_all_publishes(world):
     # 승계 = describe 1회 + 이전 헤드 spec으로 match_specs 1회. 자동 승인 없음.
     assert world.calls == ["describe", "match_specs"], world.calls
     assert doc["document_id"] == ref["document_id"] and doc["snapshot"]["revision_no"] == 2 and doc["snapshot"]["snapshot_id"] != old_sid
-    assert doc["status"] == "changed" and [(a["compatibility"], a["state"]) for a in doc["applied"]] == [("identical", "proposed")]
+    # applied[].state는 application 상태 어휘(approved/review/changed …); 승계 리비전 자체는 proposed다(아래 mappings 검사).
+    assert doc["status"] == "changed" and [(a["compatibility"], a["state"]) for a in doc["applied"]] == [("identical", "changed")]
     world.state["documents"][DOC_REF] = doc
     new_sid = doc["snapshot"]["snapshot_id"]
     snapshots = world.get(f"/documents/{ref['document_id']}/snapshots")["items"]
@@ -508,7 +510,7 @@ def test_profile_test_dry_run_leaves_no_application(world):
     assert other["compatibility"] == "incompatible" and other["groups"] == [] and other["errors"] and other["errors"][0]["code"]
     assert len(world.get(f"/snapshots/{sid}/applications")["items"]) == before
     tests = world.get("/jobs?kind=test")["items"]
-    assert len(tests) == 3 and tests[-1]["label"].startswith(f"{demo.PROFILE_NAME} v1") and tests[-1]["state"] == "succeeded"
+    assert len(tests) == 3 and tests[-1]["label"].startswith(f"{demo.PROFILE_NAME} r1 · ") and tests[-1]["state"] == "succeeded"
 
 
 # ---------------------------------------------------------------------------- 11. 검색 · 문서 상태 전이
