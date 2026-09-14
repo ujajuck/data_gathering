@@ -13,7 +13,11 @@
       "Read(./e2e/playwright-report/**)",
       "Read(./e2e/test-results/**)",
       "Read(./.dvc/cache/**)",
-      "Read(./**/coverage/**)"
+      "Read(./**/coverage/**)",
+      "Read(./e2e/playwright-report-v3*/**)",
+      "Read(./e2e/test-results-v3*/**)",
+      "Read(./**/data/render-cache/**)",
+      "Read(./**/data/exports/**)"
     ]
   }
 }
