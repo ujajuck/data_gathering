@@ -1,6 +1,6 @@
 """`.env` 자동 로드: 이미 있는 환경 변수는 덮어쓰지 않고, 없는 키만 채운다."""
 
-from kg.env import load_env, parse_env
+from schema.env import load_env, parse_env
 
 
 def test_parse_env_handles_comments_quotes_and_export():
