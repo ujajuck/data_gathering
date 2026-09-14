@@ -43,3 +43,6 @@ data/v2-builds/
 exports/
 age/
 *.sqlite
+
+# pip install -e 산출물
+*.egg-info/
