@@ -1,5 +1,5 @@
 // Semantic Excel Integration — 유일한 웹 프론트 (React).
-// 기존 PDF 근거 뷰어는 ?legacy=1 로 접근할 수 있다.
+// 기본은 v3 작업 화면. ?v2=1 은 v2, ?v1=1 은 v1, ?legacy=1 은 기존 PDF 근거 뷰어.
 import { Suspense, lazy } from "react";
 import { StoreProvider, useStore } from "./lib/store";
 import type { Screen } from "./lib/store";
@@ -11,6 +11,8 @@ import TemplatesScreen from "./screens/TemplatesScreen";
 import "./webkg.css";
 import "./product.css";
 import { PRODUCT_NAME, PRODUCT_DESCRIPTION, PRODUCT_STEPS } from "./product";
+
+const V3Workbench = lazy(() => import("./v3/Workbench"));
 
 const V2Workbench = lazy(() => import("./v2/Workbench"));
 
@@ -59,23 +61,31 @@ function Shell() {
 }
 
 export default function App() {
-  if (new URLSearchParams(window.location.search).has("legacy")) {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("legacy")) {
     return (
       <Suspense fallback={null}>
         <LegacyViewer />
       </Suspense>
     );
   }
-  if (!new URLSearchParams(window.location.search).has("v1")) {
+  if (params.has("v2")) {
     return (
       <Suspense fallback={<p>작업 공간을 불러오는 중…</p>}>
         <V2Workbench />
       </Suspense>
     );
   }
+  if (params.has("v1")) {
+    return (
+      <StoreProvider>
+        <Shell />
+      </StoreProvider>
+    );
+  }
   return (
-    <StoreProvider>
-      <Shell />
-    </StoreProvider>
+    <Suspense fallback={<p>작업 공간을 불러오는 중…</p>}>
+      <V3Workbench />
+    </Suspense>
   );
 }

@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS snapshot_signature (
   computed_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS snapshot_signature_sha ON snapshot_signature(signature_sha256);
+-- 값 목록 keyset(§6 /values): 실행 안에서 group_key·item_index 순으로 O(페이지) 탐색.
+CREATE INDEX IF NOT EXISTS value_by_run_group ON extracted_value(run_id, group_key, item_index, value_id);
 """
 
 
