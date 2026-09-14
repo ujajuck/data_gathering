@@ -485,6 +485,14 @@ sequenceDiagram
 
 창 JSON은 `rows/columns`(스크롤 기하, 전체)와 `cells/merges/images`(창 안만)를 담고, 이미지는 `/api/v3/snapshots/{sid}/render-assets/{asset_id}`(권한 확인 후 스트리밍, `private, no-cache` + ETag)로 따로 받는다. 새 snapshot이 생기면 이전 snapshot 캐시를 무효화한다.
 
+### 2.5 v2 → v3 이관
+
+`python -m kg.v3 migrate --ws <v3> --from-ws <v2 ws> [--raw DIR] [--dry-run] [--report report.json]`. v2 DB는 읽기 전용으로 열고
+문서·snapshot·시트·영역·리비전·실행·값은 v2 ID를 그대로 쓴다. 최신 KG 리비전 합집합 → `parsing_schema('migrated_kg')`,
+최신 템플릿 버전 → `parsing_profile`(draft, v2 어댑터), 적용 건·매핑 리비전(번호 재부여, 원본은 `evidence_json.v2`)·실행·값·영역을 옮기고
+integration/build는 `<ws>/data/exports/migrated-<build_id>/manifest.json`으로만 남긴다. 보고서(`v2-migration-report/1`)에는 테이블별
+건수, 건너뜀 사유, 검수 필요(`FIELD_REQUIRED`·`INVALID_SPEC`), 재추출 필요(`PUBLISHED_RUN_NOT_MIGRATED` 등)가 들어간다. 계약 §9.
+
 ### 2.4 데이터 빌드
 
 `POST /builds/candidates` → 문서별 사용 가능/제외 사유·필드별 값 있는 문서 수 → `POST /builds/preview`(50행, 셀마다 원본 위치) → `POST /builds {format}` → `<ws>/data/exports/<build_key>/data.{csv|xlsx|sqlite}` + `manifest.json`(sources·columns·excluded·conflicts). `build_key`는 입력(문서·스키마 rev·컬럼·행 모드·발행 실행)의 해시라 같은 입력은 재사용한다. 문서 200개·행 20만 초과는 작업으로 돌리고 작업 내역에서 내려받는다.

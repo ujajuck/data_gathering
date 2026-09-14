@@ -517,13 +517,13 @@ UI는 202를 받으면 **뷰어 영역만** "렌더링 중"을 표시하고 700m
 | `document`·`document_version`·`sheet`·`source_region` | `document(source_ref→source_path, status 재계산)`·`document_snapshot(change_token = provider_version_token or content_sha256)`·`sheet`·`source_region(+snapshot_id)` |
 | 모든 `kg_revision`의 `domain_concept` 합집합(concept별 최고 revision_no 행; 최신 리비전에 없는 개념은 deprecated)·최신 리비전 alias/edge | `parsing_schema(key 'migrated_kg')` + `parsing_field(concept_id→field_key, level, deprecated)`·alias·edge(`parent_of`, `related`→`related_to`). 정의 파일 r0001 |
 | `template`·`template_version`(최신)·`template_rule` | `parsing_profile(draft)` + adapter(v2-template) → 파일 r0001 + `parsing_rule`(concept_id NULL → default_field_id NULL) |
-| `template_application`·`application_sheet` | `parsing_application(origin='manual', compatibility='manual', profile_rev=1, match_signature 계산)`·`application_sheet` |
-| `mapping_head`·`mapping_revision` | `mapping`·`mapping_revision`(status 유지, origin `import`, effective_spec 그대로, `concept_id NULL → field_id NULL`; 이런 리비전 수를 보고서 "검수 필요"에 포함) |
+| `template_application`·`application_sheet` | `parsing_application(origin='manual', profile_rev=1)`·`application_sheet`. 현재 snapshot의 적용 건이고 raw 파일이 있어 Reader `match_specs`가 성공하면 `compatibility='compatible'`과 실제 매치 서명, 그 외(과거 snapshot·파일 없음·불일치·Reader 오류)는 `compatibility='manual'`, `match_signature='migrated'`. `scope_key`는 'default'(충돌 시 v2 값, 그래도 충돌이면 SCOPE_CONFLICT로 건너뜀) |
+| `mapping_head`·`mapping_revision` | `mapping`·`mapping_revision`(status 유지, origin `import`, `revision_no`는 (application, rule)별 1..n으로 재번호(원래 번호·ID는 `evidence_json.v2`), effective_spec은 v3 `validate_rule`+`compile_rule`을 통과시켜 기본값을 채운 것(실패하면 원문 유지 + 보고서 `review_required` INVALID_SPEC), `concept_id NULL → field_id NULL`(보고서 "검수 필요" FIELD_REQUIRED); `mapping_region`은 그 리비전을 쓴 마지막 succeeded 실행의 `series_region`에서 유도) |
 | `extraction_run`·`run_mapping`·`extracted_series`·`extracted_item`·`item_region`·`series_region` | `extraction_run(input_manifest에 mappings)`·`extracted_value(group_key=series.instance_key; value_state blank→empty, missing→null, excel_error/unavailable→error; value_type 'null'→필드 타입 또는 'text', 'asset'→'text'+보고)`·`extracted_value_region`(item_region 그대로 + series_region은 같은 role로 `ordinal = 항목 role 최대 ordinal + 1 + series ordinal`)·발행 실행 유지 |
 | `integration_*`·`build_*` | DB로 옮기지 않음. 빌드마다 `<ws>/data/exports/migrated-<build_id>/manifest.json` |
 | `runtime_job`·`version_signature` | 옮기지 않음(재생성) |
 
-보고서: 테이블별 건수, 건너뜀 사유, 검수 필요·재추출 필요 목록.
+보고서(`v2-migration-report/1`): `counts{table:{migrated, skipped}}`, `skipped[{table, id, reason}]`, `review_required[]`, `re_extract_required[]`(발행 실행을 옮기지 못한 application: `PUBLISHED_RUN_NOT_MIGRATED`·`HEAD_NOT_APPROVED`·`PUBLISH_REJECTED`), `schema{field_keys 개명 목록}`, `profiles[{warnings}]`, `documents{document_id: {applications[], status}}`, `statuses`, `asset_values`, `raw{reader_errors}`, `truncated{}`. `--dry-run`은 아무것도 쓰지 않는다.
 
 ---
 
