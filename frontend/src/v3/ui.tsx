@@ -108,6 +108,7 @@ export function Modal({
   actions,
   className = "",
   head,
+  viewKey,
 }: {
   label: string;
   title?: ReactNode;
@@ -116,6 +117,8 @@ export function Modal({
   actions?: ReactNode;
   className?: string;
   head?: ReactNode;
+  // 대화상자 안에서 화면을 바꿀 때(값이 바뀌면) 초점을 패널로 되돌린다.
+  viewKey?: string | number;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -125,6 +128,13 @@ export function Modal({
       if (previous?.isConnected) previous.focus();
     };
   }, []);
+  // 화면 전환으로 누른 버튼이 사라지면 초점이 body로 떨어져 Esc가 죽고 Tab이 대화상자 밖으로 샌다.
+  // 초점이 패널 밖으로 나갔을 때만 되돌린다(패널 안에서 입력 중이면 건드리지 않는다).
+  useEffect(() => {
+    if (viewKey === undefined) return;
+    const active = document.activeElement as HTMLElement | null;
+    if (!panel.current || !active || !panel.current.contains(active)) panel.current?.focus();
+  }, [viewKey]);
   function onKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
     if (e.defaultPrevented) return;
     if (e.key === "Escape") {

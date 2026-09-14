@@ -125,6 +125,12 @@ export function useWriteSeq(): number {
   return useSyncExternalStore(subscribeWrites, () => writeSeq, () => writeSeq);
 }
 
+// 진행 중 작업이 모두 끝난 순간(JobBar) 목록을 다시 읽게 한다: 캐시를 비우고 쓰기 알림을 보낸다.
+// 대화상자를 닫으면 useJob의 promise가 resolve되지 않아(언마운트) onRegistered가 불리지 않기 때문이다.
+export function notifyJobsFinished() {
+  notifyWrite();
+}
+
 function notifyWrite() {
   cache.clear();
   writeSeq++;

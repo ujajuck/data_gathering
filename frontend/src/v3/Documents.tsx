@@ -15,6 +15,7 @@ import {
   useNavigation,
   usePage,
   useToast,
+  useWriteSeq,
   withQuery,
 } from "./client";
 import type { DocumentRow, DocumentStatus, Page, ProfileRow } from "./types";
@@ -57,9 +58,11 @@ export default function Documents() {
   const sort = route.sort || DEFAULT_SORT;
   const [selected, setSelected] = useState<string[]>([]);
   const [registerOpen, setRegisterOpen] = useState(false);
+  // 쓰기(등록·승인)와 작업 종료 알림(JobBar)마다 다시 읽는다: 대화상자를 닫은 뒤 끝난 일괄 등록 결과도 목록에 뜬다.
+  const writeSeq = useWriteSeq();
   const documents = usePage<DocumentRow>(
     withQuery("/documents", { q: search, status, profile_id: profileId, schema_key: route.schema_key, sort }),
-    refresh,
+    refresh + writeSeq,
   );
   const profiles = useData<Page<ProfileRow>>("/profiles");
   const items = documents.items;

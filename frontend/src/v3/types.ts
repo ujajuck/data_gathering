@@ -220,6 +220,13 @@ export type RegisterResult = {
   truncated?: boolean;
 };
 
+// 결과 요약 줄(§7 · §4.1.1): "N개 중 R개 등록 · U개 변경 없음 · F개 실패"(+ 잠김이 있으면 덧붙인다).
+// 등록 대화상자와 작업 내역의 '결과/오류' 열이 같은 문구를 쓴다(잘린 documents 길이를 세지 않는다).
+export function registerSummaryText(summary: RegisterSummary): string {
+  const base = `${summary.targeted}개 중 ${summary.registered}개 등록 · ${summary.unchanged}개 변경 없음 · ${summary.failed}개 실패`;
+  return summary.locked ? `${base} · ${summary.locked}개 잠김` : base;
+}
+
 // ---------------------------------------------------------------- 프로파일
 
 export type ProfileStatus = "draft" | "approved" | "deprecated";

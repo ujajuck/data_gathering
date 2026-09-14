@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from kg.v3 import __main__ as cli
+from kg.v3 import jobs as jobs_module
 from kg.v3 import service as service_module
 from kg.v3.api import create_app
 from kg.v3.db import Problem
@@ -149,6 +150,86 @@ def test_directory_limit(ws, monkeypatch):
     assert (exc.value.code, exc.value.status) == ("DIRECTORY_LIMIT", 413)
 
 
+def test_scan_skips_names_that_normalization_would_move(ws):
+    """이름에 '\\'가 든 파일은 §4.1 정규화가 경로를 바꿔 고른 폴더 밖을 가리킬 수 있다 — 대상에서 뺀다."""
+    build_workbook(ws.raw / "target.xlsx")  # '일괄' 폴더 밖(최상위)의 문서
+    (ws.raw / "일괄/..\\target.xlsx").write_bytes((ws.raw / "target.xlsx").read_bytes())
+    (ws.raw / "일괄/b\\c.xlsx").write_bytes((ws.raw / "target.xlsx").read_bytes())
+    (ws.raw / "일괄/d\\e").mkdir()
+    build_workbook(ws.raw / "일괄/d\\e/f.xlsx")
+    scan = ws.scan_sources("일괄")
+    assert scan["files"] == 4 and scan["folders"] == 2  # 그대로: 셋 다 대상이 아니다
+    assert scan["skipped"]["unsupported"] == 3  # 메모.txt + '\\'가 든 파일 2개
+    assert [s["source_ref"] for s in scan["sample"]] == list(ALL_REFS)
+    job = ws.register_directory("일괄", wait=120)
+    assert job["state"] == "succeeded"
+    # 폴더 밖 target.xlsx가 등록되지 않았다(정규화가 '일괄/..\\target.xlsx'를 'target.xlsx'로 바꾸는 구멍).
+    names = sorted(d["document_name"] for d in ws.document_query(limit=50)["items"])
+    assert names == ["a.xlsx", "b.xlsx", "c.xlsx", "잠김.xlsx"]
+
+
+def test_legacy_xls_message_names_the_format(ws):
+    """.xls(OLE2)는 암호화 문서와 매직이 같다 — 코드·상태는 §4.1 그대로 잠김이지만 문구가 두 경우를 모두 알려 준다."""
+    (ws.raw / "일괄/구형.xls").write_bytes(LOCKED_BYTES)
+    job = ws.register_directory("일괄", wait=120)
+    assert job["state"] == "succeeded", job
+    rows = {d["source_ref"]: d for d in job["result"]["documents"]}
+    legacy = rows["일괄/구형.xls"]
+    assert (legacy["error"]["code"], legacy["status"]) == ("DRM_READER_REQUIRED", "locked")
+    assert "구형 .xls 형식" in legacy["error"]["message"]
+    assert ".xlsx로 저장" in legacy["error"]["message"]
+    # 확장자가 .xlsx인 암호화 문서의 문구는 그대로다.
+    assert rows["일괄/잠김.xlsx"]["error"]["message"] == "암호화 문서는 승인된 보안 읽기 어댑터로 접근해야 합니다."
+    assert job["result"]["summary"]["locked"] == 2
+
+
+def test_unknown_provider_is_rejected_before_the_job(ws, monkeypatch):
+    """Reader 어댑터가 없는 provider로는 작업을 만들지 않는다(§4.1) — 잠긴 문서 행 양산 방지."""
+    for provider in ("xxxxxxxx", " "):
+        with pytest.raises(Problem) as exc:
+            ws.register_directory("일괄", provider=provider, wait=0)
+        assert (exc.value.code, exc.value.status) == ("UNKNOWN_PROVIDER", 422)
+        with pytest.raises(Problem) as exc:
+            ws.register_documents(["일괄/a.xlsx"], provider=provider, wait=0)
+        assert exc.value.code == "UNKNOWN_PROVIDER"
+    assert ws.document_query(limit=50)["items"] == []
+    # 어댑터를 연결하면 통과한다(등록은 그 어댑터가 맡는다).
+    monkeypatch.setenv("KG_V3_READER_FACTORY", "tests.fake_reader:make")
+    assert ws.check_provider("drm-x") == "drm-x"
+
+
+def test_single_register_fills_the_digest_cache(ws, monkeypatch):
+    """§4.1 register가 캐시를 채우므로 watch·단일 등록으로 들어온 문서도 첫 폴더 미리보기가 파일을 읽지 않는다."""
+    job = ws.register_documents(["일괄/a.xlsx", "일괄/2024/b.xlsx", "일괄/2024/하위/c.xlsx"], wait=120)
+    assert job["state"] == "succeeded", job
+    with ws.db.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM source_digest").fetchone()[0] == 3
+    calls = []
+    monkeypatch.setattr(service_module, "file_hash", lambda path: calls.append(str(path)) or "0" * 64)
+    scan = ws.scan_sources("일괄")
+    assert calls == []  # stat만 보고 끝난다
+    assert scan["states"] == {"new": 1, "changed": 0, "unchanged": 3, "locked": 0}
+
+
+def test_scan_and_hash_report_progress(ws, monkeypatch):
+    """스캔·해시 구간에도 checkpoint를 불러 진행률이 비지 않고 취소가 먹는다(§4.1.1)."""
+    seen = []
+
+    def note(completed=None, total=None, force=False):
+        seen.append((completed, total))
+
+    ws._scan_files("일괄", note)
+    assert len(seen) == 3  # 폴더를 하나 끝낼 때마다(일괄 · 2024 · 하위)
+    assert ws.register_directory("일괄", wait=120)["state"] == "succeeded"
+    with ws.db.connect(write=True) as conn:
+        conn.execute("DELETE FROM source_digest")  # §1.6 캐시는 언제 지워도 된다 — 다음 스캔이 다시 해시한다
+    seen.clear()
+    monkeypatch.setattr(service_module, "HASH_CHECKPOINT", 1)
+    ws._classify_files(ws._scan_files("일괄")["files"], "local-xlsx", "일괄", note)
+    # 해시를 계산할 때마다 (지금까지 본 파일 수, 스캔한 파일 수). 잠긴 파일은 해시하지 않는다.
+    assert seen == [(1, 4), (3, 4), (4, 4)]
+
+
 # ---------------------------------------------------------------- 일괄 등록 작업
 
 
@@ -264,7 +345,7 @@ def client(tmp_path):
         yield test_client
 
 
-def test_api_scan_and_register_directory(client):
+def test_api_scan_and_register_directory(client, monkeypatch):
     scan = client.get("/api/v3/sources/scan", params={"directory": "일괄"})
     assert scan.status_code == 200
     body = scan.json()
@@ -289,6 +370,20 @@ def test_api_scan_and_register_directory(client):
     assert client.get("/api/v3/settings").json()["limits"]["register_directory_files"] == 10000
     unknown = client.post("/api/v3/documents/register-directory", json={"directory": "일괄", "recursive": False})
     assert (unknown.status_code, unknown.json()["error"]["code"]) == (422, "VALIDATION_ERROR")
+    bad = client.post("/api/v3/documents/register-directory?wait=60", json={"directory": "일괄", "provider": "xxxxxxxx"})
+    assert (bad.status_code, bad.json()["error"]["code"]) == (422, "UNKNOWN_PROVIDER")
+    assert len(client.get("/api/v3/documents").json()["items"]) == 4  # 잠긴 행이 늘지 않았다
+
+    # 짧은 배열은 목록에도 그대로 싣는다(§6).
+    listed = next(j for j in client.get("/api/v3/jobs").json()["items"] if j["kind"] == "register")
+    assert len(listed["result"]["documents"]) == 4
+    # 긴 배열은 본문 대신 <key>_count만(§6): 폴더 일괄 등록 500행이 목록 한 페이지를 수 MB로 만들지 않게 한다.
+    monkeypatch.setattr(jobs_module, "BRIEF_ROWS", 2)
+    listed = next(j for j in client.get("/api/v3/jobs").json()["items"] if j["kind"] == "register")
+    assert "documents" not in listed["result"] and listed["result"]["documents_count"] == 4
+    assert listed["result"]["summary"]["registered"] == 3
+    detail = client.get("/api/v3/jobs/" + listed["job_id"]).json()
+    assert len(detail["result"]["documents"]) == 4
 
 
 # ---------------------------------------------------------------- CLI

@@ -97,6 +97,19 @@ def test_watch_covers_subfolders_by_default(approved):
     assert parse(["watch", "--ws", str(root), "--no-recursive"]).no_recursive is True
 
 
+def test_watch_skips_hidden_folders(approved):
+    """계약 §10: watch도 §4.1.1 스캔과 같은 제외 규칙을 쓴다 — 숨김 폴더(.dvc·휴지통 등) 안의 파일은 등록하지 않는다."""
+    root, service = approved["root"], approved["service"]
+    (root / "data/raw/.dvc").mkdir()
+    build_workbook(root / "data/raw/.dvc/cache.xlsx", temps=(9, 9, 9), lots=("Z1", "Z2", "Z3"))
+    watcher = Watcher(root, service=service, principal="watcher")
+    hidden = [l for l in watcher.run_once() if l.get("source_ref") == ".dvc/cache.xlsx"]
+    assert hidden and {l["skipped"] for l in hidden} == {"HIDDEN_DIR"}
+    assert [d["document_name"] for d in service.document_query(limit=50)["items"]] == ["a.xlsx"]
+    # 폴더 일괄 등록 미리보기도 같은 파일을 보지 않는다(두 진입점의 대상 집합이 같다).
+    assert service.scan_sources("")["files"] == 1
+
+
 def test_raw_dir_must_be_inside_workspace(tmp_path):
     root = tmp_path / "ws"
     (root / "data/raw/sub").mkdir(parents=True)

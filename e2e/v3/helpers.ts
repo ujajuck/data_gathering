@@ -72,6 +72,42 @@ export function copyRawDocument(from: string, to: string): string {
   ).trim();
 }
 
+// 원본 폴더 아래에 하위 폴더까지 있는 트리를 만든다(§4.1.1 폴더 일괄 등록 시나리오용).
+// `copy_from`은 시드 문서를 복사하고(양식이 그대로라 프로파일 매치가 유지된다), `text`는 대상이 아닌 파일
+// (`~$임시.xlsx`·`메모.txt`)을 만든다. 중간 폴더는 자동으로 만든다. 만든 경로(원본 폴더 기준)를 돌려준다.
+export type RawTreeEntry = { path: string; copyFrom?: string; text?: string };
+
+export function makeRawTree(entries: RawTreeEntry[]): string[] {
+  const payload = entries.map((e) => ({ path: e.path, copy_from: e.copyFrom ?? null, text: e.text ?? "" }));
+  const out = runPython(
+    `import json, shutil, sys
+from pathlib import Path
+raw = Path(sys.argv[1]) / "data/raw"
+made = []
+for item in json.loads(sys.argv[2]):
+    target = raw / item["path"]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if item["copy_from"]:
+        shutil.copyfile(raw / item["copy_from"], target)
+    else:
+        target.write_text(item["text"], encoding="utf-8")
+    made.append(item["path"])
+print(json.dumps(made, ensure_ascii=False))`,
+    workspaceRoot(),
+    JSON.stringify(payload),
+  );
+  return JSON.parse(out) as string[];
+}
+
+// 새 snapshot 시나리오(하위 폴더 포함): 원본 폴더 기준 상대 경로의 A양식 문서 값(온도·레시피)을 바꾼다. 양식은 그대로다.
+export function mutateRawDocument(sourceRef: string): string {
+  return runPython(
+    "import sys; from pathlib import Path; from examples.schema_v3.demo import mutate_document; print(mutate_document(Path(sys.argv[1]), sys.argv[2]))",
+    workspaceRoot(),
+    sourceRef,
+  ).trim();
+}
+
 export type ApiResult<T = any> = { status: number; json: T };
 
 // page.request로 v3 API를 호출한다(브라우저 컨텍스트와 같은 baseURL).

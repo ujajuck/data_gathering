@@ -23,6 +23,20 @@
   - 검증: `python -m pytest` 443 passed(DRM e2e 제외 시) · `npm test` 180 passed · `npm run test:v3` 19 passed(연속 3회) ·
     `npm run test:v2` 3 passed. CI `.github/workflows/v3.yml`
   - 문서: `docs/ARCHITECTURE_V3.md`(ERD·모듈·시퀀스·API 지도), README/e2e/frontend/kg README, `.env.sample`
+- **폴더 일괄 등록 — 루트 폴더 하나로 하위 파일 전부 등록** (이 커밋)
+  - 무엇: 파일을 하나씩 고르는 대신 원본 폴더 하나를 지정하면 하위 폴더까지 전부 등록한다(계약 §4.1.1).
+    미리보기는 Reader 프로세스 없이 stat과 내용 해시(Reader `change_token`과 같은 SHA-256)만 보고,
+    해시는 `source_digest`(§1.6, `(byte_size, mtime_ns)` 키)에 캐시되어 같은 stat이면 파일을 읽지 않는다.
+    기본 대상은 새 파일 + 변경된 문서라 같은 폴더 재실행이 싸고, 변경 없음·잠김은 체크박스로 다시 읽는다.
+    작업은 진행률(completed/total)을 올리고, 파일 하나의 실패는 그 행의 사유로 남으며 요약이 결과물이다
+    (전부 실패해도 작업은 succeeded, 스캔 자체의 실패만 failed). 새 snapshot은 여전히 검수 대기(proposed)다
+  - 어디: `kg/v3/service.py`(`scan_sources`·`register_directory`·`source_digest` 캐시), `kg/v3/db.py`(런타임 테이블 `source_digest`),
+    `kg/v3/api.py`(`GET /sources/scan` · `POST /documents/register-directory`), `kg/v3/__main__.py`(`register` 명령),
+    `kg/v3/watch.py`(기본 하위 폴더 감시, `--no-recursive`), `frontend/src/v3/DocumentRegister.tsx`(폴더 미리보기·진행·요약 모드)
+  - 테스트: `tests/test_v3_register_directory.py` 17건 + `tests/test_v3_watch.py` 5건 → `python -m pytest tests/test_v3_register_directory.py tests/test_v3_watch.py -q` **22 passed**.
+    브라우저 시나리오는 `e2e/v3/register-directory.spec.ts`(결과는 `docs/e2e-results-v3.md`)
+  - 문서: `docs/ARCHITECTURE_V3.md`(ERD에 `source_digest` — 22개 테이블·인덱스 39개, §2.1 일괄 등록 시퀀스, API 지도·프런트·테스트·운영),
+    `docs/design/v3-decisions.md` §11(변경 판정·실패 처리·잠긴 파일·승인 정책), README 빠른 시작·CLI, `.env.sample`(`KG_V3_REGISTER_DIRECTORY_LIMIT`)
 
 ## 2026-09-07
 

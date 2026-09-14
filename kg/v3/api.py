@@ -616,7 +616,8 @@ def jobs_list(service, state, kind, cursor, limit):
     with service.db.connect() as conn:
         found = rows(conn, f"SELECT * FROM runtime_job WHERE {' AND '.join(where)} ORDER BY created_at DESC, job_id DESC LIMIT ?", (*params, limit + 1))
     result = page(found, limit, ("created_at", "job_id"), scope)
-    result["items"] = [Jobs.public(r) for r in result["items"]]
+    # 목록은 축약 결과만 싣는다(§6): 폴더 일괄 등록의 documents[≤500]까지 실으면 한 페이지가 수 MB가 된다.
+    result["items"] = [Jobs.public(r, brief=True) for r in result["items"]]
     return result
 
 

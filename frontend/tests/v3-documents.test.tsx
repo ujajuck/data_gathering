@@ -540,6 +540,42 @@ describe("v3 폴더 일괄 등록(§4.1.1)", () => {
     await screen.findByText("진행 중 작업 1");
   });
 
+  it("화면을 바꿔도 초점이 대화상자 안에 남아 Esc로 닫을 수 있다", async () => {
+    const { f, user, dialog } = await openRegister();
+    await user.click(within(dialog).getByRole("button", { name: "2024 전체 등록" }));
+    await f.waitForApi(/^\/sources\/scan\?directory=2024/);
+    await within(dialog).findByText("2024/ 아래 파일 5개 · 하위 폴더 1개");
+    // 누른 버튼(파일 목록)이 사라져도 초점은 대화상자 안에 남는다 — body로 떨어지면 Esc가 죽고 Tab이 밖으로 샌다.
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await user.click(footer(dialog).getByRole("button", { name: "파일 고르기로 돌아가기" }));
+    await within(dialog).findByRole("table", { name: "원본 파일 목록" });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("대화상자를 닫은 뒤 작업이 끝나면 문서 목록을 다시 읽는다", async () => {
+    const { f, user, dialog } = await openRegister();
+    const running = job({ kind: "register", state: "running", completed: 1, total: 3, result: null, finished_at: null, label: "2024 폴더 일괄 등록" });
+    f.overrides.set("POST /documents/register-directory", () => {
+      f.state.running.push(running);
+      return running;
+    });
+    await user.click(within(dialog).getByRole("button", { name: "2024 전체 등록" }));
+    await f.waitForApi(/^\/sources\/scan\?directory=2024/);
+    await within(dialog).findByText("2024/ 아래 파일 5개 · 하위 폴더 1개");
+    await user.click(startButton(dialog));
+    await within(dialog).findByText(/폴더 일괄 등록 진행 중/);
+    await user.click(footer(dialog).getByRole("button", { name: "닫기" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await screen.findByText("진행 중 작업 1");
+    const before = f.callsTo(/^\/documents\?/).length;
+    f.state.running.length = 0; // 서버에서 작업이 끝났다
+    await waitFor(() => expect(screen.queryByText("진행 중 작업 1")).toBeNull(), { timeout: 10000 });
+    // JobBar가 종료를 보면 캐시를 비우고 알리므로 목록이 다시 읽힌다(대화상자는 이미 닫혔다).
+    await waitFor(() => expect(f.callsTo(/^\/documents\?/).length).toBeGreaterThan(before), { timeout: 10000 });
+  });
+
   it("결과가 500행을 넘으면 잘렸다는 안내를 함께 보여준다", async () => {
     const { f, user, dialog } = await openRegister();
     f.overrides.set("POST /documents/register-directory", () =>

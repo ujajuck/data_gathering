@@ -27,8 +27,8 @@ NASCA/DRM/로컬 Excel ─▶ Reader(격리 프로세스) ─▶ describe(+match
 
 ## 1. DB 스키마 (ERD)
 
-`<ws>/data/kg/v3.db` 하나에 코어 18개 + `schema_meta` + 런타임 2개(`runtime_job`, `snapshot_signature`; `kg/v3/db.py`가 만든다) = 21개 테이블,
-트리거 35개(불변성·CAS·발행 조건·레벨·projection 보호), 뷰 1개(`current_value`), 명시 인덱스 32개.
+`<ws>/data/kg/v3.db` 하나에 코어 18개 + `schema_meta` + 런타임 3개(`runtime_job`, `snapshot_signature`, `source_digest`; `kg/v3/db.py`가 만든다) = 22개 테이블,
+트리거 35개(불변성·CAS·발행 조건·레벨·projection 보호), 뷰 1개(`current_value`), 명시 인덱스 39개.
 PostgreSQL 번역은 [db/v3/schema_postgres.sql](../db/v3/schema_postgres.sql)(pglast 구문·객체 집합 검증, 런타임 미검증).
 
 핵심 규칙:
@@ -37,6 +37,7 @@ PostgreSQL 번역은 [db/v3/schema_postgres.sql](../db/v3/schema_postgres.sql)(p
 - 프로파일은 snapshot에 적용된다(`parsing_application`). 규칙별 `mapping`의 헤드는 **마지막 리비전**이고 `edit_seq = 헤드 revision_no`(CAS 트리거). 헤드가 바뀌면 `published_run_id`가 NULL이 된다.
 - 값은 `extracted_value`(불변)이고 출처는 **항상** `extracted_value_region`(단일 출처도 행 1개). `source_region_id` 컬럼은 없다.
 - `parsing_field`·`parsing_rule`은 DELETE가 금지된다(정의 파일에서 사라지면 `status='deprecated'`).
+- `source_digest`는 로컬 원본의 `(byte_size, mtime_ns)` → 내용 SHA-256 캐시다(폴더 일괄 등록 미리보기가 같은 stat이면 파일을 다시 읽지 않게 한다). 진실은 `document_snapshot.change_token`이라 언제 지워도 되고, 다음 스캔이 다시 채운다(계약 §1.6).
 
 ### 문서·snapshot·원본 위치
 
@@ -370,9 +371,17 @@ erDiagram
         TEXT heartbeat_at
         TEXT finished_at
     }
+    source_digest {
+        TEXT provider PK
+        TEXT source_path PK
+        INTEGER byte_size
+        INTEGER mtime_ns
+        TEXT content_sha256
+        TEXT seen_at
+    }
 ```
 
-테이블 21개 · 트리거 35개 · 뷰 1개(current_value) · 명시 인덱스 32개
+테이블 22개 · 트리거 35개 · 뷰 1개(current_value) · 명시 인덱스 39개
 
 트리거 목록: `application_identity`, `application_starts_unpublished`, `document_snapshot_no_delete`, `document_snapshot_no_update`, `extracted_value_no_delete`, `extracted_value_no_update`, `extracted_value_region_no_delete`, `extracted_value_region_no_update`, `extraction_run_no_delete`, `extraction_run_no_update`, `field_edge_level`, `field_edge_level_update`, `field_edge_same_schema`, `field_group_guard`, `field_group_not_target_revision`, `field_group_not_target_rule`, `field_group_not_target_rule_update`, `field_level_guard`, `mapping_edit_seq`, `mapping_edit_seq_advance`, `mapping_head_guard`, `mapping_head_invalidates`, `mapping_identity`, `mapping_region_no_delete`, `mapping_region_no_update`, `mapping_revision_no_delete`, `mapping_revision_no_update`, `parsing_field_no_delete`, `parsing_rule_no_delete`, `publish_run`, `run_state_transition`, `sheet_no_delete`, `sheet_no_update`, `source_region_no_delete`, `source_region_no_update`
 
@@ -413,14 +422,14 @@ flowchart LR
 | `normalization.py` | v2 op 위임 + `split_delimiter`, 파이프라인 검증 | §2 normalization |
 | `engine.py` | 영역 해결(range/find/regex/relative/anchor/composite), 추출 스트림(group → values → verified), 시트 바인딩, 매치 판정(`match_profile`·`match_specs`, 매치 서명) | §3.1, §3.3 |
 | `readers.py` | Reader 계약: `describe(profiles)`(등록 시 프로세스 1회) · `match` · `match_specs` · `extract` · `render`; `KG_V3_READER_FACTORY`로 DRM Reader 교체 | §3.2 |
-| `service.py` | 등록·snapshot 판정·자동 적용·승계·검수(CAS)·추출·발행·프로파일 테스트/승인/재파싱·문서 상태 캐시·조회 | §4 |
+| `service.py` | 등록·snapshot 판정·자동 적용·승계·검수(CAS)·추출·발행·프로파일 테스트/승인/재파싱·문서 상태 캐시·조회, 폴더 재귀 스캔·분류(`scan_sources`)와 폴더 일괄 등록 작업(`register_directory`) | §4, §4.1.1 |
 | `build.py` | 후보 판정 · 미리보기 · CSV/XLSX/SQLite 생성 · manifest · `build_key` 재사용 · 단위 변환(`UnitRegistry`) | §4.10 |
 | `operations.py` | 검수 큐 5종(같은 원인·서명 묶음), 멤버, 묶음 처리 작업 | §4.11 |
 | `api.py` | FastAPI `/api/v3`(§6 전부), 오류 봉투, `?wait=`, 렌더 프록시(권한 → ETag/304), 정적 프런트 | §6 |
 | `contracts.py` | Pydantic 요청 모델(`extra=forbid`) | §6 |
 | `render/*` | 렌더 서버(§5): `renderer`(이벤트) · `assemble`(밴드 파일) · `cache`(창·LRU·세대·asset 검증) · `server`(POST/GET/DELETE/status, 멱등 큐, 실패 보관) · `client`(HTTP·in-process 동일 형태, `RenderUnavailable`) | §5 |
-| `migrate.py` · `watch.py` | v2 → v3 이관(보고서), raw 폴더 감시 → 등록+자동 적용 | §9, §10 |
-| `__main__.py` | `serve · render-serve · watch · migrate · import-schema · import-profile · build · seed-demo`(`.env` 자동 로드) | §10 |
+| `migrate.py` · `watch.py` | v2 → v3 이관(보고서), raw 폴더 감시 → 등록+자동 적용(기본 하위 폴더까지, `--no-recursive`로 최상위만; 제외 규칙은 폴더 스캔과 같다) | §9, §10 |
+| `__main__.py` | `serve · render-serve · watch · register · migrate · import-schema · import-profile · build · seed-demo`(`.env` 자동 로드) | §10 |
 
 ### 2.1 등록 → 자동 적용 → 추출 → 발행
 
@@ -452,6 +461,36 @@ sequenceDiagram
 
 - 같은 문서에 다른 `change_token`이 오면 새 snapshot을 만들고 이전 application을 `match_specs`로 재판정해 **항상 `proposed`(origin inherited)**로 승계한다(자동 승인 없음, [v3-decisions §1](design/v3-decisions.md)). 작업 내역 '변경 감지'의 `approve_all`이 승인+추출+발행을 요청 1회로 처리한다.
 - 잠긴 파일(DRM Reader 미등록)은 `document.status='locked'` + 실패 작업으로 남는다.
+
+**폴더 일괄 등록(§4.1.1)** — 파일을 하나씩 고르는 대신 루트 폴더 하나를 지정하면 그 아래(하위 폴더 포함) 전부가 대상이다.
+
+```mermaid
+sequenceDiagram
+    participant UI
+    participant API
+    participant SVC as Service
+    participant FS as 원본 폴더
+    participant DB
+    UI->>API: GET /sources/scan?directory=2024
+    API->>SVC: scan_sources — Reader 프로세스 없음
+    SVC->>FS: os.scandir 재귀(이름 순) · stat만
+    SVC->>DB: 등록 문서·현재 snapshot + source_digest 조회(SELECT 2회)
+    SVC->>FS: 캐시에 없고 크기가 같은 파일만 SHA-256
+    SVC-->>UI: files · folders · states{new, changed, unchanged, locked} · skipped · targeted
+    UI->>API: POST /documents/register-directory?wait=10 {directory, include_unchanged}
+    API->>SVC: jobs.submit(register, target_kind=workspace, label='2024 폴더 일괄 등록')
+    loop 대상 파일마다(new·changed, 체크하면 unchanged·locked), 이름 순
+        SVC->>SVC: §4.1 register(source_ref) — 위 시퀀스 그대로(Reader 1회 → 자동 적용 → 추출)
+        SVC->>DB: checkpoint(n, targeted) · source_digest 갱신
+    end
+    API-->>UI: JobResponse{result.summary, documents[≤500], truncated}
+```
+
+- 스캔은 **Reader 프로세스를 띄우지 않는다**. 메인 프로세스에서 stat을 보고, 크기가 같은 기존 문서만 내용 해시(Reader의 `change_token`과 같은 SHA-256)로 비교하며, 해시는 `source_digest`에 `(byte_size, mtime_ns)` 키로 캐시된다. 단일 등록·watch·일괄 등록 어느 경로로 들어온 문서든 등록 직후 캐시가 채워지므로, 같은 폴더를 다시 미리보기 해도 파일을 읽지 않는다.
+- Reader는 **등록 대상에만** 붙는다: 기본은 `new + changed`(다른 provider는 `registered` 포함), `include_unchanged: true`면 `unchanged`·`locked`까지 다시 읽는다. 변경 없는 파일이 많은 폴더를 다시 돌리는 비용은 스캔 비용이다.
+- 파일 하나의 Problem은 그 행의 `error`로 남기고 다음 파일로 간다 — **전부 실패해도 작업은 `succeeded`**이고 요약이 결과물이다(스캔 자체의 Problem만 작업 `failed`). 취소하면 그때까지 등록된 문서는 남는다.
+- 한도: 걸은 항목 200,000개 또는 대상 파일 `KG_V3_REGISTER_DIRECTORY_LIMIT`(기본 10,000)를 넘으면 413 `DIRECTORY_LIMIT`("하위 폴더를 나누어 등록하세요"). 심볼릭 링크와 `.`으로 시작하는 폴더는 따라가지 않고, `~$` 임시 파일·대상 외 확장자는 `skipped`로 센다.
+- 일괄이어도 등록 규칙은 §4.1과 같다: 이미 있는 문서의 새 내용은 새 snapshot으로 승계되고 **여전히 `proposed`**(자동 승인 없음, [v3-decisions §1](design/v3-decisions.md)·[§11](design/v3-decisions.md)).
 
 ### 2.2 검수 (Source Review)
 
@@ -503,7 +542,7 @@ integration/build는 `<ws>/data/exports/migrated-<build_id>/manifest.json`으로
 
 | 화면 | 진입 호출(≤3) | 주요 쓰기 |
 |---|---|---|
-| 문서 | `GET /documents`, `GET /profiles`(필터), `GET /status`(쉘 공유) | `POST /documents/register?wait`, `POST /snapshots/{sid}/applications?wait` |
+| 문서 | `GET /documents`, `GET /profiles`(필터), `GET /status`(쉘 공유) | `POST /documents/register?wait`, `GET /sources/scan?directory=`(폴더 미리보기) → `POST /documents/register-directory?wait`, `POST /snapshots/{sid}/applications?wait` |
 | 문서 상세 | `GET /documents/{id}`, `GET /snapshots/{sid}/sheets`, 탭별 1건 | — |
 | 파싱 프로파일 | `GET /profiles`, `GET /profiles/{id}`, `GET /profiles/{id}/documents` | `POST/PUT /profiles`, `import-preview`, `test`, `approve`, `reparse` |
 | 파싱 스키마 | `GET /schemas`, `GET /schemas/{key}`, `GET /schemas/{key}/tree` (그래프는 토글 시) | `POST/PUT /schemas`, `PATCH .../fields/{key}` |
@@ -526,6 +565,7 @@ classDiagram
     class client_ts { api/apiRaw · 60초 GET 캐시 · in-flight 중복 제거 · useData/usePage · useRoute · useJob · 라벨 도우미 }
     class SheetViewer { 창 단위 가상화 그리드 · overlay · 드래그 선택 · 202/4xx/503 처리 }
     class Documents { 표 · 필터 · 정렬 · 선택 → 데이터 빌드 · 등록 대화상자 }
+    class DocumentRegister { 파일 고르기 ↔ 폴더 미리보기 · 진행 · 결과 요약 }
     class DocumentDetail { 파일 보기 · 추출 결과 · 적용 프로파일 · 연결 스키마 }
     class Profiles { 목록 · 상세 6탭 · 규칙 폼 · JSON · Import }
     class Schema { 목록 · 트리/그래프 토글 · 사용 프로파일 · 연관 문서 · 필드 상세 }
@@ -538,12 +578,14 @@ classDiagram
     Workbench --> Build
     Workbench --> Jobs
     Workbench --> SourceReview
+    Documents --> DocumentRegister
     Documents --> DocumentDetail
     DocumentDetail --> SheetViewer
     SourceReview --> SheetViewer
     Workbench ..> client_ts
 ```
 
+- `+ 문서 등록` 대화상자는 두 모드다: 파일 체크박스(`POST /documents/register`)와 **폴더 일괄 등록**(툴바 `이 폴더 전체 등록`·폴더 행 `전체 등록` → `GET /sources/scan?directory=` 미리보기 칩 `새 파일 · 변경된 문서 · 변경 없음 · 잠김`, 체크박스 `변경 없는 문서·잠긴 문서도 다시 읽기`, 주 행동 `N개 등록 시작` → `POST /documents/register-directory?wait=10` → 진행률 `(completed/total)` → 요약 `N개 중 R개 등록 · U개 변경 없음 · F개 실패`와 파일별 결과 표). 미리보기는 폴더당 1회 호출이고 대상이 0이면 시작 버튼이 비활성이다.
 - 화면 문자열에 내부 ID(UUID·SHA-256)를 쓰지 않는다(`tests/v3-ids.test.tsx`), 금지 용어(`템플릿·문서군·KG·Concept·Integration·Template`)를 쓰지 않는다(`tests/v3-terms.test.tsx`), v2 훅/API를 import하지 않는다(`tests/v3-imports.test.tsx`), 화면 진입 호출 ≤3(`tests/v3-entry-calls.test.tsx`).
 - 파일·라우트·픽스처 설명은 [frontend/src/v3/README.md](../frontend/src/v3/README.md).
 - `?v2=1`은 v2 화면, `?v1=1`은 v1 화면으로 그대로 열린다.
@@ -558,9 +600,10 @@ classDiagram
 | DSL·엔진·정규화 | `tests/test_v3_profile.py`, `test_v3_engine.py`, `test_v3_normalization.py` | 문법·기본값·adapter·앵커/composite/relations/regex·매치 판정·split_delimiter |
 | 렌더 | `tests/test_v3_render.py` | 밴드·창 불변식·asset 격리·202/200/304·멱등 큐·세대·격리 중 응답 시간 |
 | 서비스·API | `tests/test_v3_service.py`, `test_v3_api.py`, `test_v3_build.py`, `test_v3_operations.py`, `test_v3_runtime.py` | 등록→자동 적용→검수→승인→재파싱→추출→빌드→큐→새 snapshot 승계→테스트→검색·상태 전이, 2,000건 목록 성능 |
+| 폴더 일괄 등록 | `tests/test_v3_register_directory.py`, `tests/test_v3_watch.py` | 스캔 분류(new/changed/unchanged/locked)·건너뜀·숨김 폴더·`source_digest` 재사용(해시 호출 0회)·진행률·요약/`truncated`/취소·`include_unchanged`·경로 오류·413 한도·API 두 경로·CLI `register`·watch 재귀 |
 | 이관 | `tests/test_v3_migrate.py` | v2 작업 공간 → v3, 값·영역 수 보존, 발행 실행 유지 |
 | 컴포넌트 | `frontend/tests/v3-*.test.tsx` | 화면별 상호작용 + 규칙 테스트(용어·ID·import·진입 호출·접근성) |
-| 브라우저 | `e2e/v3/*.spec.ts` (`npm run test:v3`) | 임시 작업 공간 + 렌더 서버 별도 프로세스; 결과는 [e2e-results-v3.md](e2e-results-v3.md) |
+| 브라우저 | `e2e/v3/*.spec.ts` (`npm run test:v3`) | 임시 작업 공간 + 렌더 서버 별도 프로세스; `register-directory.spec.ts`가 폴더 트리 등록 → 재스캔(변경 없음) → 다시 읽기 → 변경 감지를 한 흐름으로 확인한다. 결과는 [e2e-results-v3.md](e2e-results-v3.md) |
 
 ---
 
@@ -571,8 +614,9 @@ pip install -e ".[web,test]"
 python -m kg.v3 seed-demo --workspace /tmp/v3-demo          # 가상 문서·스키마·프로파일
 python -m kg.v3 render-serve --ws /tmp/v3-demo --port 8032  # 렌더 서버(별도 프로세스)
 KG_V3_RENDER_URL=http://127.0.0.1:8032 python -m kg.v3 serve --ws /tmp/v3-demo --port 8010
-python -m kg.v3 watch --ws /tmp/v3-demo                     # raw 폴더 감시 → 등록 + 자동 적용
+python -m kg.v3 watch --ws /tmp/v3-demo                     # raw 폴더 감시 → 등록 + 자동 적용(기본 하위 폴더 포함, --no-recursive로 최상위만)
+python -m kg.v3 register --ws /tmp/v3-demo --directory 2024 # 폴더 아래 전부 등록(요약 JSON; --include-unchanged로 다시 읽기)
 python -m kg.v3 migrate --ws /tmp/v3 --from-ws domains/financier --report report.json
 ```
 
-환경변수: `KG_V3_RENDER_URL`(없으면 in-process 렌더), `KG_V3_READER_FACTORY`(DRM Reader; 없으면 `KG_V2_READER_FACTORY`), `KG_V3_READER_TIMEOUT_SECONDS`/`_MEMORY_MB`, `KG_V3_RENDER_CONCURRENCY`(기본 1), `KG_V3_RENDER_LRU_MB`/`_CACHE_MB`, `KG_V3_ACCESS_TOKEN`, `KG_V3_PRINCIPAL`. `kg.webapp`(v1 서버)에도 `/api/v3`가 함께 설치된다.
+환경변수: `KG_V3_RENDER_URL`(없으면 in-process 렌더), `KG_V3_READER_FACTORY`(DRM Reader; 없으면 `KG_V2_READER_FACTORY`), `KG_V3_READER_TIMEOUT_SECONDS`/`_MEMORY_MB`, `KG_V3_RENDER_CONCURRENCY`(기본 1), `KG_V3_RENDER_LRU_MB`/`_CACHE_MB`, `KG_V3_REGISTER_DIRECTORY_LIMIT`(폴더 일괄 등록 한 번의 대상 파일 상한, 기본 10,000 — 넘으면 413과 함께 하위 폴더로 나누라고 안내한다), `KG_V3_ACCESS_TOKEN`, `KG_V3_PRINCIPAL`. `kg.webapp`(v1 서버)에도 `/api/v3`가 함께 설치된다.

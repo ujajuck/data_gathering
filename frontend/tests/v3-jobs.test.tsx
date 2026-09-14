@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { SHA_RE, UUID_RE, ids } from "./v3-fixture";
+import { SHA_RE, UUID_RE, ids, job, page } from "./v3-fixture";
 import { FAILED_APPLICATION, GROUP_KEYS, REVIEW_APPLICATION, RUNNING_JOB, jobsFixture } from "./v3-jobs-fixture";
 
 const route = () => new URLSearchParams(location.search);
@@ -178,6 +178,35 @@ describe("v3 작업 내역 화면", () => {
     for (const [key, value] of Object.entries(expected)) expect(route().get(key)).toBe(value);
     // 성공·진행 중 행에는 이동 버튼이 없다
     expect(f.calls.some((c) => c.method !== "GET")).toBe(false);
+  });
+
+  it("폴더 일괄 등록 행의 결과 열은 잘린 documents 길이가 아니라 요약을 보여준다", async () => {
+    const f = jobsFixture();
+    f.overrides.set("GET /jobs", () =>
+      page([
+        job({
+          kind: "register",
+          label: "2024 폴더 일괄 등록",
+          target_kind: "workspace",
+          target_id: null,
+          completed: 3000,
+          total: 3000,
+          // 목록 응답의 축약 결과(§6): documents 본문 대신 documents_count만 온다.
+          result: {
+            directory: "2024",
+            truncated: true,
+            documents_count: 500,
+            summary: { found: 3200, targeted: 3000, registered: 2990, new: 3000, changed: 0, unchanged: 200, failed: 10, locked: 2, skipped: { temp: 0, unsupported: 0, symlink: 0 } },
+          },
+        }),
+      ]),
+    );
+    f.renderApp("?screen=jobs");
+    const table = await screen.findByRole("table", { name: "작업 목록" });
+    const row = within(table).getAllByRole("row")[1];
+    expect(row.textContent).toContain("등록");
+    expect(row.textContent).toContain("3000개 중 2990개 등록 · 200개 변경 없음 · 10개 실패 · 2개 잠김");
+    expect(row.textContent).not.toContain("문서 500개");
   });
 
   it("작업 목록 필터는 URL·API에 반영되고, 진행 중 작업은 취소할 수 있다(낙관적 갱신)", async () => {

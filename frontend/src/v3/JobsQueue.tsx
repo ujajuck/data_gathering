@@ -53,9 +53,10 @@ async function runQueueAction(kind: QueueKind, groupKey: string, body: ActionBod
 }
 
 export function resultSummary(result: Record<string, unknown> | null | undefined): string {
-  const r = (result || {}) as Partial<QueueActionResult>;
+  const r = (result || {}) as Partial<QueueActionResult> & { skipped_count?: number };
   if (typeof r.queued !== "number") return "";
-  const skipped = Array.isArray(r.skipped) ? r.skipped.length : 0;
+  // 목록(GET /jobs)의 축약 결과는 배열 대신 `<key>_count`만 싣는다(§6).
+  const skipped = Array.isArray(r.skipped) ? r.skipped.length : typeof r.skipped_count === "number" ? r.skipped_count : 0;
   return `처리 ${r.queued}건` + (skipped ? ` · 건너뜀 ${skipped}건` : "");
 }
 

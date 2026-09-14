@@ -156,6 +156,9 @@ def reader_result(root, provider, principal, operation, payload, checkpoint=lamb
     return result
 
 
+BRIEF_ROWS = 20  # 목록(GET /jobs) 응답에 그대로 싣는 배열 길이 상한(§6)
+
+
 class Jobs:
     """runtime_job 큐. handler(kind, payload, principal, checkpoint) → result dict."""
 
@@ -301,11 +304,28 @@ class Jobs:
                 )
         self._notify_done()
 
+    @staticmethod
+    def brief_result(result):
+        """목록(GET /jobs)용 축약 결과(§6): BRIEF_ROWS를 넘는 배열만 본문을 빼고 `<key>_count`로 대신한다.
+
+        폴더 일괄 등록 결과의 documents[]는 최대 500행(수백 KB)이라 목록 한 페이지(50건)가 수 MB가 된다.
+        짧은 배열(묶음 처리의 skipped[] 등)은 그대로 둬 화면이 곧바로 쓸 수 있게 한다. 전문은 GET /jobs/{id}가 준다."""
+        if not isinstance(result, dict):
+            return result
+        brief = {}
+        for key, value in result.items():
+            if isinstance(value, list) and len(value) > BRIEF_ROWS:
+                brief[f"{key}_count"] = len(value)
+            else:
+                brief[key] = value
+        return brief
+
     @classmethod
-    def public(cls, row):
+    def public(cls, row, brief=False):
+        result = json.loads(row["result_json"]) if row.get("result_json") else None
         return {
             **{k: row.get(k) for k in cls.PUBLIC},
-            "result": json.loads(row["result_json"]) if row.get("result_json") else None,
+            "result": cls.brief_result(result) if brief else result,
         }
 
     def get(self, jid, principal=None):

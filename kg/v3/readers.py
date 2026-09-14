@@ -45,6 +45,14 @@ class XlsxReader(V2XlsxReader):
         try:
             return super().authorize(source_ref, required)
         except V2Problem as exc:
+            if exc.code == "DRM_READER_REQUIRED" and source_ref.lower().endswith(".xls"):
+                # 구형 .xls(OLE2)와 암호화된 OOXML은 매직이 같아 구분되지 않는다(둘 다 PK가 아니다).
+                # 코드·상태는 계약 §4.1 그대로 두고(잠김), 문구만 두 경우를 모두 알려 사용자가 헤매지 않게 한다.
+                raise Problem(
+                    exc.code,
+                    "구형 .xls 형식이거나 암호화된 문서입니다. .xlsx로 저장한 뒤 등록하거나, 암호화 문서는 승인된 보안 읽기 어댑터로 접근하세요.",
+                    exc.status,
+                ) from None
             raise Problem(exc.code, exc.message, exc.status) from None
 
     def describe(self, source_ref, profiles=()):

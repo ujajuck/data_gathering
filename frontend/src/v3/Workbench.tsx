@@ -8,6 +8,7 @@ import {
   SETTINGS_SCREEN,
   ToastContext,
   api,
+  notifyJobsFinished,
   setToken,
   useData,
   useDebounced,
@@ -300,6 +301,8 @@ export function JobBar({ initialRunning = 0 }: { initialRunning?: number }) {
   const [running, setRunning] = useState<number | null>(null);
   const count = running ?? initialRunning;
   const shouldPoll = count > 0 || writeSeq > 0;
+  // 직전 폴링에서 본 진행 중 작업 수. >0에서 0으로 떨어지는 순간이 '작업이 끝났다'는 신호다.
+  const previous = useRef(0);
   useEffect(() => {
     if (!shouldPoll) return;
     let cancelled = false;
@@ -309,6 +312,9 @@ export function JobBar({ initialRunning = 0 }: { initialRunning?: number }) {
         const page = await api<Page<JobResponse>>("/jobs?state=running", undefined, { fresh: true });
         if (cancelled) return;
         setRunning(page.items.length);
+        // 대화상자를 닫은 뒤 끝난 작업(폴더 일괄 등록 등)의 결과가 목록에 보이도록 캐시를 비우고 알린다.
+        if (previous.current > 0 && page.items.length === 0) notifyJobsFinished();
+        previous.current = page.items.length;
         if (page.items.length > 0) timer = setTimeout(tick, 2000);
       } catch {
         if (!cancelled) setRunning(0);

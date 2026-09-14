@@ -360,6 +360,8 @@ Schema 정의 JSON(`schemas/<schema_key>/r%04d.json`):
 
 ### 4.1 문서 등록 (`register`)
 `source_ref`는 저장·조회 전에 정규화한다(`posixpath.normpath`; `a.xlsx`·`./a.xlsx`·`sub/../a.xlsx`는 같은 문서, 절대 경로·`..` 상위 이동은 422 `INVALID_SOURCE`). `describe(profiles = status='approved' 전부)` 1회 → `document`(provider, 정규화한 source_path로 upsert) + snapshot 판정(describe `token`이 **현재** snapshot의 `change_token`과 같으면 새 snapshot 없음; 다르면 §4.4) + `sheet` + `snapshot_signature` → 같은 작업에서 `auto_apply`(§4.3, describe의 `matches[]` 사용) → `refresh_document_status`. 잠긴 파일(PK 매직 아님·DRM Reader 미등록)은 작업 `failed(DRM_READER_REQUIRED)`, `document.status='locked'`, `last_error` 기록(문서 행은 남는다).
+`provider`는 작업을 만들기 전에 검증한다: `'local-xlsx'`이거나 Reader 어댑터(`KG_V3_READER_FACTORY`)가 연결돼 있어야 하고, 아니면 422 `UNKNOWN_PROVIDER`(알 수 없는 provider로 잠긴 문서 행을 양산하지 않는다).
+`local-xlsx`는 등록 전후 stat이 같으면 `source_digest`(§1.6)에 `(byte_size, mtime_ns, snapshot.change_token)`을 기록한다 — watch·단일 등록·폴더 일괄 등록 어느 경로로 들어와도 다음 폴더 미리보기(§4.1.1)가 파일을 다시 읽지 않는다.
 
 #### 4.1.1 폴더 일괄 등록 (`scan_sources(directory)`, `register_directory(directory, provider, include_unchanged)`)
 사용자는 파일을 하나씩 고르지 않고 **루트 폴더 하나를 지정**하면 그 아래(하위 폴더 포함) 전부를 등록한다.
@@ -448,7 +450,7 @@ UI는 202를 받으면 **뷰어 영역만** "렌더링 중"을 표시하고 700m
 
 ## 6. API (`kg/v3/api.py`, prefix `/api/v3`)
 
-공통: 오류 `{"error":{"code","message","fields?"}}`(모든 message는 한국어; Pydantic 검증 오류 `VALIDATION_ERROR`도 유형별 한국어 문장으로 옮기고 원문은 `fields[].detail`에 남긴다); 목록 `{"items","has_more","next_cursor"}`(keyset, `limit` 기본 50 최대 200); 쓰기는 Pydantic 모델(`contracts.py`, `extra=forbid`); 작업 응답 `JobResponse{job_id, kind, state, completed, total, result, error_code, error_message, target_kind, target_id, label, created_at, started_at, finished_at}`; 접근 토큰 `KG_V3_ACCESS_TOKEN`(없으면 `KG_V2_ACCESS_TOKEN`), principal `KG_V3_PRINCIPAL`. 본문 2MB 상한. `Cache-Control: no-store`(렌더 창·asset은 `private, no-cache` + ETag/304).
+공통: 오류 `{"error":{"code","message","fields?"}}`(모든 message는 한국어; Pydantic 검증 오류 `VALIDATION_ERROR`도 유형별 한국어 문장으로 옮기고 원문은 `fields[].detail`에 남긴다); 목록 `{"items","has_more","next_cursor"}`(keyset, `limit` 기본 50 최대 200); 쓰기는 Pydantic 모델(`contracts.py`, `extra=forbid`); 작업 응답 `JobResponse{job_id, kind, state, completed, total, result, error_code, error_message, target_kind, target_id, label, created_at, started_at, finished_at}`(목록 `GET /jobs`의 `result`는 축약본 — 20행을 넘는 배열은 본문 대신 `<key>_count`만 싣는다(§4.1.1 `documents[≤500]`로 목록이 수 MB가 되지 않게); 전문은 `GET /jobs/{id}`); 접근 토큰 `KG_V3_ACCESS_TOKEN`(없으면 `KG_V2_ACCESS_TOKEN`), principal `KG_V3_PRINCIPAL`. 본문 2MB 상한. `Cache-Control: no-store`(렌더 창·asset은 `private, no-cache` + ETag/304).
 `?wait=<초>`(최대 60)를 받는 작업 엔드포인트는 그 시간까지 완료를 기다렸다가 최종 `JobResponse`를 돌려준다(기본 0 = 즉시 202).
 
 | 화면 | Method 경로 | 요약 |
@@ -544,7 +546,7 @@ UI는 202를 받으면 **뷰어 영역만** "렌더링 중"을 표시하고 700m
 
 ## 10. CLI (`python -m kg.v3`)
 
-`serve --ws --port [--host]` · `render-serve --ws --port` · `watch --ws [--raw --interval --once --no-recursive]`(등록+자동 적용, 기본 하위 폴더 포함) · `register --ws --directory <raw 기준 폴더> [--include-unchanged --provider]`(§4.1.1 폴더 일괄 등록, 요약 JSON 출력; 실패 행이 있으면 종료 코드 1) · `migrate …` · `import-schema --ws --file` · `import-profile --ws --schema --file [--format]` · `build --ws --schema --documents … --format --out` · `seed-demo --workspace`. 모두 시작 시 `.env` 로드(`kg/env.py`).
+`serve --ws --port [--host]` · `render-serve --ws --port` · `watch --ws [--raw --interval --once --no-recursive]`(등록+자동 적용, 기본 하위 폴더 포함; 제외 규칙은 §4.1.1 스캔과 같다 — 심볼릭 링크와 `.`으로 시작하는 폴더 아래 파일은 건너뛰고 `skipped:'HIDDEN_DIR'`로 알린다) · `register --ws --directory <raw 기준 폴더> [--include-unchanged --provider]`(§4.1.1 폴더 일괄 등록, 요약 JSON 출력; 실패 행이 있으면 종료 코드 1) · `migrate …` · `import-schema --ws --file` · `import-profile --ws --schema --file [--format]` · `build --ws --schema --documents … --format --out` · `seed-demo --workspace`. 모두 시작 시 `.env` 로드(`kg/env.py`).
 
 ---
 
@@ -553,6 +555,6 @@ UI는 202를 받으면 **뷰어 영역만** "렌더링 중"을 표시하고 700m
 - `tests/test_schema_v3.py`: 불변식(리비전 불변, CAS — 같은 expected_seq 두 번이면 IntegrityError·리비전 수 불변·edit_seq 직접 UPDATE 거부, 발행 조건과 헤드 변경 시 NULL, projection 삭제 금지, snapshot 바인딩(다른 snapshot의 sheet/region/revision 거부), 단일 출처 경로, parent_of 레벨(INSERT·UPDATE·NULL 거부), group 필드 매핑 거부, published_run 소유 검사, application 불변 컬럼).
 - `tests/test_schema_v3_postgres.py`(pglast 구문·객체 집합 비교).
 - `tests/test_v3_profile.py`(DSL·기본값·adapter v1/v2/generic·compile·오류 코드), `tests/test_v3_normalization.py`(split_delimiter 단독·혼합·version), `tests/test_v3_engine.py`(regex·anchor·composite bounding box/키/기준·AMBIGUOUS_ANCHOR·relative.anchor·relations same_row/same_column/offset·list/matrix/merged/stop·match_profile: within 밖 앵커 해결, missing, 서명 identical/compatible), `tests/test_v3_render.py`(밴드·창 불변식(원점 0·연속 누적·셀 중복 0·병합 straddle·이미지 교차·클램프/422/413)·asset 격리·202/200/failed·멱등 큐·invalidate 세대·격리 중 창 응답 < 20ms·304), `tests/test_v3_runtime.py`(API 통합: 등록 1회 Reader 프로세스 → 자동 적용(approved만) → 수동 적용(draft) → 검수 승인 → 프로파일 승인 → rematch 소급 → 자동 승인·추출 → 값/역조회 → 빌드 3형식+manifest+헤더 검증 → 큐 묶음 처리 → 새 snapshot 승계(proposed) → approve_all → 발행 → 프로파일 테스트 → 검색 → 문서 상태 전이), `tests/test_v3_migrate.py`(v2 템플릿 이관 뒤 추출 결과 동일, NULL concept 리비전, series_region 병합), `tests/test_v3_build.py`.
-- `tests/test_v3_register_directory.py`(§4.1.1: 스캔 분류 new/changed/unchanged/locked·temp/unsupported/symlink·숨김 폴더, `source_digest` 재사용(stat 같으면 `file_hash` 호출 0회), 크기 다르면 해시 없이 changed, 일괄 등록 작업의 summary/documents/truncated(한도 낮춰 검증)/취소, include_unchanged, `..`·절대 경로·없는 폴더 오류, 413 한도, API 두 경로, CLI `register`, watch 재귀).
+- `tests/test_v3_register_directory.py`(§4.1.1: 스캔 분류 new/changed/unchanged/locked·temp/unsupported/symlink·숨김 폴더·정규화가 바꾸는 이름(`..\a.xlsx`) 제외, 알 수 없는 provider 422, 스캔·해시 구간 진행률(checkpoint), `source_digest` 재사용(stat 같으면 `file_hash` 호출 0회), 크기 다르면 해시 없이 changed, 일괄 등록 작업의 summary/documents/truncated(한도 낮춰 검증)/취소, include_unchanged, `..`·절대 경로·없는 폴더 오류, 413 한도, API 두 경로, CLI `register`, watch 재귀).
 - 기존 v1·v2 테스트는 그대로 통과해야 한다.
 - 성능 회귀(단위): 문서 2,000건 목록 페이지 < 50ms(SQLite, 로컬), 렌더 캐시 창 응답 < 20ms.

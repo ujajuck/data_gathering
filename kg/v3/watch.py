@@ -1,6 +1,8 @@
 """raw 폴더의 XLSX를 v3 문서로 자동 등록한다(계약 §10 `watch`: 등록 + 자동 적용).
 
 기본으로 하위 폴더까지 감시한다(`**/*.xlsx`; `--no-recursive`면 최상위만). source_ref는 data/raw 기준 상대 경로라 하위 폴더도 그대로 통한다.
+제외 규칙은 §4.1.1 폴더 스캔과 같다: 심볼릭 링크와 `.`으로 시작하는 폴더(.git·.dvc·휴지통 등) 안의 파일은 등록하지 않는다 —
+두 진입점(watch·폴더 일괄 등록)의 대상 집합이 어긋나면 watch가 넣은 문서가 폴더 미리보기에서 영영 보이지 않는다.
 `kg.watch.FileEventWatcher`(폴링 + 안정화 판정)를 v2 `kg/v2/watch.py`와 같은 방식으로 재사용하고,
 등록은 v3 `Service.register_documents`(작업 1개: describe 1회 → snapshot → auto_apply → 추출·발행)로 보낸다.
 원본을 열어 저장하거나 해제본을 만들지 않는다.
@@ -47,11 +49,18 @@ class Watcher:
         except ValueError:
             raise Problem("OUTSIDE_RAW_DIR", "data/raw 밖을 가리키는 항목은 등록하지 않습니다.") from None
 
+    @staticmethod
+    def hidden(source_ref: str) -> bool:
+        """'.'으로 시작하는 폴더 아래인가(§4.1.1 스캔과 같은 규칙). 파일 이름 자체의 '.'은 보지 않는다."""
+        return any(part.startswith(".") for part in source_ref.split("/")[:-1])
+
     def handle(self, event: IngestEvent) -> dict:
         try:
             line = {"event": event.kind, "source_ref": self.source_ref(event.path)}
         except Problem as exc:
             return {"event": event.kind, "path": Path(event.path).name, "skipped": exc.code, "message": exc.message}
+        if self.hidden(line["source_ref"]):
+            return {**line, "skipped": "HIDDEN_DIR", "message": "숨김 폴더 안의 파일은 등록하지 않습니다(폴더 일괄 등록과 같은 규칙)."}
         if event.kind == "deleted":
             return {**line, "skipped": "FILE_DELETED", "message": "파일이 사라졌습니다. 등록된 문서·snapshot은 삭제하지 않습니다."}
         try:
@@ -88,8 +97,8 @@ class Watcher:
         lines = []
         for pattern in self.watcher.patterns:
             for p in Path(self.raw).glob(pattern):
-                if p.name.startswith("~$"):
-                    continue
+                if p.name.startswith("~$") or any(part.startswith(".") for part in p.relative_to(self.raw).parts[:-1]):
+                    continue  # 임시 파일·숨김 폴더는 §4.1.1과 같이 건너뛴다
                 try:
                     p.stat()
                 except OSError:

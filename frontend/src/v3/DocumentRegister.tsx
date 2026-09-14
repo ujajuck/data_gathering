@@ -10,7 +10,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { State, isJobActive, useData, useJob, useToast, withQuery } from "./client";
 import type { ChipClass, Page, RegisterResult, RegisterSummary, SourceEntry, SourceScan } from "./types";
 import { Chip, EmptyState, Modal, StatusChip } from "./ui";
-import { SCAN_STATE_CLASS, SCAN_STATE_LABELS, compatibilityLabel } from "./types";
+import { SCAN_STATE_CLASS, SCAN_STATE_LABELS, compatibilityLabel, registerSummaryText } from "./types";
 
 export const REGISTER_PROVIDER = "local-xlsx";
 
@@ -22,12 +22,6 @@ function formatSize(size: number | null | undefined): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
-}
-
-// 요약 줄(§7): "N개 중 R개 등록 · U개 변경 없음 · F개 실패" (+ 잠김이 있으면 덧붙인다).
-function summaryText(summary: RegisterSummary): string {
-  const base = `${summary.targeted}개 중 ${summary.registered}개 등록 · ${summary.unchanged}개 변경 없음 · ${summary.failed}개 실패`;
-  return summary.locked ? `${base} · ${summary.locked}개 잠김` : base;
 }
 
 export default function DocumentRegister({ onClose, onRegistered }: { onClose: () => void; onRegistered: () => void }) {
@@ -65,6 +59,7 @@ export default function DocumentRegister({ onClose, onRegistered }: { onClose: (
     }
   }
   function openScan(next: string) {
+    job.reset(); // 직전 단일 등록의 실패 메시지를 폴더 미리보기로 끌고 가지 않는다
     setIncludeUnchanged(false);
     setScanned(next);
   }
@@ -135,6 +130,8 @@ export default function DocumentRegister({ onClose, onRegistered }: { onClose: (
       title="문서 등록"
       className="center"
       onClose={onClose}
+      // 화면(파일 고르기 ↔ 폴더 미리보기 ↔ 진행 ↔ 결과)이 바뀌면 초점을 대화상자로 되돌린다.
+      viewKey={results ? "results" : finished ? "failed" : running ? "running" : directoryMode ? "scan" : "files"}
       actions={
         results || (finished && job.job?.state !== "succeeded") ? (
           <>
@@ -385,7 +382,7 @@ function RegisterResults({
     <div className="v3-stack">
       <p className="v3-muted v3-small">
         {summary
-          ? summaryText(summary)
+          ? registerSummaryText(summary)
           : `${documents.length}개 중 ${documents.filter((d) => !d.error).length}개 등록 · ${documents.filter((d) => d.error).length}개 실패`}
       </p>
       {truncated && <p className="v3-note">앞 500개만 표시 — 나머지는 문서 화면에서 확인하세요</p>}

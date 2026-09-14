@@ -19,8 +19,8 @@ import {
   useWriteSeq,
   withQuery,
 } from "./client";
-import type { JobResponse, JobState, Page, QueueKind, QueueSummary, StatusResponse } from "./types";
-import { JOB_KIND_LABELS, JOB_STATE_LABELS, QUEUE_LABELS, queueCounts } from "./types";
+import type { JobResponse, JobState, Page, QueueKind, QueueSummary, RegisterSummary, StatusResponse } from "./types";
+import { JOB_KIND_LABELS, JOB_STATE_LABELS, QUEUE_LABELS, queueCounts, registerSummaryText } from "./types";
 import { Chip, Heading } from "./ui";
 import QueuePanel, { QUEUE_ORDER, QueueActionDialog, resultSummary } from "./JobsQueue";
 import type { DialogRequest } from "./JobsQueue";
@@ -44,7 +44,11 @@ export function jobOutcome(job: JobResponse): string {
   const r = job.result || {};
   const queue = resultSummary(r);
   if (queue) return queue;
+  // 폴더 일괄 등록(§4.1.1)은 요약이 결과물이다: documents[]는 500행에서 잘리고 목록 응답에는 아예 없다.
+  const summary = r.summary as RegisterSummary | undefined;
+  if (summary && typeof summary.targeted === "number") return registerSummaryText(summary);
   if (Array.isArray(r.documents)) return `문서 ${r.documents.length}개`;
+  if (typeof r.documents_count === "number") return `문서 ${r.documents_count}개`;
   if (typeof r.row_count === "number") return `행 ${r.row_count}개`;
   if (r.download_url || r.build_key) return "산출물 생성";
   if (typeof r.matched === "number") return `일치 ${r.matched}건`;

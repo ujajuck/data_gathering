@@ -9,7 +9,7 @@ Agent는 원본의 물리 양식·DRM·병합 셀·단위를 알 필요 없이 �
 
 | 문서 | 내용 |
 |---|---|
-| [docs/ARCHITECTURE_V3.md](docs/ARCHITECTURE_V3.md) | ERD(21개 테이블·트리거 35개)·모듈·시퀀스·API 지도·프런트 구조·운영 |
+| [docs/ARCHITECTURE_V3.md](docs/ARCHITECTURE_V3.md) | ERD(22개 테이블·트리거 35개)·모듈·시퀀스·API 지도·프런트 구조·운영 |
 | [docs/design/v3-contracts.md](docs/design/v3-contracts.md) | 코드 단위 계약(테이블·DSL·서비스 규칙·렌더 서버·API·화면·E2E·이관) |
 | [docs/design/v3-decisions.md](docs/design/v3-decisions.md) | 설계 문서끼리 갈린 지점의 결정과 근거 |
 | [docs/design/system-identity-and-scope.md](docs/design/system-identity-and-scope.md) · [parsing-core-schema.md](docs/design/parsing-core-schema.md) · [ui-development-spec.md](docs/design/ui-development-spec.md) · [drm-viewer-render-architecture.md](docs/design/drm-viewer-render-architecture.md) | 시스템 정체성 · 18개 코어 스키마 · 승인된 UI 기준안 · 렌더 서버 아키텍처 |
@@ -45,12 +45,15 @@ KG_V3_RENDER_URL=http://127.0.0.1:8032 python -m kg.v3 serve --ws /tmp/v3-demo -
 ```
 
 실제 작업 공간은 `<ws>/data/raw/`에 원본을 두고 `문서 → + 문서 등록`(또는 `python -m kg.v3 watch --ws <ws>`)으로 등록한다.
+원본 폴더(하위 포함)를 한 번에 등록: `문서 → + 문서 등록 → 폴더 → 이 폴더 전체 등록`,
+또는 `python -m kg.v3 register --ws <ws> --directory <폴더>`. 미리보기는 Reader 없이 stat·해시 캐시만 보므로 파일이 수천 개라도 빠르고,
+변경 없는 문서는 건너뛰어 같은 폴더를 다시 돌리는 비용이 싸다(다시 읽으려면 `변경 없는 문서·잠긴 문서도 다시 읽기` 또는 `--include-unchanged`).
 등록은 Reader 프로세스 1회로 시트·구조 서명·approved 프로파일 매치를 함께 계산하고, 매치가 `identical`이면 사람 개입 없이
 자동 승인·추출·발행한다(근거는 [v3-decisions §1](docs/design/v3-decisions.md)). 나머지는 `작업 내역`의 검수 큐로 간다.
 
 ## 5개 화면 + Source Review
 
-1. **문서** — 원본을 찾고 상태(정상·검수 필요·변경 감지·프로파일 없음·재추출 필요·파싱 실패·잠김)를 확인하고 데이터 빌드 대상으로 고른다. 상세: 파일 보기(실제 셀 렌더)·추출 결과·적용 프로파일·연결 스키마.
+1. **문서** — 원본을 찾고 상태(정상·검수 필요·변경 감지·프로파일 없음·재추출 필요·파싱 실패·잠김)를 확인하고 데이터 빌드 대상으로 고른다. 등록은 파일 체크박스 또는 폴더 하나 지정(하위 폴더까지 한 작업, 진행률·요약 표시). 상세: 파일 보기(실제 셀 렌더)·추출 결과·적용 프로파일·연결 스키마.
 2. **파싱 프로파일** — 문서 양식별로 값을 찾는 규칙(JSON DSL 3.0: sheet role · 이름 앵커/composite · range/find/regex/relative · relations · 정규화). 외부 프로파일 JSON은 Import Adapter가 canonical로 바꾸고, 실제 문서로 테스트한 뒤 대표 문서로 승인한다.
 3. **파싱 스키마** — 공통 데이터 의미(필드·타입·단위·alias·계층)를 트리/그래프로 보고, 필드에서 사용 프로파일·연관 문서·원본까지 추적한다.
 4. **데이터 빌드** — 문서 선택 → 스키마 → 출력 Header 편집·순서 → 미리보기(값마다 원본 보기) → CSV/XLSX/SQLite + manifest.json. 영속 Integration 객체는 없다.
@@ -60,7 +63,9 @@ KG_V3_RENDER_URL=http://127.0.0.1:8032 python -m kg.v3 serve --ws /tmp/v3-demo -
 ## CLI
 
 ```bash
-python -m kg.v3 serve | render-serve | watch | migrate | import-schema | import-profile | build | seed-demo
+python -m kg.v3 serve | render-serve | watch | register | migrate | import-schema | import-profile | build | seed-demo
+python -m kg.v3 register --ws /tmp/v3 --directory 2024/공정        # 폴더 아래 전부 등록(요약 JSON, 실패 행이 있으면 종료 코드 1)
+python -m kg.v3 watch --ws /tmp/v3                                 # raw 폴더 감시 → 등록 + 자동 적용(기본 하위 폴더 포함, --no-recursive로 최상위만)
 python -m kg.v3 migrate --ws /tmp/v3 --from-ws domains/financier --report report.json   # v2 작업 공간 이관
 ```
 

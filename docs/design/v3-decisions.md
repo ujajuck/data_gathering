@@ -59,3 +59,33 @@ identity §8.2에 따라 Profile/Schema JSON 파일이 진실이고 DB는 projec
 - Suggestions(같은 양식 문서군 제안)의 v3 이식: unmatched 큐가 구조 서명으로 묶어 "신규 양식 후보"를 보여 주는 것으로 대체. 레시피 이식은 `assign_profile` 묶음 처리가 담당.
 - 실제 DRM SDK, PostgreSQL 런타임 검증, DVC repro: v2와 같은 이유(환경 없음). 계약은 어댑터 경계만 고정.
 - 계정/RBAC: 범위 밖(identity §7.2).
+
+## 11. 폴더 일괄 등록 — 변경 판정·실패 처리·잠긴 파일·승인 정책
+
+근거: 사용자 요구("파일을 하나하나 넣지 말고 루트 디렉터리 하나를 UI에서 지정하면 그 하위 파일을 다 집어넣게 하라",
+"사용성과 속도를 항상 생각하라")와 계약 [§4.1.1](v3-contracts.md)·[§1.6](v3-contracts.md)(`source_digest`).
+구현은 `kg/v3/service.py`(`scan_sources`·`register_directory`), `kg/v3/api.py`(`GET /sources/scan` · `POST /documents/register-directory`),
+`frontend/src/v3/DocumentRegister.tsx`, `python -m kg.v3 register`.
+
+- **"변경 없음" 판정은 내용 해시로 한다 — mtime이 아니라.** 대상은 DVC/사내 공유 폴더에서 체크아웃·복사되는 파일이라
+  내용이 그대로여도 mtime이 바뀌고(체크아웃·동기화), 내용이 바뀌어도 mtime이 그대로일 수 있다(복원·시계 오차).
+  mtime만 믿으면 "바뀐 게 없는데 수천 개를 다시 읽거나", "바뀐 문서를 건너뛰는" 두 가지 사고가 난다.
+  판정에 쓰는 해시는 Reader가 `change_token`으로 쓰는 것과 **같은 SHA-256**(`kg.v2.readers.file_hash`)이다.
+  그래서 스캔이 `unchanged`라고 한 파일은 등록해 봐도 새 snapshot이 생기지 않는다 — 미리보기 수치와 결과가 어긋나지 않는다.
+- **대신 stat 캐시(`source_digest`)를 둔다.** 해시는 파일을 전부 읽는 비용이라 수천 파일 폴더를 열 때마다 낼 수 없다.
+  `(provider, source_path) → (byte_size, mtime_ns, content_sha256)`를 남기고, stat이 같으면 파일을 읽지 않는다.
+  등록(§4.1)이 끝날 때도 같은 값을 기록하므로 단일 등록·watch·일괄 등록 어느 경로로 들어온 문서든 첫 미리보기부터 캐시가 따뜻하다.
+  크기가 다르면 해시 없이 `changed`로 끊는다. 이 표는 **캐시일 뿐**이라 언제 지워도 되고(진실은 `document_snapshot.change_token`),
+  다음 스캔이 다시 채운다. 스캔은 Reader 프로세스를 띄우지 않는다 — 미리보기 한 번에 프로세스 수천 개를 띄우는 설계는 사용성·속도 요구와 정면으로 어긋난다.
+- **파일 하나의 실패는 작업을 실패로 만들지 않는다.** 일괄 등록 작업의 결과물은 개별 성공이 아니라 **요약**이다
+  (`summary{found, targeted, registered, unchanged, failed, locked, skipped}` + 파일별 행 ≤500).
+  전부 실패해도 작업은 `succeeded`이고, 실패 사유는 행마다 남는다. 단일 등록(§4.1)은 반대다(전부 실패면 작업 `failed`):
+  파일 하나를 고른 사람에게는 실패가 곧 작업의 결과이지만, 폴더를 고른 사람에게는 "무엇이 왜 안 됐는지"가 결과다.
+  스캔 자체의 Problem(경로 오류·한도 초과)만 작업을 `failed`로 만든다 — 그때는 요약을 만들 수 없기 때문이다.
+- **잠긴 파일(DRM Reader 미등록)은 기본 대상에서 뺀다.** 잠긴 문서를 매번 다시 읽어 봐야 `DRM_READER_REQUIRED`로 끝나므로
+  큰 폴더에서 비용만 늘고 실패 행만 쌓인다. 문서 행은 `status='locked'`로 남아 화면에서 보이고,
+  Reader factory를 붙인 뒤 `변경 없는 문서·잠긴 문서도 다시 읽기`(API `include_unchanged: true`, CLI `--include-unchanged`)로 재시도한다.
+  같은 체크박스가 `unchanged`도 다시 읽는다 — 두 경우 모두 "이번엔 다시 읽어라"는 같은 의도다.
+- **일괄이라고 승인 정책이 달라지지 않는다.** 이미 있는 문서의 새 내용은 §4.4대로 새 snapshot으로 승계되고 **`proposed`**로 남는다
+  (자동 승인 없음, §1). 폴더 하나로 수백 건이 들어와도 "변경 감지" 큐에서 `approve_all` 한 번으로 처리한다.
+  신규 문서의 `identical` 자동 승인·추출·발행도 §4.3 그대로다 — 일괄 등록은 §4.1 `register`를 파일마다 부르는 것일 뿐이다.
