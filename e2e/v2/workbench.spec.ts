@@ -14,7 +14,7 @@ test("문서 → 검수 → 오버레이 → 추출 → DB·다운로드 → 원
   // 별도 그래프 시나리오가 KG를 발행해도 이 흐름은 최초 샘플의 KG에 고정한다.
   const kgResponse = await page.request.get("/api/v2/kg/revisions");
   const originalKG = (await kgResponse.json()).items[0].kg_revision_id;
-  await page.goto(`/?kg=${originalKG}`);
+  await page.goto(`/?v2=1&kg=${originalKG}`);
   await expect(page).toHaveTitle("Semantic Excel Integration");
   const nav = page.getByRole("navigation", { name: "작업 단계" });
   await expect(nav.getByRole("button")).toHaveText([
@@ -238,7 +238,7 @@ test("개념 그래프 · 문서군 제안 · 재크롤링 화면", async ({ pag
   // graph.spec.ts가 같은 작업 공간에 KG를 더 발행해도 이 흐름은 최초 샘플 KG에 고정한다.
   const kgResponse = await page.request.get("/api/v2/kg/revisions");
   const originalKG = (await kgResponse.json()).items[0].kg_revision_id;
-  await page.goto(`/?kg=${originalKG}`);
+  await page.goto(`/?v2=1&kg=${originalKG}`);
   // 개념 탐색: 커버리지 그래프 카드가 v1처럼 그려지고, L1만 있는 KG도 hull로 보인다.
   await page.getByRole("button", { name: "2. 개념 탐색" }).click();
   const graph = page.getByLabel("전체 개념 트리와 문서군 커버리지");

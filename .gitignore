@@ -46,3 +46,6 @@ age/
 
 # pip install -e 산출물
 *.egg-info/
+e2e/v3/.workspace
+e2e/playwright-report-v3/
+e2e/test-results-v3/

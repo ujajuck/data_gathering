@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:v2": "playwright test --config=playwright.config.ts"
+    "test:v2": "playwright test --config=playwright.config.ts",
+    "test:v3": "playwright test --config=playwright.v3.config.ts",
+    "test:all": "npm run test:v2 && npm run test:v3"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0"
