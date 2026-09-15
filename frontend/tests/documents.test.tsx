@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { STATUS_LABELS, STATUS_ORDER } from "../src/app/types";
 import { getBuildDraft } from "../src/app/buildDraft";
-import { UUID_RE, errorBody, job, page, reply, appFixture } from "./fixture";
+import { UUID_RE, applicationSummary, errorBody, ids, job, page, reply, appFixture } from "./fixture";
 import { documentDeleteResult, documentsFixture, registerDirectoryResult } from "./documents-fixture";
 
 const route = () => new URLSearchParams(location.search);
@@ -367,7 +367,7 @@ describe("문서 화면", () => {
     expect(within(rows[0]).getByText("동일")).toBeTruthy();
     expect(within(rows[1]).getByText("검수 필요", { selector: ".app-chip" })).toBeTruthy();
     expect(within(rows[1]).getByText("호환")).toBeTruthy();
-    expect(within(rows[0]).getAllByRole("button").map((b) => b.textContent)).toEqual(["원본 보기", "프로파일 열기"]);
+    expect(within(rows[0]).getAllByRole("button").map((b) => b.textContent)).toEqual(["원본 보기", "다시 파싱", "프로파일 열기"]);
     // 진입 호출 ≤ 3: 문서 상세 + 적용 목록
     expect(f.calls.filter((c) => c.path.startsWith(`/documents/${f.ids.document(1)}`) || c.path.startsWith(`/snapshots/${f.ids.snapshot}`)).length).toBeLessThanOrEqual(3);
     expect(dialog.textContent).not.toMatch(UUID_RE);
@@ -899,5 +899,200 @@ describe("문서 삭제(§4.13)", () => {
     const drawer = await screen.findByRole("dialog", { name: "문서 상세" });
     expect(await within(drawer).findByText("이 문서는 삭제되었습니다.")).toBeTruthy();
     expect(within(drawer).queryByRole("alert")).toBeNull();
+  });
+});
+
+// §4.9 한 건 재파싱: 문서 상세 '적용 프로파일' 행의 `다시 파싱`만 이 경로를 쓴다(문서 목록에는 없다).
+describe("문서 상세 다시 파싱(§4.9)", () => {
+  const reparseResult = (overrides: Record<string, any> = {}) => ({
+    application_id: ids.application,
+    document_id: ids.document(1),
+    document_name: "공정데이터_2024_01.xlsx",
+    profile: { id: ids.profile, name: "공정데이터_A양식", rev: 3 },
+    outcome: "processed",
+    reason: null,
+    extraction: { run_id: ids.job, state: "succeeded", values: 5 },
+    ...overrides,
+  });
+
+  const reparseJob = (result: unknown, overrides: Record<string, any> = {}) =>
+    job({
+      kind: "reparse",
+      target_kind: "application",
+      target_id: ids.application,
+      label: "공정데이터_2024_01.xlsx · 공정데이터_A양식 v3 · 다시 파싱",
+      result: result as any,
+      ...overrides,
+    });
+
+  function reparseFixture(answer: () => unknown) {
+    const f = appFixture();
+    const posts: Record<string, any>[] = [];
+    f.overrides.set(`POST /applications/${f.ids.application}/reparse`, (call) => {
+      posts.push({ wait: call.url.searchParams.get("wait"), body: call.body });
+      return answer();
+    });
+    return { f, posts };
+  }
+
+  async function openProfiles(f: ReturnType<typeof appFixture>) {
+    f.renderApp(`?screen=documents&document=${f.ids.document(1)}&tab=profiles`);
+    const dialog = await screen.findByRole("dialog", { name: "문서 상세" });
+    await within(dialog).findByRole("table", { name: "적용 프로파일" });
+    return dialog;
+  }
+  const appRow = (dialog: HTMLElement, n = 1) =>
+    within(within(dialog).getByRole("table", { name: "적용 프로파일" })).getAllByRole("row")[n];
+
+  it("행의 `다시 파싱`은 POST /applications/{aid}/reparse?wait=10을 부르고, 도는 동안 잠기며, 끝나면 결과를 알리고 다시 읽는다", async () => {
+    let release: (value: unknown) => void = () => {};
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    const { f, posts } = reparseFixture(() => pending);
+    const dialog = await openProfiles(f);
+    const user = userEvent.setup();
+    await user.click(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }));
+    await f.waitForApi(new RegExp(`^/applications/${f.ids.application}/reparse\\?wait=10`), "POST");
+    expect(posts).toEqual([{ wait: "10", body: {} }]);
+    // 진행 중: 누른 버튼은 문구가 바뀌고, 다른 행도 함께 잠긴다(한 번에 한 건).
+    await waitFor(() => expect(within(appRow(dialog)).getByRole("button", { name: "다시 파싱 중…" }).hasAttribute("disabled")).toBe(true));
+    const other = within(appRow(dialog, 2)).getByRole("button", { name: "다시 파싱" });
+    expect(other.hasAttribute("disabled")).toBe(true);
+    // 회색이 된 이유를 버튼이 스스로 말한다(표 아래 안내 줄만으로는 왜 눌리지 않는지 모른다).
+    expect(other.getAttribute("title")).toBe("다른 다시 파싱이 도는 중입니다 — 한 번에 한 건씩 처리합니다.");
+    expect(within(dialog).getByText(/다시 파싱이 진행 중입니다/)).toBeTruthy();
+
+    release(reparseJob(reparseResult()));
+    await screen.findByText("공정데이터_2024_01.xlsx · 공정데이터_A양식 v3 다시 파싱 완료 · 값 5개");
+    // 끝나면 적용 프로파일·추출 결과·문서 상세를 다시 읽는다.
+    await f.waitForApi(new RegExp(`^/snapshots/${f.ids.snapshot}/applications`), "GET", 2);
+    await f.waitForApi(new RegExp(`^/documents/${f.ids.document(1)}$`), "GET", 2);
+    await waitFor(() => expect(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }).hasAttribute("disabled")).toBe(false));
+    expect(dialog.textContent).not.toMatch(UUID_RE);
+  });
+
+  it("매칭은 그대로 두고 값만 다시 뽑았으면(승인이 끝난 초안 프로파일) 그렇게 말하고, 추출이 실패하면 값 개수 대신 실패를 말한다", async () => {
+    const answers = [
+      reparseResult({ action: "extract", profile: { id: ids.profile, name: "공정데이터_A양식", rev: 2 } }),
+      reparseResult({ extraction: { run_id: ids.job, state: "failed", values: 0, error: { code: "SELECTOR_MISS", message: "선택자가 셀을 찾지 못했습니다." } } }),
+    ];
+    const { f } = reparseFixture(() => reparseJob(answers.shift()));
+    const dialog = await openProfiles(f);
+    const user = userEvent.setup();
+    await user.click(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }));
+    await screen.findByText("공정데이터_2024_01.xlsx · 공정데이터_A양식 v2 다시 파싱 완료 · 값 5개 · 값만 다시 뽑았습니다");
+    await waitFor(() => expect(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }).hasAttribute("disabled")).toBe(false));
+    await user.click(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }));
+    await screen.findByText("공정데이터_2024_01.xlsx · 공정데이터_A양식 v3 다시 맞췄지만 값을 뽑지 못했습니다: 선택자가 셀을 찾지 못했습니다.");
+  });
+
+  it("건너뛰면 사유를 사람 말로 알리고, 모르는 코드는 코드를 그대로 보여 준다", async () => {
+    const answers = [
+      reparseResult({ outcome: "skipped", reason: "up_to_date", extraction: null }),
+      reparseResult({ outcome: "skipped", reason: "WEIRD_REASON", extraction: null }),
+    ];
+    const { f } = reparseFixture(() => reparseJob(answers.shift()));
+    const dialog = await openProfiles(f);
+    const user = userEvent.setup();
+    await user.click(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }));
+    await screen.findByText(
+      "공정데이터_2024_01.xlsx · 공정데이터_A양식 v3 다시 파싱 건너뜀 · 이미 최신입니다 — 다시 뽑을 것이 없습니다. 원본 파일이 바뀌었으면 문서를 다시 등록하세요",
+    );
+    await waitFor(() => expect(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }).hasAttribute("disabled")).toBe(false));
+    await user.click(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }));
+    await screen.findByText("공정데이터_2024_01.xlsx · 공정데이터_A양식 v3 다시 파싱 건너뜀 · WEIRD_REASON");
+  });
+
+  it("검수가 필요해 건너뛰면 토스트에서 바로 원본 보기로 갈 수 있다", async () => {
+    const { f } = reparseFixture(() => reparseJob(reparseResult({ outcome: "skipped", reason: "review_required", extraction: null })));
+    const dialog = await openProfiles(f);
+    const user = userEvent.setup();
+    await user.click(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }));
+    await screen.findByText("공정데이터_2024_01.xlsx · 공정데이터_A양식 v3 다시 파싱 건너뜀 · 검수가 필요합니다 — 검수 화면에서 승인하세요");
+    const toasts = document.querySelector(".app-toasts") as HTMLElement;
+    await user.click(within(toasts).getByRole("button", { name: "원본 보기" }));
+    expect(route().get("review")).toBe(f.ids.application);
+  });
+
+  it("추출까지 가지 않았으면(제안 리비전만) 검수가 필요하다고 말하고 바로 원본 보기로 갈 수 있다", async () => {
+    // 구조가 조금 달라 compatible로 판정되면 proposed 리비전만 올라가고 값은 하나도 다시 뽑히지 않는다 —
+    // '다시 파싱 완료'만 말하면 값이 갱신된 줄 안다(§7).
+    const { f } = reparseFixture(() => reparseJob(reparseResult({ outcome: "처리됨", reason: null, extraction: null, action: "rematch" })));
+    const dialog = await openProfiles(f);
+    const user = userEvent.setup();
+    await user.click(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }));
+    await screen.findByText("공정데이터_2024_01.xlsx · 공정데이터_A양식 v3 다시 파싱 완료 · 검수가 필요합니다");
+    const toasts = document.querySelector(".app-toasts") as HTMLElement;
+    await user.click(within(toasts).getByRole("button", { name: "원본 보기" }));
+    expect(route().get("review")).toBe(f.ids.application);
+  });
+
+  it("작업이 취소되면 취소했다고 말하고 화면을 다시 읽는다", async () => {
+    const { f } = reparseFixture(() => reparseJob(null, { state: "cancelled" }));
+    const dialog = await openProfiles(f);
+    const user = userEvent.setup();
+    await user.click(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }));
+    await screen.findByText("공정데이터_2024_01.xlsx · 공정데이터_A양식 v2 다시 파싱을 취소했습니다.");
+    await f.waitForApi(new RegExp(`^/snapshots/${f.ids.snapshot}/applications`), "GET", 2);
+  });
+
+  it("서버 가드에 막히는 행은 누르기 전에 비활성이고 왜인지 말한다(§4.9)", async () => {
+    const f = appFixture();
+    const summary = applicationSummary();
+    f.overrides.set(`GET /snapshots/${f.ids.snapshot}/applications`, () =>
+      page([
+        summary,
+        {
+          ...summary,
+          application_id: f.ids.application2,
+          heads_approved: 1,
+          heads_total: 2,
+          profile: { profile_id: ids.profile2, profile_name: "공정데이터_B양식", rev: 1, status: "draft" },
+        },
+      ]),
+    );
+    const dialog = await openProfiles(f);
+    // 표가 GET /snapshots/{sid}/applications로 보강될 때까지 기다린다(검수 칸이 채워지면 병합이 끝난 것이다).
+    await waitFor(() => expect(within(appRow(dialog, 2)).getAllByRole("cell")[3].textContent).toBe("1/2"));
+    // 승인된 프로파일 행: 누를 수 있고, 툴팁은 추출을 약속하지 않는다(이미 최신이면 아무것도 하지 않는다).
+    const ready = within(appRow(dialog)).getByRole("button", { name: "다시 파싱" });
+    expect(ready.hasAttribute("disabled")).toBe(false);
+    expect(ready.getAttribute("title")).toBe("이 문서를 같은 프로파일의 현재 리비전으로 다시 맞춥니다(이미 최신이면 아무것도 하지 않습니다).");
+    // 초안 프로파일 + 검수 미완 행: 서버가 422로 막을 자리라 버튼이 처음부터 비활성이다.
+    const blocked = within(appRow(dialog, 2)).getByRole("button", { name: "다시 파싱" });
+    expect(blocked.hasAttribute("disabled")).toBe(true);
+    expect(blocked.getAttribute("title")).toBe("매핑을 모두 승인해야 다시 파싱할 수 있습니다.");
+    expect(f.callsTo(/\/reparse/, "POST")).toHaveLength(0);
+  });
+
+  it("작업이 실패하면 실패를 그대로 알린다", async () => {
+    const { f } = reparseFixture(() =>
+      reparseJob(null, { state: "failed", error_code: "SOURCE_NOT_FOUND", error_message: "원본 파일을 찾을 수 없습니다." }),
+    );
+    const dialog = await openProfiles(f);
+    const user = userEvent.setup();
+    await user.click(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }));
+    await screen.findByText("공정데이터_2024_01.xlsx · 공정데이터_A양식 v2 다시 파싱에 실패했습니다: 원본 파일을 찾을 수 없습니다.");
+  });
+
+  it("요청 자체가 막히면(승인되지 않은 프로파일·진행 중 작업) 서버 문구를 표 아래에 보여 준다", async () => {
+    const { f } = reparseFixture(() => reply(422, errorBody("PROFILE_NOT_APPROVED", "승인된 프로파일만 재파싱할 수 있습니다.")));
+    const dialog = await openProfiles(f);
+    const user = userEvent.setup();
+    await user.click(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain("승인된 프로파일만 재파싱할 수 있습니다.");
+    // 막힌 뒤에도 같은 버튼을 다시 누를 수 있다.
+    expect(within(appRow(dialog)).getByRole("button", { name: "다시 파싱" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("문서 목록에는 `다시 파싱` 버튼을 더하지 않는다", async () => {
+    const f = appFixture();
+    f.renderApp("?screen=documents");
+    const table = await screen.findByRole("table", { name: "문서 목록" });
+    expect(within(table).queryAllByRole("button", { name: "다시 파싱" })).toHaveLength(0);
+    expect(screen.queryAllByRole("button", { name: "다시 파싱" })).toHaveLength(0);
+    expect(f.callsTo(/\/reparse/, "POST")).toHaveLength(0);
   });
 });

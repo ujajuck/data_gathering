@@ -91,6 +91,9 @@ export type ProfileRef = {
   profile_id: string;
   profile_name: string;
   rev: number;
+  // 프로파일 상태(draft|approved|deprecated). `GET /snapshots/{sid}/applications`가 담아 보낸다 —
+  // 문서 상세가 '다시 파싱이 막히는 행'을 누르기 **전에** 비활성으로 보이는 데 쓴다(§4.9·§7).
+  status?: string;
 };
 
 export type SchemaRef = {
@@ -986,3 +989,58 @@ export const APPLICATION_STATE_CLASS: Record<string, ChipClass> = {
   pending: "muted",
   failed: "err",
 };
+
+// ---------------------------------------------------------------- 재파싱(§4.9)
+
+// POST /applications/{aid}/reparse 작업 결과(적용 건 하나를 현재 프로파일 리비전으로 다시 맞추고 추출한 결과).
+// 판정은 프로파일 전체 재파싱과 같은 규칙이므로 사유 코드도 같다.
+export type ApplicationReparse = {
+  application_id: string;
+  document_id: string;
+  document_name: string;
+  profile: { id: string; name: string; rev: number };
+  // 처리됨 / 건너뜀.
+  outcome: string;
+  // 건너뛴 사유 코드(처리됐으면 없다).
+  reason?: string | null;
+  // 어느 쪽을 했는지: rematch = 현재 리비전으로 다시 맞추고 추출, extract = 매칭은 그대로 두고 값만 다시 뽑음.
+  action?: "rematch" | "extract" | string;
+  // 추출은 실패해도 작업은 성공으로 끝난다(실패는 실행 행에 남는다) — state가 succeeded가 아니면 error가 온다.
+  extraction?: { run_id: string; state: string; values: number; error?: { code: string; message: string } | null } | null;
+};
+
+// outcome은 두 값(처리됨·건너뜀)뿐이다. 코드로 오든 우리말로 오든 같게 읽는다.
+const REPARSE_PROCESSED = ["processed", "처리됨", "extracted", "queued"];
+const REPARSE_SKIPPED = ["skipped", "건너뜀"];
+export const isReparseProcessed = (outcome: string | null | undefined): boolean => !!outcome && REPARSE_PROCESSED.includes(outcome);
+export const isReparseSkipped = (outcome: string | null | undefined): boolean => !!outcome && REPARSE_SKIPPED.includes(outcome);
+
+// 재파싱이 건너뛴 사유를 사람 말로. 프로파일 전체 재파싱(skipped[].reason)과 한 건 재파싱(reason)이 같은 코드를 쓴다.
+// 모르는 코드는 코드를 그대로 보여 준다 — 문구가 없다고 화면이 비지 않게.
+export const REPARSE_REASON_LABELS: Record<string, string> = {
+  // 이 갈래는 원본 파일을 **읽지 않고** 판정한다(적용 건이 이미 현재 리비전이고 발행돼 있다) —
+  // 그래서 '원본이 바뀌었으면 다시 등록하라'까지 말해 준다. 그 말이 없으면 낡은 원본을 최신으로 오해한다.
+  up_to_date: "이미 최신입니다 — 다시 뽑을 것이 없습니다. 원본 파일이 바뀌었으면 문서를 다시 등록하세요",
+  review_required: "검수가 필요합니다 — 검수 화면에서 승인하세요",
+  incompatible: "이 프로파일과 구조가 맞지 않습니다",
+  published: "이미 발행된 결과라 그대로 두었습니다",
+  deleted: "문서가 이미 지워졌습니다",
+  PROFILE_NOT_APPROVED: "승인된 프로파일이 아닙니다",
+  PROFILE_DEPRECATED: "폐기된 프로파일입니다 — 적용 기록은 그대로 둡니다",
+  ACCESS_DENIED: "이 원본에 접근할 권한이 없습니다",
+  SOURCE_NOT_FOUND: "원본 파일을 찾을 수 없습니다",
+  SOURCE_VERSION_CHANGED: "원본이 바뀌었습니다. 문서를 다시 등록하세요",
+  SOURCE_SIZE_LIMIT: "원본이 너무 커서 읽을 수 없습니다",
+  EXPANDED_SIZE_LIMIT: "원본이 너무 커서 읽을 수 없습니다",
+  SHEET_LIMIT: "시트 수가 Reader 한도를 넘었습니다",
+  READER_TIMEOUT: "문서 읽기 제한 시간을 넘었습니다",
+  READER_STOPPED: "문서 읽기 프로세스가 끝나 버렸습니다",
+  READER_MEMORY_LIMIT: "문서 읽기 메모리 한도를 넘었습니다",
+  READER_FAILED: "문서를 읽지 못했습니다 — 제공자 설정과 문서 형식을 확인하세요",
+  DRM_READER_REQUIRED: "보호 문서를 읽을 Reader가 설정되지 않았습니다 — 설정 화면에서 연결하세요",
+  DRM_OPEN_FAILED: "보호 문서를 열지 못했습니다",
+  DRM_OPEN_TIMEOUT: "보호 문서를 여는 데 시간이 너무 걸렸습니다",
+  DRM_TEMP_UNSAFE: "보호 문서를 열 임시 폴더가 안전하지 않습니다",
+};
+export const reparseReasonLabel = (value: string | null | undefined): string =>
+  value ? REPARSE_REASON_LABELS[value] || value : "";

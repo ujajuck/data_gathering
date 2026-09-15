@@ -1258,6 +1258,12 @@ def install(app: FastAPI, root, start_worker=True):
     def extract(application_id: str, wait: float = Wait, user=Depends(principal)):
         return job_response(service.extract(application_id, user, wait))
 
+    @router.post("/applications/{application_id}/reparse", response_model=JobResponse, status_code=202)
+    def reparse_application(application_id: str, wait: float = Wait, user=Depends(principal)):
+        """§4.9 한 건 재파싱(작업). mode는 rematch 고정 — 프로파일 전체 재파싱과 같은 판정으로 이 적용 건만 다시 맞추고 추출한다.
+        프로파일이 approved가 아니면 422 `PROFILE_NOT_APPROVED`(헤드가 전부 approved면 재추출만 한다), 진행 중 작업이 있으면 409 `DOCUMENT_BUSY`."""
+        return job_response(service.reparse_application(application_id, user, wait))
+
     @router.get("/mappings/{mapping_id}")
     def mapping(mapping_id: str, user=Depends(principal)):
         return service.mapping(mapping_id)

@@ -431,7 +431,7 @@ flowchart LR
 | `engine.py` | 영역 해결(range/find/regex/relative/anchor/composite), 추출 스트림(group → values → verified), 시트 바인딩, 매치 판정(`match_profile`·`match_specs`, 매치 서명) | §3.1, §3.3 |
 | `readers.py` | Reader 계약: `describe(profiles)`(등록 시 프로세스 1회) · `match` · `match_specs` · `extract` · `render`. `make_reader(root, provider, principal, source_ref)`가 **컨테이너를 보고 한 곳에서만** Reader를 고른다(평문 → `XlsxReader`, 보호 → 팩토리) | §3.2, §3.5 |
 | `drm.py` | 보호 문서 접근: 앞 32바이트 컨테이너 판별(`sniff_container`), snapshot당 1회 해제 세션(`SESSIONS.acquire`, 작업 공간 밖 0700 폴더·TTL·총량 상한), 감사(`<ws>/data/audit/drm-*.jsonl`), 설정 카드 값(`settings_snapshot`), 점검(`probe`), 윈도우 Excel COM 참조 구현(`ExcelComReader`, 기본 비연결) | §3.5 |
-| `service.py` | 등록·snapshot 판정·자동 적용·승계·검수(CAS)·추출·발행·프로파일 테스트/승인/재파싱·문서 상태 캐시·조회, 폴더 재귀 스캔·분류(`scan_sources`)와 폴더 일괄 등록 작업(`register_directory`), **문서 삭제**(`delete_document` 단건 동기 · `delete_documents` 다중 작업 · `_purge_source_file` 원본 파일), 스키마·필드 삭제(`delete_schema`·`delete_field` — 사용 중이면 409)와 **스키마 폐기/폐기 해제**(`deprecate_schema`·`activate_schema`) | §4, §4.1.1, §4.2.1, §4.2.2, §4.2.3, §4.13 |
+| `service.py` | 등록·snapshot 판정·자동 적용·승계·검수(CAS)·추출·발행·프로파일 테스트/승인/재파싱(프로파일 전체 `reparse` · **적용 건 하나 `reparse_application`** — 판정은 둘 다 `_reparse_application` 하나가 내린다)·문서 상태 캐시·조회, 폴더 재귀 스캔·분류(`scan_sources`)와 폴더 일괄 등록 작업(`register_directory`), **문서 삭제**(`delete_document` 단건 동기 · `delete_documents` 다중 작업 · `_purge_source_file` 원본 파일), 스키마·필드 삭제(`delete_schema`·`delete_field` — 사용 중이면 409)와 **스키마 폐기/폐기 해제**(`deprecate_schema`·`activate_schema`) | §4, §4.1.1, §4.2.1, §4.2.2, §4.2.3, §4.13 |
 | `build.py` | 후보 판정 · 미리보기 · CSV/XLSX/SQLite 생성 · manifest · `build_key` 재사용 · 단위 변환(`UnitRegistry`) | §4.10 |
 | `operations.py` | 검수 큐 5종(같은 원인·서명 묶음), 멤버, 묶음 처리 작업 | §4.11 |
 | `api.py` | FastAPI `/api`(§6 전부), 오류 봉투, `?wait=`, 렌더 프록시(권한 → ETag/304), 정적 프런트 | §6 |
@@ -598,7 +598,7 @@ sequenceDiagram
 - `purge_source=true`면 `<ws>/data/raw`의 원본 파일 **하나**만 지운다. 경로는 등록 때와 같은 규칙으로 정규화하고 중간 폴더·마지막 파일 어디에 심볼릭 링크가 있으면 따라가지 않으며 raw 밖이면 지우지 않는다(폴더는 지우지 않는다). **판정은 provider가 아니라 위치다** — 보호 문서(DRM)도 원본은 raw에 있고 Reader가 거기서 읽으므로 같은 규칙으로 지우고, `PURGE_UNSUPPORTED`는 raw 아래에 파일이 없는 비로컬 provider(진짜 원격 vault)에만 남는다. 원본 삭제가 실패해도 **DB 삭제는 유효하고** 그 행의 `source_error{code}`(`SOURCE_MISSING`·`SOURCE_SYMLINK`·`SOURCE_OUTSIDE_RAW`·`PURGE_UNSUPPORTED`·`SOURCE_REMOVE_FAILED`)로만 알린다 — `summary.failed`에는 세지 않는다.
 - 렌더 캐시 무효화가 실패하면(렌더 서버 중단) 그 행에 `render_error{code, message}`를 실어 **셀 내용 파생물이 디스크에 남았다**는 것을 화면과 작업 기록에 드러내고, 다음 서버 시작에서 `Service.reclaim_render_cache()`가 `document_snapshot`에 없는 snapshot 디렉터리를 회수한다.
 - 되돌릴 수 없는 일이라 **문서마다** 그때까지의 요약을 `runtime_job.result_json`에 먼저 적는다. 취소하면 `Cancelled`에 실어 보낸 부분 요약이 그대로 남고(`cancelled` + `completed`), 서버가 중단돼도(`INTERRUPTED`) 마지막 문서까지의 요약이 남는다 — '무엇을 지웠는지'를 잃지 않는 것이 규칙의 목적이다.
-- 진행 중 작업 가드(409 `DOCUMENT_BUSY`)는 `target_kind`가 `document`·`application`인 작업뿐 아니라 **그 문서에 적용된 프로파일을 대상으로 하는 재파싱**(`profile`)도 본다. 재파싱은 한 작업에서 여러 문서를 돌기 때문이다.
+- 진행 중 작업 가드(409 `DOCUMENT_BUSY`)는 `target_kind`가 `document`·`application`인 작업뿐 아니라 **그 문서에 적용된 프로파일을 대상으로 하는 재파싱**(`profile`)도 본다. 재파싱은 한 작업에서 여러 문서를 돌기 때문이다. 문서 상세의 한 건 재파싱(§4.9)도 **같은 가드**를 쓴다 — 같은 적용 건을 두 작업이 동시에 잡지 않게 한다.
 - 다중 삭제는 한 번에 200개까지(`TOO_MANY_DOCUMENTS`)이고, 한 건이 실패해도 작업은 `succeeded`다(폴더 일괄 등록과 같은 원칙 — 요약이 결과물이다). 작업 행의 `target_id`는 **언제나 NULL**이다: 지워진 문서를 가리키면 작업 내역이 죽은 링크가 된다.
 - **스키마 폐기**는 `POST /schemas/{key}/deprecate` · `POST /schemas/{key}/activate`이고 두 응답 모두 `GET /schemas/{key}`와 같은 형태라 화면이 응답 하나로 헤더·칩·버튼을 갱신한다. 새 리비전을 저장해도 `status`는 유지되며(되돌리는 길은 `activate` 하나다), 폐기한 스키마는 목록 기본(`GET /schemas?status=active`)·새 프로파일 대화상자·데이터 빌드의 스키마 선택에서 빠지고 `POST /profiles`가 422 `SCHEMA_DEPRECATED`로 막히지만, **이미 승인된 프로파일은 새 문서에 계속 자동 적용된다** — 그것을 멈추는 것은 프로파일 폐기다. 조회(상세·트리·그래프·필드·연관 목록)는 상태와 무관하게 열린다.
 - 기존의 조건부 삭제(`DELETE /schemas/{key}` 409 `SCHEMA_IN_USE` · `DELETE /profiles/{id}` 409 `PROFILE_IN_USE`)는 "한 번도 쓰이지 않은 것을 치우는" 탈출구로 그대로 있다. 일상 경로는 폐기다.
@@ -610,7 +610,7 @@ sequenceDiagram
 | 화면 | 진입 호출(≤3) | 주요 쓰기 |
 |---|---|---|
 | 문서 | `GET /documents`, `GET /profiles`(필터), `GET /status`(쉘 공유) | `POST /documents/register?wait`, `GET /sources/scan?directory=`(폴더 미리보기) → `POST /documents/register-directory?wait`, `POST /snapshots/{sid}/applications?wait`, `DELETE /documents/{id}?purge_source=`(단건·동기) · `POST /documents/delete?wait {document_ids[], purge_source}`(선택 체크박스 → 작업, 200개 상한) |
-| 문서 상세 | `GET /documents/{id}`, `GET /snapshots/{sid}/sheets`, 탭별 1건 | — |
+| 문서 상세 | `GET /documents/{id}`, `GET /snapshots/{sid}/sheets`, 탭별 1건(`GET /snapshots/{sid}/values` · `GET /snapshots/{sid}/applications`) | `POST /applications/{aid}/reparse?wait`(적용 프로파일 행의 `다시 파싱` — 이 적용 건 **하나**만 현재 프로파일 리비전으로 다시 맞추고 추출한다. 이미 최신이면 아무것도 하지 않고, 폐기된 프로파일은 422다), `POST /snapshots/{sid}/applications?wait`(다른 프로파일로 파싱), `DELETE /documents/{id}?purge_source=` |
 | 파싱 프로파일 | `GET /profiles`, `GET /profiles/{id}`, `GET /profiles/{id}/revisions/{rev}`, `GET /profiles/{id}/revisions`(목록과 상세를 한 화면에 그려 목록 호출만큼 예산 +1) | `POST /profiles`, `PUT /profiles/{id}`(새 리비전), `POST /profiles/import-preview`, `POST /profiles/{id}/test`(저장된 리비전만), `approve`, `reparse` |
 | 파싱 스키마 | `GET /schemas?status=`(`active` 기본 · `deprecated` · `all`), `GET /schemas/{key}`, `GET /schemas/{key}/tree` (그래프는 토글 시, 리비전 JSON은 `GET .../revisions/{rev}` — `rev`는 1 이상, 0은 422) | `POST /schemas`(생성 전용 — 있는 키는 409 `SCHEMA_EXISTS`) · `PUT /schemas/{key}`(새 리비전) · `POST /schemas/{key}/deprecate`·`/activate`(응답은 스키마 상세와 같은 형태) · `DELETE /schemas/{key}`(409 `SCHEMA_IN_USE`) · `POST/PATCH/DELETE .../fields/{key}`(409 `FIELD_IN_USE`·`FIELD_HAS_CHILDREN`·`LAST_FIELD`) |
 | 데이터 빌드 | `POST /builds/candidates` (스키마 선택 시 1회 더) | `POST /builds/preview`, `POST /builds?wait` |
@@ -682,11 +682,12 @@ classDiagram
 | 렌더 | `tests/test_render.py` | 밴드·창 불변식·asset 격리·202/200/304·멱등 큐·세대·격리 중 응답 시간 |
 | 서비스·API | `tests/test_service.py`, `test_api.py`, `test_build.py`, `test_operations.py`, `test_runtime.py` | 등록→자동 적용→검수→승인→재파싱→추출→빌드→큐→새 snapshot 승계→테스트→검색·상태 전이, 2,000건 목록 성능 |
 | 스키마 쓰기 | `tests/test_schema_write.py` | `POST /schemas` 생성 전용(409 `SCHEMA_EXISTS`, 아무것도 쓰지 않음)·`PUT` 새 리비전·스키마/필드 삭제와 409 네 가지(`LAST_FIELD` 포함)·`PATCH` 필드 상세 응답·`revisions/{rev}`의 `rev ≥ 1`(0은 422)·메인 API 무인증, **폐기/폐기 해제**(응답이 상세와 같은 형태·기본 목록에서 숨음·`status=` 필터·두 번 부르면 409·폐기 스키마의 `POST /profiles`는 422 `SCHEMA_DEPRECATED`이고 편집·빌드는 열려 있음) |
+| 한 건 재파싱 | `tests/test_reparse_application.py` | 새 리비전이 **그 문서에만** 닿음(다른 문서의 헤드·발행 불변)·건너뛴 사유(`up_to_date`·`review_required`·`incompatible`)·승인되지 않은 프로파일의 재추출 갈래와 422 `PROFILE_NOT_APPROVED`·진행 중 작업 가드 409 `DOCUMENT_BUSY`·작업 행(`kind=reparse` · `target_kind=application` · 라벨)·404·추출 실패가 작업을 실패로 만들지 않음 |
 | 문서 삭제 | `tests/test_delete.py` | 자기 행만 지우고 원본은 남김·작업 내역 기록·`purge_source`(심볼릭 링크 거부·없는 파일·로컬 아닌 provider)·대표 문서 삭제 시 프로파일 초안 강등·다시 등록하면 새 문서·다중 삭제(중복 제거·계속 진행·요약·빈 목록/200개 초과)·`DOCUMENT_BUSY`·404·렌더 캐시 무효화와 해제본 정리·렌더 실패가 DB 삭제를 되돌리지 않음 |
 | 보호 문서(DRM) | `tests/test_drm.py` | 컨테이너 판별·시그니처 설정·Reader 선택 한 곳·snapshot당 1회 해제와 재사용·작업 공간 밖 강제·TTL/총량 정리·감사 줄·`drm-probe` 출력과 종료 코드 |
 | 폴더 일괄 등록 | `tests/test_register_directory.py`, `tests/test_watch.py` | 스캔 분류(new/changed/unchanged/locked)·건너뜀·숨김 폴더·`source_digest` 재사용(해시 호출 0회)·진행률·요약/`truncated`/취소·`include_unchanged`·경로 오류·413 한도·API 두 경로·CLI `register`·watch 재귀 |
 | 컴포넌트 | `frontend/tests/*.test.tsx` | 화면별 상호작용 + 규칙 테스트(용어·ID·import·진입 호출·접근성) |
-| 브라우저 | `e2e/specs/*.spec.ts` (`cd e2e && npm test`) | 임시 작업 공간 + 렌더 서버 별도 프로세스; `register-directory.spec.ts`가 폴더 트리 등록 → 재스캔(변경 없음) → 다시 읽기 → 변경 감지를 한 흐름으로 확인한다. 결과는 [e2e-results.md](e2e-results.md) |
+| 브라우저 | `e2e/specs/*.spec.ts` (`cd e2e && npm test`) | 임시 작업 공간 + 렌더 서버 별도 프로세스; `register-directory.spec.ts`가 폴더 트리 등록 → 재스캔(변경 없음) → 다시 읽기 → 변경 감지를, `reparse-application.spec.ts`가 프로파일 v2 저장 → 대표 문서 재승인 → 문서 상세의 `다시 파싱` → 그 문서만 새 리비전으로 발행 → 다시 누르면 `이미 최신` 건너뜀 → 다른 문서 불변을 한 흐름으로 확인한다. 결과는 [e2e-results.md](e2e-results.md) |
 
 ---
 

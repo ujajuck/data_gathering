@@ -433,6 +433,8 @@ class Service:
         if kind == "extract":
             return self.execute_extraction(payload, principal, checkpoint)
         if kind == "reparse":
+            if payload.get("application_id"):
+                return self.execute_application_reparse(payload["application_id"], principal, checkpoint)
             return self.execute_reparse(payload["profile_id"], payload["mode"], principal, checkpoint)
         if kind == "delete":
             return self._delete_job(payload, principal, checkpoint)
@@ -2674,6 +2676,97 @@ class Service:
                 return
             after = (batch[-1]["document_name"], batch[-1]["application_id"])
 
+    # ---- 재파싱 한 건(§4.9) ------------------------------------------------------------
+    def reparse_application(self, application_id, principal=None, wait=0):
+        """POST /applications/{aid}/reparse — 적용 건 하나만 현재 프로파일 리비전으로 다시 맞추고 추출한다.
+
+        판정은 프로파일 전체 재파싱(mode='rematch')이 문서마다 부르는 `_reparse_application`이 그대로 내린다
+        (한 건과 전체가 다르게 동작하면 안 된다). mode는 rematch 고정이다 — 화면의 버튼은 하나다."""
+        principal = principal or self.principal
+        with self.db.connect() as conn:
+            app = self._application_row(conn, application_id)
+            agg = self._application_agg(conn, application_id)
+            self._busy_guard(conn, app["document_id"], "이 문서에 진행 중인 작업이 있습니다. 끝난 뒤 다시 파싱하세요.")
+            extract_only = self._reparse_one_gate(app, agg)
+        rev = app["profile_rev"] if extract_only else app["profile_current_rev"]
+        job = self.jobs.submit(
+            "reparse",
+            {"application_id": application_id, "mode": "rematch"},
+            principal,
+            uid(),
+            target_kind="application",
+            target_id=application_id,
+            label=f"{app['document_name']} · {app['profile_name']} v{rev} · 다시 파싱",
+        )
+        return self.job_result(job, wait, principal)
+
+    @staticmethod
+    def _reparse_one_gate(app, agg):
+        """프로파일이 approved가 아니면 전체 재파싱과 같이 422로 막되, **초안(draft)**이고 헤드가 전부 approved면
+        **재추출만** 허용한다(수동 적용한 draft 프로파일로 뽑은 값을 다시 뽑는 정상적인 요구다). → True면 재추출만.
+
+        폐기(§4.10)는 예외가 없다: 폐기는 '적용 기록·추출값을 그대로 둔다'는 탈출구이므로 재추출이 발행분을
+        덮어쓰면 그 약속이 깨진다. 전체 재파싱도 같은 프로파일을 422로 막는다."""
+        if app["profile_status"] == "approved":
+            return False
+        if app["profile_status"] != "draft":
+            raise Problem("PROFILE_DEPRECATED", "폐기된 프로파일로는 다시 파싱할 수 없습니다. 적용 기록과 추출값은 그대로 둡니다.")
+        if agg["heads_total"] and not (agg["unapproved"] or 0):
+            return True
+        raise Problem("PROFILE_NOT_APPROVED", "승인된 프로파일만 다시 파싱할 수 있습니다. 매핑을 모두 승인하면 값만 다시 뽑을 수 있습니다.")
+
+    def execute_application_reparse(self, application_id, principal, checkpoint):
+        """한 건 재파싱 작업의 본체. 프로파일이 approved면 재매치(전체 경로와 같은 함수), 아니면 재추출만."""
+        checkpoint(0, 1, force=True)
+        with self.db.connect() as conn:
+            app = self._application_row(conn, application_id)
+            agg = self._application_agg(conn, application_id)
+            profile = self._profile_row(conn, app["profile_id"])
+            extract_only = self._reparse_one_gate(app, agg)
+            before = self._last_run(conn, application_id)
+        if extract_only:
+            self._extract_now(application_id, principal, checkpoint)
+            reason = None
+        else:
+            reason = self._reparse_application(profile, agg, "rematch", principal, checkpoint)
+        checkpoint(1, 1, force=True)
+        with self.db.connect() as conn:
+            run = self._last_run(conn, application_id)
+            extraction = None
+            if run and (before is None or run["run_id"] != before["run_id"]):
+                extraction = {
+                    "run_id": run["run_id"],
+                    "state": run["status"],
+                    "values": conn.execute("SELECT count(*) FROM extracted_value WHERE run_id=?", (run["run_id"],)).fetchone()[0],
+                }
+                if run["status"] != "succeeded":
+                    code, _, message = (run["error_summary"] or "").partition(": ")
+                    extraction["error"] = {"code": code or "EXTRACT_FAILED", "message": message or "값을 뽑지 못했습니다."}
+        return {
+            "application_id": application_id,
+            "document_id": app["document_id"],
+            "document_name": app["document_name"],
+            "profile": {"id": app["profile_id"], "name": app["profile_name"], "rev": app["profile_rev"] if extract_only else profile["current_rev"]},
+            "action": "extract" if extract_only else "rematch",
+            "outcome": "건너뜀" if reason else "처리됨",
+            "reason": reason,
+            "extraction": extraction,
+        }
+
+    def _application_agg(self, conn, application_id):
+        """전체 재파싱이 페이지로 읽는 것과 같은 모양의 집계 행 하나(`_application_aggregates`)."""
+        agg = self._application_aggregates(conn, "a.application_id=?", (application_id,))
+        if not agg:
+            raise Problem("NOT_FOUND", "적용 건을 찾을 수 없습니다.", 404)
+        return agg[0]
+
+    @staticmethod
+    def _last_run(conn, application_id):
+        return conn.execute(
+            "SELECT run_id, status, error_summary FROM extraction_run WHERE application_id=? ORDER BY started_at DESC, run_id DESC LIMIT 1",
+            (application_id,),
+        ).fetchone()
+
     def _reparse_application(self, profile, agg, mode, principal, checkpoint):
         """반환 None = 처리(큐/추출/리비전), 문자열 = 건너뜀 사유."""
         all_approved = agg["heads_total"] and agg["unapproved"] == 0
@@ -2854,8 +2947,10 @@ class Service:
         return {"document_id": document_id, "status": status, "detail": new_detail}
 
     # ---- 문서 삭제(§4.13) ------------------------------------------------------------------
-    def _delete_busy_guard(self, conn, document_id):
-        """그 문서(또는 그 문서의 적용 건)를 대상으로 도는 작업이 있으면 409. 돌고 있는 추출이 FK 없이 끝나지 않게 한다."""
+    def _busy_guard(self, conn, document_id, message):
+        """그 문서(또는 그 문서의 적용 건)를 대상으로 도는 작업이 있으면 409. 돌고 있는 추출이 FK 없이 끝나지 않게 한다.
+
+        문서 삭제(§4.13)와 한 건 재파싱(§4.9)이 같은 규칙을 쓴다 — 같은 적용 건을 두 작업이 동시에 잡지 않게."""
         busy = conn.execute(
             "SELECT 1 FROM runtime_job WHERE state IN ('queued','running') AND ("
             "  (target_kind='document' AND target_id=?)"
@@ -2869,7 +2964,7 @@ class Service:
             (document_id, document_id, document_id),
         ).fetchone()
         if busy:
-            raise Problem("DOCUMENT_BUSY", "이 문서에 진행 중인 작업이 있습니다. 끝난 뒤 다시 지우세요.", 409)
+            raise Problem("DOCUMENT_BUSY", message, 409)
 
     def _purge_source_file(self, document):
         """§4.13 `purge_source=true` — `<ws>/data/raw` 안의 원본 파일 하나만 지운다. → (지웠는가, source_error|None).
@@ -2911,13 +3006,13 @@ class Service:
         with self.db.connect() as conn:
             if conn.execute("SELECT 1 FROM document WHERE document_id=?", (document_id,)).fetchone() is None:
                 raise Problem("UNKNOWN_DOCUMENT", "문서를 찾을 수 없습니다.", 404)
-            self._delete_busy_guard(conn, document_id)
+            self._busy_guard(conn, document_id, "이 문서에 진행 중인 작업이 있습니다. 끝난 뒤 다시 지우세요.")
         with self.db.connect(write=True) as conn:
             # 사전 검사와 이 트랜잭션 사이에 같은 문서가 지워졌을 수 있다 — 그때도 코드는 UNKNOWN_DOCUMENT(404)다.
             document = conn.execute("SELECT * FROM document WHERE document_id=?", (document_id,)).fetchone()
             if document is None:
                 raise Problem("UNKNOWN_DOCUMENT", "문서를 찾을 수 없습니다.", 404)
-            self._delete_busy_guard(conn, document_id)
+            self._busy_guard(conn, document_id, "이 문서에 진행 중인 작업이 있습니다. 끝난 뒤 다시 지우세요.")
             scope = "snapshot_id IN (SELECT snapshot_id FROM document_snapshot WHERE document_id=?)"
             args = (document_id,)
             snapshots = rows(conn, "SELECT snapshot_id, change_token FROM document_snapshot WHERE document_id=?", args)

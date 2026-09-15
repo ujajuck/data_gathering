@@ -19,7 +19,7 @@ cd e2e && SCHEMA_E2E_CHROMIUM_PATH=/opt/pw-browsers/chromium SCHEMA_E2E_PYTHON=p
 mkdir -p test-results && cp /tmp/run.log test-results/run.log
 ```
 
-아래 §2~§8의 수치는 모두 **같은 회차**(2회 연속 통과 중 두 번째 실행)의 출력이다. §3은 그 실행의 list reporter 전문이고,
+아래 §2~§8의 수치는 모두 **같은 회차**(3회 연속 통과 중 세 번째 실행)의 출력이다. §3은 그 실행의 list reporter 전문이고,
 §5는 그 실행이 찍은 `[timing]` 줄이며, 사전 검사 수치도 같은 트리에서 이어서 돌린 결과다.
 
 | 항목 | 값 |
@@ -36,108 +36,112 @@ mkdir -p test-results && cp /tmp/run.log test-results/run.log
 
 Playwright `webServer`는 `e2e/serve.py` 한 프로세스다. 이 프로세스는 작업 공간을 시드한 뒤 렌더 서버(8032)와 메인 서버(8031)를
 자식 프로세스로 띄우고, 제어 포트(18031)에서 `POST /reset`을 받으면 새 임시 폴더를 시드하고 두 서버를 다시 띄운다.
-각 스펙 파일은 `test.beforeAll`에서 `helpers.resetWorkspace()`를 불러 시드 상태에서 시작한다(리셋 1회 3.0–3.1초 × 8회, §3 로그의 `reset → generation` 줄).
+각 스펙 파일은 `test.beforeAll`에서 `helpers.resetWorkspace()`를 불러 시드 상태에서 시작한다(리셋 1회 2.57–2.78초 × 9회, §3 로그의 `reset → generation` 줄).
 스펙 파일 안의 test()들은 같은 작업 공간을 순서대로 쓴다(등록 → 검수 → 발행 흐름).
 
 ## 2. 결과 요약
 
 | 항목 | 값 |
 | --- | --- |
-| 스펙 파일 | 8 (`build` · `documents` · `jobs` · `profiles` · `register-directory` · `render-isolation` · `schema` · `source-review`) |
-| test() | 26 (문서 삭제 §4.13 3개 · 스키마 폐기 §4.2.3 1개를 이번 회차에 추가) |
-| 통과 / 실패 / 건너뜀 / flaky | **26 / 0 / 0 / 0** |
-| 소요 | Playwright 보고 `26 passed (2.8m)` (시드·서버 기동·리셋 8회 포함) |
-| 안정성 | 최종 트리에서 3회 연속 전체 통과 — `26 passed (2.8m)` · `26 passed (2.8m)` · `26 passed (2.9m)`. 재시도 0(`retries: 0`). §3·§5는 **두 번째 실행**의 출력 그대로다(로그 원본을 남기려면 §1 마지막 명령으로 `e2e/test-results/run.log`에 옮긴다 — 그 폴더는 `.gitignore` 대상이라 저장소에는 들어가지 않는다) |
+| 스펙 파일 | 9 (`build` · `documents` · `jobs` · `profiles` · `register-directory` · `render-isolation` · `reparse-application` · `schema` · `source-review`) |
+| test() | 28 (문서 상세 한 건 재파싱 §4.9 2개를 이번 회차에 추가) |
+| 통과 / 실패 / 건너뜀 / flaky | **28 / 0 / 0 / 0** |
+| 소요 | Playwright 보고 `28 passed (2.7m)` (시드·서버 기동·리셋 9회 포함) |
+| 안정성 | 최종 트리에서 3회 연속 전체 통과 — `28 passed (2.8m)` · `28 passed (2.8m)` · `28 passed (2.7m)`. 재시도 0(`retries: 0`). §3·§5는 **세 번째 실행**의 출력 그대로다(로그 원본을 남기려면 §1 마지막 명령으로 `e2e/test-results/run.log`에 옮긴다 — 그 폴더는 `.gitignore` 대상이라 저장소에는 들어가지 않는다) |
 
-같은 트리에서 사전 검사도 이어서 돌렸다: `cd frontend && npm run build` 성공(`✓ built in 1.74s`),
-`cd frontend && npx vitest run` **Test Files 15 passed (15) · Tests 177 passed (177)**,
-저장소 루트 `python3 -m pytest tests -q -p no:cacheprovider` **299 passed, 2 warnings, 50 subtests passed in 54.04s**.
+같은 트리에서 사전 검사도 이어서 돌렸다: `cd frontend && npm run build` 성공(`✓ built in 1.55s`),
+`cd frontend && npm test -- --run`(vitest) **Test Files 15 passed (15) · Tests 184 passed (184)**,
+저장소 루트 `python3 -m pytest -q` **307 passed, 2 warnings, 50 subtests passed in 49.81s**.
 
 ## 3. list reporter 출력 전문
 
 `[WebServer]` 줄은 러너의 제어 로그(스펙 파일마다 한 번의 리셋), `[timing]` 줄은 render-isolation 스펙이 측정한 값이다.
 
 ```text
+
 > test
 > playwright test --config=playwright.config.ts
 
-[WebServer] [e2e-control] generation 1 · workspace schema-e2e-fuo1946r · main 8031 · render 8032 · control 18031
+[WebServer] [e2e-control] generation 1 · workspace schema-e2e-kyyut2s4 · main 8031 · render 8032 · control 18031
 
-Running 26 tests using 1 worker
+Running 28 tests using 1 worker
 
-[WebServer] [e2e-control] reset → generation 2 · workspace schema-e2e-hj9n553z · 3014 ms
-  ✓   1 specs/build.spec.ts:91:1 › 문서 인계 · 제외 사유 · 스키마 · 출력 Header 편집 · 미리보기/원본 보기 · CSV/XLSX/SQLite · manifest · 새 빌드 (7.2s)
-[WebServer] [e2e-control] reset → generation 3 · workspace schema-e2e-8lzgh4hl · 3059 ms
-  ✓   2 specs/documents.spec.ts:35:1 › 쉘 · 문서 표 · 상태 칩 · 필터 · 정렬 (3.3s)
-  ✓   3 specs/documents.spec.ts:156:1 › 문서 등록 대화상자 · 상세 드로어(파일 보기·추출 결과·적용 프로파일·연결 스키마) · 잠긴 문서 (8.2s)
-  ✓   4 specs/documents.spec.ts:379:1 › 새 snapshot(변경 감지) · Snapshot 이력 · 다중 선택 → 데이터 빌드 (4.4s)
-  ✓   5 specs/documents.spec.ts:491:1 › 문서 삭제 — 다중 선택 확인 대화상자 · 원본 보존 · 목록에서 사라짐 · 같은 파일 재등록 (3.2s)
-  ✓   6 specs/documents.spec.ts:561:1 › 문서 삭제 — 단건(상세 드로어) · 원본 파일까지 · 대표 문서 프로파일 초안 · 작업 내역 (3.0s)
-  ✓   7 specs/documents.spec.ts:633:1 › 문서 삭제 거부 — 없는 문서 404 · 빈 목록 422 · 상한 초과 422 (241ms)
-[WebServer] [e2e-control] reset → generation 4 · workspace schema-e2e-1ror05z6 · 3068 ms
-  ✓   8 specs/jobs.spec.ts:71:1 › 요약 카드 · 신규 양식/매핑 검수/파싱 실패 큐 · 렌더 서버 상태 · 작업 목록 (3.9s)
-  ✓   9 specs/jobs.spec.ts:267:1 › 매핑 검수 전체 승인 → 문서 정상 · 큐 0 · 묶음 처리 작업 행 (2.6s)
-  ✓  10 specs/jobs.spec.ts:307:1 › 새 snapshot(변경 감지) 큐 → 동일 승계 전체 승인 → 정상 · 변경 감지 0 (3.7s)
-  ✓  11 specs/jobs.spec.ts:380:1 › 실패한 등록 작업 행(오류 문구 · 이동 → 문서 드로어) · 재파싱이 도는 동안 JobBar '진행 중 작업' (21.1s)
-[WebServer] [e2e-control] reset → generation 5 · workspace schema-e2e-zauz9jer · 3050 ms
-  ✓  12 specs/profiles.spec.ts:71:1 › 목록 · 상태 필터 · 탭 없는 단일 상세(요약줄 · 정의 JSON · 변경 이력) · 대표 문서 지정 · 내보내기 (7.6s)
-  ✓  13 specs/profiles.spec.ts:240:1 › + 새 프로파일 하나로: 빈 골격 · v1 파싱 템플릿 붙여넣기(형식 판별 · 경고) → 저장 → 초안 프로파일 (2.8s)
-  ✓  14 specs/profiles.spec.ts:369:1 › 정의 JSON 편집 → 새 리비전 저장 → 테스트 팝오버 → Source Review(테스트 모드) · 재파싱(fill) (9.2s)
-[WebServer] [e2e-control] reset → generation 6 · workspace schema-e2e-rz3wiznt · 3037 ms
-  ✓  15 specs/register-directory.spec.ts:52:1 › 폴더 일괄 등록: 미리보기 → 4개 등록 → 재스캔(변경 없음) → 다시 읽기 → 값 변경(변경 감지) (4.8s)
-  ✓  16 specs/register-directory.spec.ts:163:1 › API: 폴더 경로 검증(422 INVALID_SOURCE · 404) · 작업 라벨 (1.2s)
-[WebServer] [e2e-control] reset → generation 7 · workspace schema-e2e-61gn444q · 3072 ms
-[timing] first render (open drawer → cells visible, 공정 기록): 1151 ms
+[WebServer] [e2e-control] reset → generation 2 · workspace schema-e2e-4amc36qf · 2574 ms
+  ✓   1 specs/build.spec.ts:91:1 › 문서 인계 · 제외 사유 · 스키마 · 출력 Header 편집 · 미리보기/원본 보기 · CSV/XLSX/SQLite · manifest · 새 빌드 (6.8s)
+[WebServer] [e2e-control] reset → generation 3 · workspace schema-e2e-98uy8i3p · 2568 ms
+  ✓   2 specs/documents.spec.ts:35:1 › 쉘 · 문서 표 · 상태 칩 · 필터 · 정렬 (3.1s)
+  ✓   3 specs/documents.spec.ts:156:1 › 문서 등록 대화상자 · 상세 드로어(파일 보기·추출 결과·적용 프로파일·연결 스키마) · 잠긴 문서 (7.5s)
+  ✓   4 specs/documents.spec.ts:379:1 › 새 snapshot(변경 감지) · Snapshot 이력 · 다중 선택 → 데이터 빌드 (4.0s)
+  ✓   5 specs/documents.spec.ts:491:1 › 문서 삭제 — 다중 선택 확인 대화상자 · 원본 보존 · 목록에서 사라짐 · 같은 파일 재등록 (2.9s)
+  ✓   6 specs/documents.spec.ts:561:1 › 문서 삭제 — 단건(상세 드로어) · 원본 파일까지 · 대표 문서 프로파일 초안 · 작업 내역 (2.8s)
+  ✓   7 specs/documents.spec.ts:633:1 › 문서 삭제 거부 — 없는 문서 404 · 빈 목록 422 · 상한 초과 422 (184ms)
+[WebServer] [e2e-control] reset → generation 4 · workspace schema-e2e-50k97j64 · 2708 ms
+  ✓   8 specs/jobs.spec.ts:71:1 › 요약 카드 · 신규 양식/매핑 검수/파싱 실패 큐 · 렌더 서버 상태 · 작업 목록 (3.5s)
+  ✓   9 specs/jobs.spec.ts:267:1 › 매핑 검수 전체 승인 → 문서 정상 · 큐 0 · 묶음 처리 작업 행 (2.4s)
+  ✓  10 specs/jobs.spec.ts:307:1 › 새 snapshot(변경 감지) 큐 → 동일 승계 전체 승인 → 정상 · 변경 감지 0 (3.5s)
+  ✓  11 specs/jobs.spec.ts:380:1 › 실패한 등록 작업 행(오류 문구 · 이동 → 문서 드로어) · 재파싱이 도는 동안 JobBar '진행 중 작업' (19.1s)
+[WebServer] [e2e-control] reset → generation 5 · workspace schema-e2e-f7palsz3 · 2734 ms
+  ✓  12 specs/profiles.spec.ts:71:1 › 목록 · 상태 필터 · 탭 없는 단일 상세(요약줄 · 정의 JSON · 변경 이력) · 대표 문서 지정 · 내보내기 (6.5s)
+  ✓  13 specs/profiles.spec.ts:240:1 › + 새 프로파일 하나로: 빈 골격 · v1 파싱 템플릿 붙여넣기(형식 판별 · 경고) → 저장 → 초안 프로파일 (2.7s)
+  ✓  14 specs/profiles.spec.ts:369:1 › 정의 JSON 편집 → 새 리비전 저장 → 테스트 팝오버 → Source Review(테스트 모드) · 재파싱(fill) (8.3s)
+[WebServer] [e2e-control] reset → generation 6 · workspace schema-e2e-mhe3xu6k · 2633 ms
+  ✓  15 specs/register-directory.spec.ts:52:1 › 폴더 일괄 등록: 미리보기 → 4개 등록 → 재스캔(변경 없음) → 다시 읽기 → 값 변경(변경 감지) (4.4s)
+  ✓  16 specs/register-directory.spec.ts:163:1 › API: 폴더 경로 검증(422 INVALID_SOURCE · 404) · 작업 라벨 (1.1s)
+[WebServer] [e2e-control] reset → generation 7 · workspace schema-e2e-1yeaknuk · 2628 ms
+[timing] first render (open drawer → cells visible, 공정 기록): 1103 ms
 [timing] first render polling round-trips (202 count): 1 responses
-[timing] cached re-access (close → reopen drawer, in-memory client cache): 248 ms
-[timing] cached re-access (after reload → open drawer → cells visible, render-server cache): 278 ms
-[timing] cached window GET (200): 14 ms
-[timing] cached window GET with If-None-Match (304): 12 ms
-[timing] first render (image sheet 첨부 → cells visible): 958 ms
-[timing] render asset GET (200 image/png): 11 ms
-  ✓  17 specs/render-isolation.spec.ts:72:1 › 첫 렌더(별도 렌더 서버) · 캐시 재접근 < 1초 · ETag/304 · Cache-Control · 이미지 asset (5.4s)
-[timing] register heavy document (2000x90): 1796 ms
+[timing] cached re-access (close → reopen drawer, in-memory client cache): 207 ms
+[timing] cached re-access (after reload → open drawer → cells visible, render-server cache): 228 ms
+[timing] cached window GET (200): 12 ms
+[timing] cached window GET with If-None-Match (304): 11 ms
+[timing] first render (image sheet 첨부 → cells visible): 997 ms
+[timing] render asset GET (200 image/png): 9 ms
+  ✓  17 specs/render-isolation.spec.ts:72:1 › 첫 렌더(별도 렌더 서버) · 캐시 재접근 < 1초 · ETag/304 · Cache-Control · 이미지 asset (5.0s)
+[timing] register heavy document (2000x90): 1633 ms
 [timing] render request → 202 (uncached heavy sheet): 11 ms
-[timing] documents list during render (5 samples, max): 9 ms
-[timing] documents list during render (5 samples, mean): 8 ms
+[timing] documents list during render (5 samples, max): 8 ms
+[timing] documents list during render (5 samples, mean): 7 ms
 [timing] navigate 문서 → 파싱 스키마 during render: 398 ms
-[timing] heavy sheet render (202 → 200, 2000x90): 2799 ms
-[timing] heavy sheet tail window GET (cached): 39 ms
-  ✓  18 specs/render-isolation.spec.ts:233:1 › 격리: 큰 시트를 렌더하는 동안 문서 목록 API < 500ms · 화면 이동 가능 (8.1s)
-[timing] documents list baseline (10 samples, mean): 9 ms
-[timing] documents list baseline (10 samples, max): 22 ms
+[timing] heavy sheet render (202 → 200, 2000x90): 2188 ms
+[timing] heavy sheet tail window GET (cached): 36 ms
+  ✓  18 specs/render-isolation.spec.ts:233:1 › 격리: 큰 시트를 렌더하는 동안 문서 목록 API < 500ms · 화면 이동 가능 (6.8s)
+[timing] documents list baseline (10 samples, mean): 7 ms
+[timing] documents list baseline (10 samples, max): 9 ms
 [timing] documents list baseline (10 samples, min): 7 ms
 [timing] summary
-  first render (open drawer → cells visible, 공정 기록): 1151 ms
+  first render (open drawer → cells visible, 공정 기록): 1103 ms
   first render polling round-trips (202 count): 1 responses
-  cached re-access (close → reopen drawer, in-memory client cache): 248 ms
-  cached re-access (after reload → open drawer → cells visible, render-server cache): 278 ms
-  cached window GET (200): 14 ms
-  cached window GET with If-None-Match (304): 12 ms
-  first render (image sheet 첨부 → cells visible): 958 ms
-  render asset GET (200 image/png): 11 ms
-  register heavy document (2000x90): 1796 ms
+  cached re-access (close → reopen drawer, in-memory client cache): 207 ms
+  cached re-access (after reload → open drawer → cells visible, render-server cache): 228 ms
+  cached window GET (200): 12 ms
+  cached window GET with If-None-Match (304): 11 ms
+  first render (image sheet 첨부 → cells visible): 997 ms
+  render asset GET (200 image/png): 9 ms
+  register heavy document (2000x90): 1633 ms
   render request → 202 (uncached heavy sheet): 11 ms
-  documents list during render (5 samples, max): 9 ms
-  documents list during render (5 samples, mean): 8 ms
+  documents list during render (5 samples, max): 8 ms
+  documents list during render (5 samples, mean): 7 ms
   navigate 문서 → 파싱 스키마 during render: 398 ms
-  heavy sheet render (202 → 200, 2000x90): 2799 ms
-  heavy sheet tail window GET (cached): 39 ms
-  documents list baseline (10 samples, mean): 9 ms
-  documents list baseline (10 samples, max): 22 ms
+  heavy sheet render (202 → 200, 2000x90): 2188 ms
+  heavy sheet tail window GET (cached): 36 ms
+  documents list baseline (10 samples, mean): 7 ms
+  documents list baseline (10 samples, max): 9 ms
   documents list baseline (10 samples, min): 7 ms
-  ✓  19 specs/render-isolation.spec.ts:331:1 › 문서 목록 API 지연 기준선(10회) (1.2s)
-[WebServer] [e2e-control] reset → generation 8 · workspace schema-e2e-7t8s1i5v · 3043 ms
-  ✓  20 specs/schema.spec.ts:62:1 › 스키마 목록 · 상세 헤더 · 트리/그래프 토글 · 필드 상세 · 사용 프로파일/연관 문서 추적 · 필드에서 Source Review (6.9s)
-  ✓  21 specs/schema.spec.ts:367:1 › 필드 편집(alias 추가 → PATCH → 새 리비전) · 변경 이력 (3.0s)
-  ✓  22 specs/schema.spec.ts:476:1 › 새 스키마 생성(생성 전용) · 같은 키 재생성 거부 · 필드 추가/삭제 · 사용 중 필드·스키마 삭제 거부 (6.2s)
-  ✓  23 specs/schema.spec.ts:660:1 › 스키마 폐기 → 목록 기본(활성)에서 사라짐 → 상태 필터 · 새 프로파일/데이터 빌드 선택에서 빠짐 → 폐기 해제 (5.3s)
-[WebServer] [e2e-control] reset → generation 9 · workspace schema-e2e-l41ooesx · 3064 ms
-  ✓  24 specs/source-review.spec.ts:84:1 › 검수 화면: 컨텍스트 · 시트/규칙 목록 · 실제 셀 · overlay · 확대 · 셀 이동 → 드래그 재지정 · 승인(요청 1회) · 모두 승인 · 이력/복원 · 반려 · 역방향 조회 (9.7s)
-  ✓  25 specs/source-review.spec.ts:384:1 › 창 요청: 60행·26열을 넘는 문서를 스크롤하면 뷰어가 두 번째 창(A61:… / AA…)을 요청해 그린다 (3.1s)
-  ✓  26 specs/source-review.spec.ts:435:1 › 잠긴 문서: 드로어 파일 보기는 Snapshot 없음 안내, 등록 뒤 잠긴 원본은 뷰어 안에서만 DRM 실패 + 다시 시도 — 나머지 화면은 정상 (4.0s)
+  ✓  19 specs/render-isolation.spec.ts:331:1 › 문서 목록 API 지연 기준선(10회) (1.1s)
+[WebServer] [e2e-control] reset → generation 8 · workspace schema-e2e-6jandqzb · 2776 ms
+  ✓  20 specs/reparse-application.spec.ts:98:1 › 프로파일 정의를 고쳐 새 리비전을 저장하고 대표 문서로 다시 승인한다(전체 재파싱은 돌기 전에 취소) (3.9s)
+  ✓  21 specs/reparse-application.spec.ts:156:1 › 문서 상세 · 적용 프로파일 행의 `다시 파싱` — 그 문서만 새 리비전으로 발행하고, 다시 누르면 이미 최신으로 건너뛴다 (4.5s)
+[WebServer] [e2e-control] reset → generation 9 · workspace schema-e2e-gjbtimy0 · 2700 ms
+  ✓  22 specs/schema.spec.ts:62:1 › 스키마 목록 · 상세 헤더 · 트리/그래프 토글 · 필드 상세 · 사용 프로파일/연관 문서 추적 · 필드에서 Source Review (6.4s)
+  ✓  23 specs/schema.spec.ts:367:1 › 필드 편집(alias 추가 → PATCH → 새 리비전) · 변경 이력 (2.8s)
+  ✓  24 specs/schema.spec.ts:476:1 › 새 스키마 생성(생성 전용) · 같은 키 재생성 거부 · 필드 추가/삭제 · 사용 중 필드·스키마 삭제 거부 (5.9s)
+  ✓  25 specs/schema.spec.ts:660:1 › 스키마 폐기 → 목록 기본(활성)에서 사라짐 → 상태 필터 · 새 프로파일/데이터 빌드 선택에서 빠짐 → 폐기 해제 (5.4s)
+[WebServer] [e2e-control] reset → generation 10 · workspace schema-e2e-p0e7ycux · 2734 ms
+  ✓  26 specs/source-review.spec.ts:84:1 › 검수 화면: 컨텍스트 · 시트/규칙 목록 · 실제 셀 · overlay · 확대 · 셀 이동 → 드래그 재지정 · 승인(요청 1회) · 모두 승인 · 이력/복원 · 반려 · 역방향 조회 (8.6s)
+  ✓  27 specs/source-review.spec.ts:384:1 › 창 요청: 60행·26열을 넘는 문서를 스크롤하면 뷰어가 두 번째 창(A61:… / AA…)을 요청해 그린다 (2.7s)
+  ✓  28 specs/source-review.spec.ts:435:1 › 잠긴 문서: 드로어 파일 보기는 Snapshot 없음 안내, 등록 뒤 잠긴 원본은 뷰어 안에서만 DRM 실패 + 다시 시도 — 나머지 화면은 정상 (3.7s)
 
-  26 passed (2.8m)
+  28 passed (2.7m)
 ```
 
 ## 4. ui-development-spec §10 완료 조건 → 스펙 → 검증 방법
@@ -182,6 +186,9 @@ Running 26 tests using 1 worker
 | Document | 원본 파일은 기본으로 남는다 | documents #4 | 대화상자의 `원본 파일도 함께 지우기 (data/raw)` 체크박스가 **기본 해제**이고 보조 줄 `체크하지 않으면 원본 파일은 그대로 남고, 다시 등록하면 같은 문서가 만들어집니다.`; 삭제 뒤 `<ws>/data/raw`의 두 파일이 그대로 있고(파이썬으로 파일 존재 확인), 같은 파일을 다시 등록하면 상태 `정상` · 프로파일 v1이 다시 붙은 **새 document_id**로 들어온다(지운 id는 돌아오지 않는다) | pass |
 | Document | 원본까지 지우는 선택지 · 대표 문서 · 작업 내역 | documents #5 | 상세 드로어 머리의 `삭제` → 같은 대화상자(단건 문구 `'공정데이터_2024_01.xlsx'을(를) 지웁니다. …`) → 체크박스를 켜면 `DELETE /documents/{id}?purge_source=true` → 드로어 닫힘 · `?document=` 사라짐 · 원본 파일 사라짐; 토스트가 `문서 1개를 지웠습니다. 원본 파일 1개도 지웠습니다. 파싱 프로파일 1개가 초안으로 내려갔습니다 — 대표 문서를 다시 지정해 승인하세요.` → `파싱 프로파일 열기` → 목록 상태 칩 `초안`, `GET /profiles/{id}`의 `status: draft` · `reference` 없음; 작업 내역 `종류=삭제` 2행 `[<문서명> 삭제, 문서 2개 삭제]`(이동 버튼 없음)과 `GET /jobs?kind=delete`의 `target_kind: workspace` · `target_id: null` · `summary{requested:1, deleted:1, failed:0}` · `profiles_reset[{profile_id, profile_name}]` | pass |
 | Document | 되돌릴 수 없는 일의 사거리를 묶는다 | documents #6 | 없는 문서 `DELETE` → 404 `UNKNOWN_DOCUMENT`; `POST /documents/delete {document_ids: []}` → 422 `VALIDATION_ERROR`; 201개 → 422 `TOO_MANY_DOCUMENTS`(`한 번에 최대 200개까지 지울 수 있습니다. 나누어 지우세요.`); 세 거부 뒤 문서 수 불변 | pass |
+| Document | 같은 프로파일이라도 이 문서만 다시 파싱된다(사용자 요구 · §4.9 한 건 경로) | reparse-application #2 | 적용 프로파일 행의 `다시 파싱`(title `이 문서를 같은 프로파일의 현재 리비전으로 다시 맞춥니다(이미 최신이면 아무것도 하지 않습니다).`) → `POST /applications/{aid}/reparse?wait=10` → 누르는 동안 `다시 파싱 중…`·비활성 + `다시 파싱이 진행 중입니다. 닫아도 상단의 진행 중 작업 표시에서 확인할 수 있습니다.` → 토스트 `공정데이터_2024_02.xlsx · 공정데이터_A양식 v2 다시 파싱 완료 · 값 46개` → 추출 결과 탭이 46행(쪽 넘김 사라짐)·`온도` 6행(공정 기록!C9~C14) · `GET /applications/{aid}/mappings` 열 규칙 7개가 r2(`approved`·`auto`·값 영역 6행), 머리 정보 4개는 r1 · `GET /snapshots/{sid}/applications` `published: true` | pass |
+| Document | 같은 버튼을 또 누르면 아무것도 하지 않는다 | reparse-application #2 | 두 번째 클릭 → 토스트 `공정데이터_2024_02.xlsx · 공정데이터_A양식 v2 다시 파싱 건너뜀 · 이미 최신입니다 — 다시 뽑을 것이 없습니다. 원본 파일이 바뀌었으면 문서를 다시 등록하세요`(§4.9 `up_to_date` — 이 갈래는 원본을 읽지 않는다) · 헤드 리비전 불변 · `GET /jobs?kind=reparse`의 `target_kind=application` 2건이 같은 라벨 `공정데이터_2024_02.xlsx · 공정데이터_A양식 v2 · 다시 파싱`과 결과 `처리됨`/`건너뜀` | pass |
+| Document | 한 건 재파싱은 다른 문서를 건드리지 않는다 | reparse-application #1·#2 | 같은 프로파일을 쓰는 `공정데이터_2024_03.xlsx`의 헤드 11개가 모두 r1(값 영역 60행)이고 값 50행·온도 12개 그대로; 문서 목록에는 `다시 파싱` 버튼이 0개(이번 항목은 문서 상세에만 붙는다) | pass |
 | Document | 문서 → Profile → Schema 관계 | documents #2 | 드로어 관계 카드 `문서 · 파싱 프로파일 · 파싱 스키마`, 적용 프로파일 탭(v1 · 발행 · 호환 · 검수 11/11), 연결 스키마 카드 `프로파일 … 경유 · 파싱 스키마 화면에서 구조 보기 ›` | pass |
 | Source Review | 실제 Excel 형태 | source-review #1·#2, render-isolation #1 | 뷰어 셀 텍스트(`A1='온도 단위'`, C8='온도' 등)를 실제 렌더 결과로 단언, 60행×26열을 넘으면 두 번째 창(A61:… / AA…) 요청, 이미지 시트 asset(png) | pass |
 | Source Review | Key/Value/Unit/Context overlay | source-review #1 | overlay 라벨 `키`·`값`·`단위`, 역할 버튼 `["키","값","단위","문맥"]`, 범례에 `키` | pass |
@@ -191,30 +198,31 @@ Running 26 tests using 1 worker
 
 | 측정 | 값 | 기준 |
 | --- | --- | --- |
-| 첫 렌더(드로어 열기 → 셀 표시, 공정 기록) | 1151 ms | 202 폴링 1회 |
+| 첫 렌더(드로어 열기 → 셀 표시, 공정 기록) | 1103 ms | 202 폴링 1회 |
 | 첫 렌더 202 응답 수 | 1 responses | — |
-| 캐시 재접근(드로어 닫고 다시 열기, 클라이언트 메모리 캐시) | 248 ms | < 1초 (네트워크 요청 0) |
-| 캐시 재접근(새로고침 뒤 드로어 → 셀 표시, 렌더 서버 캐시) | 278 ms | < 1초 (200만, 202 없음) |
-| 캐시된 창 GET (200) | 14 ms | — |
-| 캐시된 창 GET + If-None-Match (304) | 12 ms | ETag 일치 → 304, `Cache-Control: private, no-cache` |
-| 첫 렌더(이미지 시트 첨부 → 셀 표시) | 958 ms | 이미지는 별도 asset |
-| 렌더 asset GET (200 image/png) | 11 ms | — |
-| 큰 문서 등록(2000×90 셀, wait=30 작업) | 1796 ms | — |
+| 캐시 재접근(드로어 닫고 다시 열기, 클라이언트 메모리 캐시) | 207 ms | < 1초 (네트워크 요청 0) |
+| 캐시 재접근(새로고침 뒤 드로어 → 셀 표시, 렌더 서버 캐시) | 228 ms | < 1초 (200만, 202 없음) |
+| 캐시된 창 GET (200) | 12 ms | — |
+| 캐시된 창 GET + If-None-Match (304) | 11 ms | ETag 일치 → 304, `Cache-Control: private, no-cache` |
+| 첫 렌더(이미지 시트 첨부 → 셀 표시) | 997 ms | 이미지는 별도 asset |
+| 렌더 asset GET (200 image/png) | 9 ms | — |
+| 큰 문서 등록(2000×90 셀, wait=30 작업) | 1633 ms | — |
 | 캐시 안 된 큰 시트 렌더 요청 → 202 | 11 ms | 절대 렌더 완료를 기다리지 않음 |
-| 렌더 중 문서 목록 API (5회 최대) | 9 ms | < 500 ms |
-| 렌더 중 문서 목록 API (5회 평균) | 8 ms | — |
+| 렌더 중 문서 목록 API (5회 최대) | 8 ms | < 500 ms |
+| 렌더 중 문서 목록 API (5회 평균) | 7 ms | — |
 | 렌더 중 화면 이동 문서 → 파싱 스키마 | 398 ms | 막히지 않음 |
-| 큰 시트 렌더 완료(202 → 200, 2000×90) | 2799 ms | truncated false (§5 상한 200,000셀 미만) |
-| 큰 시트 마지막 창 GET(캐시) | 39 ms | — |
-| 문서 목록 API 기준선(10회 평균 / 최대 / 최소) | 9 / 22 / 7 ms | — |
+| 큰 시트 렌더 완료(202 → 200, 2000×90) | 2188 ms | truncated false (§5 상한 200,000셀 미만) |
+| 큰 시트 마지막 창 GET(캐시) | 36 ms | — |
+| 문서 목록 API 기준선(10회 평균 / 최대 / 최소) | 7 / 9 / 7 ms | — |
 
 다른 스펙에서 관찰한 값(단언 대상은 아니며 참고용):
 
 | 측정 | 값 |
 | --- | --- |
-| 작업 공간 리셋(시드 + 렌더/메인 서버 재기동) | 3.01–3.07초 × 8회 (§3 로그의 `reset → generation` 8줄) |
+| 작업 공간 리셋(시드 + 렌더/메인 서버 재기동) | 2.57–2.78초 × 9회 (§3 로그의 `reset → generation` 9줄) |
 | `POST /applications/{id}/approve-all?wait=20` (값 88개 추출 포함) | 인라인 완료 |
 | `POST /profiles/{id}/reparse?wait=10` (fill, 시드 4문서 전부 건너뜀) | 인라인 완료 |
+| `POST /applications/{aid}/reparse?wait=10` (한 건 rematch + 값 46개 추출) | 인라인 완료 — 스펙이 진행 중 표시를 보려고 **요청을 1.5초 늦춘** 뒤에도 reparse-application #2 전체 4.5초 |
 | `POST /profiles/{id}/test` (공정데이터_2024_02, 그룹 11) | 동기 응답, 20초 TEST_TIMEOUT 안 |
 | 재파싱(rematch) 큰 호환 문서(4000×150) 포함 | JobBar `진행 중 작업`이 관찰될 만큼 지속(jobs #11 전체 21.1초) |
 | 잠긴 파일 단독 재등록 실패 작업 | 인라인 완료(DRM_READER_REQUIRED) |
@@ -236,6 +244,7 @@ Running 26 tests using 1 worker
 | `jobs.spec.ts` | 4 | 요약 카드 5개 · 신규 양식/매핑 검수/파싱 실패 큐 묶음 행과 멤버 표(Snapshot 날짜·상태 칩) · 원본 보기 → Source Review · 렌더 서버 상태 · 작업 목록(종류 필터) · 매핑 검수 `전체 승인` → 문서 정상 · 큐 0 · 묶음 처리 작업 행 · 새 snapshot 변경 감지 큐 → 동일 승계 전체 승인 · 잠긴 파일 재등록 실패 행(오류 문구 · 이동 → 문서 드로어) · 큰 문서 재파싱 중 JobBar `진행 중 작업` |
 | `source-review.spec.ts` | 3 | 컨텍스트 브레드크럼(`{schema} v{rev}`) · 시트/규칙 목록(제안 칩) · 실제 셀 · overlay 키/값/단위 · 확대 · 셀 이동 → 드래그 재지정 → `원본 위치 변경됨` · 승인(POST 1회) · 모두 승인(추출 88값·발행) · 변경 이력/복원 · 반려 · 재승인 → 추출 폴링 · 역방향 조회(API) · 창 요청(80행×30열 문서 스크롤 → A61:… / AA…) · 잠긴 문서(드로어 Snapshot 없음 안내, 뷰어 안 DRM 403 → `다시 시도`, 나머지 화면 정상) |
 | `register-directory.spec.ts` | 2 | `helpers.makeRawTree`로 원본 폴더에 `일괄/2024/`·`일괄/2024/하위/` 트리(같은 양식 복사본 3 + 다른 양식 1 + `~$임시.xlsx` + `메모.txt`) 생성 · 대화상자 폴더 이동 → `이 폴더 전체 등록` 미리보기(`일괄/ 아래 파일 4개 · 하위 폴더 2개` · 상태 칩 4종 · 건너뜀 줄 · 다시 읽기 체크박스 해제 상태) → `4개 등록 시작` → 요약 `4개 중 4개 등록 · 0개 변경 없음 · 0개 실패` · 결과 표 4행(등록/자동 적용/상태/실패 사유) · UUID 비노출 · 문서 목록 +4건(정상 3 · 프로파일 없음 1) · 폴더 행 `일괄 전체 등록`으로 재스캔 → `변경 없음 4`·`0개 등록 시작` 비활성·안내 문구 · 체크박스 켜고 4건 재읽기(문서 수 불변) · `helpers.mutateRawDocument`로 하위 복사본 값 변경 → `변경된 문서 1` → `1개 등록 시작` → 결과 행·문서 목록 `변경 감지` · API `..`/`일괄/../..`/절대 경로 422 `INVALID_SOURCE` · 없는 폴더 404 `SOURCE_NOT_FOUND` · 알 수 없는 provider 422 `UNKNOWN_PROVIDER` · `GET /jobs?kind=register` 라벨 `일괄 폴더 일괄 등록` |
+| `reparse-application.spec.ts` | 2 | **문서 상세 한 건 재파싱(§4.9)**: 프로파일 정의 JSON에서 LOT 표 값 영역을 60행 → 6행으로 좁혀 v2 저장 → 대표 문서로 다시 승인해 기준 서명을 v2에서 계산(§4.8) → 승인이 큐에 넣는 **프로파일 전체** 재파싱을 즉시 취소하고 대상·확인용 문서가 옛 리비전 그대로임을 확인 → 문서 상세(`공정데이터_2024_02.xlsx`) 적용 프로파일 행의 행동 버튼 `[원본 보기, 다시 파싱, 프로파일 열기]` → `다시 파싱` → 진행 중 `다시 파싱 중…`·비활성·안내 줄 → 토스트 `… v2 다시 파싱 완료 · 값 46개` → 추출 결과 탭 46행·`온도` 6행(C9~C14) → API로 헤드 r2(열 규칙 7개만)·발행 확인 → 같은 버튼 재클릭 → `… 다시 파싱 건너뜀 · 이미 최신입니다 — 다시 뽑을 것이 없습니다. …` → 다른 문서(`공정데이터_2024_03.xlsx`)는 r1·60행·값 50행 그대로 → `GET /jobs?kind=reparse`의 `target_kind=application` 2건과 작업 내역 라벨 · 문서 목록에는 `다시 파싱` 버튼 0개 |
 | `render-isolation.spec.ts` | 3 | 첫 렌더 202 → 폴링 → 200 · 캐시 재접근 < 1초(클라이언트/렌더 서버) · ETag/If-None-Match 304 · `Cache-Control: private, no-cache` · 이미지 asset png · 큰 시트(2000×90) 렌더 중 문서 목록 API < 500 ms와 화면 이동 · 기준선 10회 |
 
 ## 7. 실패·건너뜀·경고
@@ -262,6 +271,10 @@ Running 26 tests using 1 worker
 - **일부러 거부시킨 409**: 스키마 스펙 3번은 `SCHEMA_EXISTS`·`FIELD_HAS_CHILDREN`·`FIELD_IN_USE`·`SCHEMA_IN_USE` 네 건을 만든다. Chrome이 4xx마다 남기는 `Failed to load resource … 409` 콘솔 오류는 브라우저 생성이라 정확히 4건만 허용하고 그 외 `console.error`는 실패로 본다.
 - **잠긴 원본의 렌더 403**은 한 번의 요청으로 확정되지 않는다. 렌더는 비동기라 첫 응답이 202이고, 어댑터가 없으면 다음 폴링에서 403 `{status:'failed', error{code,message}, retry_after}`가 된다 — 스펙은 202인 동안 0.5초 간격으로 최대 60초 폴링한 뒤 403을 단언한다.
 - **`e2e/test-results/run.log`**: Playwright가 시작할 때 `outputDir`을 비우므로 실행 중에 그 안으로 `tee`하면 지워진 inode에 쓰여 파일이 남지 않는다. §1의 명령은 실행이 끝난 뒤 로그를 옮긴다.
+- **한 건 재파싱에서 승인을 API로 한 것**: `reparse-application.spec.ts` #1은 `POST /profiles/{id}/approve`를 화면(Source Review의 `이 문서로 승인`)이 아니라 API로 부른다. 이 스펙이 보려는 것은 승인 화면이 아니라 '승인 뒤 상태에서 한 건만 다시 파싱된다'이고, 승인 화면 자체는 `profiles.spec.ts` #1(대표 문서 지정 팝오버)과 `source-review.spec.ts` #1이 덮는다.
+- **승인이 큐에 넣는 프로파일 전체 재파싱을 취소한다**: §4.8대로 승인은 전체 재파싱을 큐에 넣는데, 그대로 두면 네 문서가 모두 새 리비전으로 올라가 '한 건만'을 보일 수 없다. 스펙은 그 작업을 바로 취소하고 `cancelled`를 단언한 뒤, **대상 문서와 확인용 문서의 헤드가 r1 그대로**임을 확인하고 나서야 버튼을 누른다(취소가 늦어 다른 문서가 손타면 그 단언에서 바로 잡힌다). 취소 요청은 6~9 ms 안에 닿고 문서 하나를 재매치하는 데는 수백 ms가 걸려, 실측 6회에서 대표 문서 외에는 손대지 않았다.
+- **한 건 재파싱의 진행 중 표시**는 시드 규모에서 너무 빨리 끝나 그대로는 관찰할 수 없어, `page.route`로 그 POST 하나만 1.5초 늦춘 뒤 `다시 파싱 중…`·비활성·안내 줄을 단언한다(응답 본문은 서버가 만든 그대로다).
+- **10초를 넘겨 작업으로 넘어가는 갈래**(토스트 `… 다시 파싱이 작업 내역에서 계속 진행됩니다.`)와 **409 `DOCUMENT_BUSY`**, **422 `PROFILE_NOT_APPROVED`**, **추출만 다시 하는 갈래**(`action: extract`)는 브라우저에서 만들 수 없어 `tests/test_reparse_application.py`가 본다.
 - **폴더 일괄 등록에서 확인하지 않은 갈래**: 413 `DIRECTORY_LIMIT` 안내, 작업 취소, 심볼릭 링크 건너뜀, 잠긴 파일 다시 읽기, `documents[]` 500행 `truncated` 표시, 최상위(`원본 폴더 전체 등록`) 경로는 브라우저 스펙이 아니라 단위 테스트가 덮는다. 스펙은 결과 화면에 `앞 500개만 표시` 문구가 **없음**만 단언한다.
 
 ### 7.2 E2E 중 발견해 고친 것 (모두 이 스위트로 검증됨)
@@ -323,6 +336,14 @@ Running 26 tests using 1 worker
 - §4.1.1 일괄 등록 작업 라벨을 계약은 `"<폴더 마지막 이름 또는 '원본 폴더'> 폴더 일괄 등록"`으로 적어 최상위에서는 `원본 폴더 폴더 일괄 등록`으로도 읽히지만, 구현은 `원본 폴더 일괄 등록`이다. 스펙은 하위 폴더(`일괄 폴더 일괄 등록`)만 단언한다.
 - 계약 §8은 스펙 파일 목록에 `settings.spec.ts`를 적지만 `e2e/specs/`에는 그 파일이 없다. 설정 화면 단언(접근 토큰 입력칸 없음 · Reader 카드 연결 상태와 127.0.0.1 안내 · 잠김 묶음의 `설정 열기` → `#reader`)은 `documents.spec.ts` #1과 `source-review.spec.ts` #3 안에 들어 있다 — 커버리지는 있고 파일 이름만 다르다. 파일을 새로 만들면 같은 단언이 두 벌이 되므로 나누지 않았다.
 - 스키마 목록에서 유일한 스키마를 폐기하면 기본(활성) 필터의 빈 상태 문구가 `아직 파싱 스키마가 없습니다. 정의 JSON을 가져와 시작하세요.`다 — 스키마가 하나 있는데도 '없다'고 말한다(상태 필터가 바로 옆에 있어 길은 막히지 않는다). 스펙은 현재 문구를 그대로 단언한다.
+- **한 건 재파싱 토스트 문구는 리뷰 뒤 계약 §7과 맞췄다.** 내용이 달랐던 갈래(추출까지 가지 않은 처리 — 구조가 조금 달라 제안 리비전만 올라간 경우)는
+  이제 `… 다시 파싱 완료 · 검수가 필요합니다`라고 말하고 `원본 보기` 행동을 단다(그 문서는 검수 대기로 내려갔고 값은 하나도 다시 뽑히지 않았다).
+  `up_to_date` 문구는 `이미 최신입니다 — 다시 뽑을 것이 없습니다. 원본 파일이 바뀌었으면 문서를 다시 등록하세요`다 — 이 갈래는 **원본 파일을 읽지 않고** 판정하므로(§4.9)
+  '원본이 디스크에서 바뀌었지만 다시 등록하지 않은' 경우를 이 버튼으로는 알 수 없다는 사실을 문구가 말한다. 계약 §7도 같은 문자열로 고쳤다.
+  남는 차이는 형식 하나뿐이다: 계약이 건너뛴 사유만 적은 자리에 구현은 앞에 `{문서명} · {프로파일명} v{rev} 다시 파싱 건너뜀 · `를 붙이고(어느 문서인지 알 수 있어 낫다),
+  모르는 사유 코드는 코드를 그대로 보인다(알려진 Reader·권한 코드는 `types.ts`의 표에서 우리말로 옮긴다 — `ACCESS_DENIED`·`DRM_READER_REQUIRED` 포함).
+  브라우저 스펙이 실제로 보는 것은 `처리됨 + 추출 성공`과 `up_to_date` 두 갈래뿐이라 나머지 갈래는 `frontend/tests/documents.test.tsx`와 `tests/test_reparse_application.py`가 고정한다.
+- **한 건 재파싱 뒤에도 적용 프로파일 행의 리비전 표시는 `v1`이다.** `parsing_application.profile_rev`는 **적용 당시** 리비전이고 재매치가 올리지 않는다(`schema/service.py`의 `_rematch_revisions`는 매핑 헤드만 새 스펙으로 올린다). 그래서 작업 라벨·토스트·`GET /jobs` 결과는 `v2`라고 말하는데 문서 상세 행과 `GET /profiles/{id}/documents`의 `profile_rev`는 `v1`로 남는다. 스펙은 현재 동작을 그대로 단언하고(행 `공정데이터_A양식 v1`), '이 문서에 새 리비전이 닿았다'는 `GET /applications/{aid}/mappings`의 헤드 리비전·컴파일된 값 영역으로 확인한다.
 - 등록 결과 표의 `상태` 열은 문서 상태 칩을 그대로 쓴다 — 값이 바뀐 파일을 다시 등록하면 승계가 `proposed`라 `변경 감지`로 보인다(§4.4대로지만, '등록 성공'과 '검수 필요'가 한 열에 섞여 보인다).
 
 ### 7.5 실행 환경 경고
@@ -331,7 +352,7 @@ Running 26 tests using 1 worker
 - 여러 스위트를 동시에 돌릴 때는 `SCHEMA_E2E_PORT`/`SCHEMA_E2E_RENDER_PORT`/`SCHEMA_E2E_CONTROL_PORT`와 `SCHEMA_E2E_REPORT`/`SCHEMA_E2E_RESULTS`를 다르게 준다. `pkill -f serve.py` 같은 광범위한 종료는 다른 실행의 러너까지 죽이므로 자기 PID만 종료한다.
 - 이번 결과의 시간 값은 단일 워커·순차 실행 기준이며 다른 부하가 없을 때의 값이다.
 
-### 7.6 화면 정리·DRM 개정에서 스펙을 고친 것 (직전 회차)
+### 7.6 화면 정리·DRM 개정에서 스펙을 고친 것 (2회 전 회차)
 
 바뀐 화면에 맞춰 단언을 고쳤고, 스펙이 잡아낸 실제 결함은 한 건이다.
 
@@ -350,7 +371,7 @@ Running 26 tests using 1 worker
 - 새 스키마 대화상자의 주 버튼 이름이 아직 `가져오기`다(생성 전용 대화상자에는 `만들기` 쪽이 맞지만 계약 §C가 이 라벨을 정하지 않았다 — 스펙은 현재 라벨을 단언한다).
 - 변경 이력의 `이 리비전 보기`는 현재 리비전 행에서는 `?rev=`를 지우기만 해 아무 변화가 없다(이전 리비전 행에서만 읽기 전용 보기로 바뀐다).
 
-### 7.7 문서 삭제·스키마 폐기 개정에서 스펙을 고친 것 (이번 회차)
+### 7.7 문서 삭제·스키마 폐기 개정에서 스펙을 고친 것 (직전 회차)
 
 새 동작 두 가지(문서 삭제 §4.13 · 스키마 폐기 §4.2.3)를 스펙으로 덮고, 그 변경 때문에 깨진 기존 단언 두 건을 고쳤다.
 이번 회차에 스펙이 잡아낸 **제품 코드 결함은 없다** — 두 실패 모두 새 기능이 화면·문구를 바꿔서 생긴 기대값 차이였고, 스펙 쪽을 고쳤다.
@@ -372,14 +393,35 @@ Running 26 tests using 1 worker
 - 스키마 폐기·폐기 해제 응답은 `GET /schemas/{key}`와 **완전히 같은 본문**이다(스펙이 두 응답을 `toEqual`로 비교한다). 화면은 이 응답 하나로 헤더·칩·버튼을 갱신한다.
 - 화면 낱말은 프로파일과 같은 `폐기`/`폐기 해제`다 — 어느 스펙도 `비활성화`를 찾지 않는다.
 
+### 7.8 문서 상세 한 건 재파싱(§4.9)에서 더한 것 (이번 회차)
+
+새 스펙 파일 하나(`reparse-application.spec.ts`, test() 2개)를 더했다. **기존 스펙은 하나도 고치지 않았다** — 적용 프로파일 행에
+버튼이 하나 늘었지만 `documents.spec.ts`의 그 행 단언이 `원본 보기`·`프로파일 열기`의 **존재**만 보고 버튼 목록을 고정하지 않아서다.
+이번 회차에 스펙이 잡아낸 제품 코드 결함은 없다.
+
+| 무엇 | 어디 | 내용 |
+| --- | --- | --- |
+| 새 시나리오 | `e2e/specs/reparse-application.spec.ts` #1 | 프로파일 정의 JSON에서 LOT 표 열 규칙 7개의 값 영역(`selector.value.areas[0].relative.rows`)만 60 → 6으로 좁혀 v2 저장(단위 영역 `rows: 1`은 건드리지 않는다) → 대표 문서로 다시 승인(`reference_profile_rev: 2`) → 승인이 큐에 넣는 프로파일 전체 재파싱 취소 → 대상·확인용 문서의 헤드가 r1·60행 그대로임을 확인 |
+| 새 시나리오 | `e2e/specs/reparse-application.spec.ts` #2 | 문서 상세 적용 프로파일 행의 `다시 파싱` 한 번(처리됨) · 두 번(건너뜀 `이미 최신입니다 — …`) · 추출 결과 탭의 46행/온도 6행 · API로 헤드 r2와 발행 · 다른 문서 불변 · 작업 행 2건과 라벨 · 문서 목록에는 버튼 없음 |
+| 왜 승인을 다시 하는가 | 스펙 머리 주석 | 새 리비전으로 **발행**까지 가려면 매치 판정이 `identical`이어야 하고(§3.3 `engine._judge`), 그 판정은 `reference.profile_rev == 현재 rev`일 때만 난다. 승인 없이 v2만 저장하고 다시 파싱하면 판정이 `compatible`이라 헤드가 `proposed`로 올라가 검수 대기가 된다 — 발행이 아니다. |
+| 시나리오를 눈에 보이게 만든 방법 | 정의 편집 내용 | `description`만 바꾸면 규칙 스펙이 같아 재매치가 새 리비전을 하나도 만들지 않고 `up_to_date`로 끝난다(`_rematch_revisions`가 같은 스펙이면 건너뛴다). 값 영역을 좁히면 값이 12개 → 6개로 줄어 '새 리비전이 이 문서에만 닿았다'가 추출 결과 탭과 값 개수로 그대로 보인다. |
+
+스펙을 쓰면서 확인한 것(모두 통과):
+
+- 한 건 재파싱과 프로파일 전체 재파싱의 **판정이 같다**: 두 번째 클릭이 `up_to_date`로 건너뛰는 것은 전체 경로가 쓰는 `_reparse_application`이 그대로 내린 결과이고, 응답 `reason`이 그 코드를 그대로 돌려준다.
+- 바뀐 규칙만 새 리비전을 받는다 — 값 영역을 좁힌 열 규칙 7개는 r2(`approved` · `auto`)이고, 정의가 그대로인 머리 정보 4개는 r1이다.
+- 작업 행은 `kind=reparse` · `target_kind=application` · `target_id=<application_id>`이고 라벨이 `<문서명> · <프로파일명> v<현재 rev> · 다시 파싱`이다 — 프로파일 전체 재파싱 행(`target_kind=profile`, 라벨 `<프로파일명> v<rev> · 재파싱(rematch|fill)`)과 목록에서 구별된다.
+- 건너뛰었을 때는 `extraction`이 `null`이라 토스트가 값 개수를 말하지 않는다(값 0개로 오해하지 않게).
+- 문서 목록에는 아무것도 붙지 않았다(`문서 목록` 표 안에 `다시 파싱` 버튼 0개).
+
 ## 8. 재현 절차
 
-1. `cd frontend && npm ci && npm run build` (dist가 없으면 메인 서버가 UI를 서빙하지 않는다). `npx vitest run`으로 컴포넌트 회귀 통과 확인(이번 회차 `15 passed (15)` 파일 / `177 passed (177)` 테스트).
-2. 저장소 루트에서 `python3 -m pytest tests -q` (이번 회차 `299 passed, 2 warnings, 50 subtests passed`).
+1. `cd frontend && npm ci && npm run build` (dist가 없으면 메인 서버가 UI를 서빙하지 않는다). `npm test -- --run`(vitest)으로 컴포넌트 회귀 통과 확인(이번 회차 `15 passed (15)` 파일 / `184 passed (184)` 테스트).
+2. 저장소 루트에서 `python3 -m pytest -q` (이번 회차 `307 passed, 2 warnings, 50 subtests passed in 49.81s`).
 3. `cd e2e && npm ci` (Playwright 1.63.0). Chromium이 Playwright 기본 경로에 없으면 `SCHEMA_E2E_CHROMIUM_PATH`로 실행 파일을 지정한다.
 4. `SCHEMA_E2E_CHROMIUM_PATH=<chromium> SCHEMA_E2E_PYTHON=python3 npm test 2>&1 | tee /tmp/run.log` → 끝난 뒤 `mkdir -p test-results && cp /tmp/run.log test-results/run.log`
    - 러너가 임시 작업 공간을 시드하고 8032(렌더)·8031(메인)·18031(제어)을 연다. 스펙 파일마다 `[e2e-control] reset → generation N` 줄이 한 번씩 나온다.
-   - 기대 결과: `26 passed (약 2.8–3.0m)`, `[timing]` 값이 §5 표 범위 안.
+   - 기대 결과: `28 passed (약 2.7–2.9m)`, `[timing]` 값이 §5 표 범위 안.
 5. 실패 시 `playwright-report/`(HTML)와 `test-results/<테스트>/`의 trace.zip·스크린샷·error-context.md를 본다(`npx playwright show-trace <trace.zip>`).
 6. 개별 스펙만 돌릴 때: `npx playwright test specs/<name>.spec.ts` — 스펙이 beforeAll에서 리셋하므로 결과는 전체 실행과 같다.
    단, `documents.spec.ts`의 삭제 test() 3개는 **같은 파일의 앞 test()들이 만든 상태**(등록한 복사본 1건 · 대표 문서의 r2 snapshot)를 이어받는다.

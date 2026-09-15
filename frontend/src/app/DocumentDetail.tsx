@@ -2,7 +2,8 @@
 // 헤더 = 문서명 + 상태 칩 + 현재 Snapshot(날짜 + 최신) · 관계 카드 `문서 → 프로파일 vN → 스키마 vN` · 접힌 `Snapshot 이력`
 // (GET /documents/{id}/snapshots는 펼칠 때만) · 탭 `파일 보기(시트 목록 + SheetViewer readonly) · 추출 결과(GET /snapshots/{sid}/values,
 // 규칙 필터, 행마다 원본 보기) · 적용 프로파일(GET /snapshots/{sid}/applications로 검수·발행 보강) · 연결 스키마`.
-// 행동: 원본 보기 · 다른 프로파일로 파싱(프로파일 선택 → POST /snapshots/{sid}/applications?wait=10) · 데이터 빌드에 추가.
+// 행동: 원본 보기 · 다시 파싱(적용 프로파일 행마다, 같은 프로파일로 POST /applications/{aid}/reparse?wait=10)
+// · 다른 프로파일로 파싱(프로파일 선택 → POST /snapshots/{sid}/applications?wait=10) · 데이터 빌드에 추가.
 // 진입 호출 ≤ 3: 문서 상세 + 시트 목록 + 렌더 창.
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
@@ -23,7 +24,8 @@ import {
   useToast,
   withQuery,
 } from "./client";
-import type { ApplicationRow, DocumentDetail as DocumentDetailData, DocumentProfile, DocumentStatus, Page, ProfileRow, SheetRow, SnapshotRef, ValueRow } from "./types";
+import type { ApplicationReparse, ApplicationRow, DocumentDetail as DocumentDetailData, DocumentProfile, DocumentStatus, Page, ProfileRow, SheetRow, SnapshotRef, ValueRow } from "./types";
+import { isReparseProcessed, isReparseSkipped, reparseReasonLabel } from "./types";
 import { ApplicationStateChip, Chip, EmptyState, Modal, StatusChip, Tabs, ZoomControl, statusDetailText } from "./ui";
 import { compatibilityLabel } from "./sourceReviewShared";
 import SheetViewer from "./SheetViewer";
@@ -256,10 +258,11 @@ function FileTab({ snapshotId }: { snapshotId: string }) {
 
 // 추출 결과: keyset 표 `필드 · 파싱 규칙 · 값 · 단위 · 원본 위치 · 원본 보기`, 규칙 필터(?rule_key=).
 function ValuesTab({ snapshotId }: { snapshotId: string }) {
-  const { go } = useNavigation();
+  const { go, refresh } = useNavigation();
   const [rule, setRule] = useState("");
   const [rules, setRules] = useState<Map<string, string>>(new Map());
-  const values = usePage<ValueRow>(snapshotId ? withQuery(`${snapshotsPath(snapshotId)}/values`, { rule_key: rule }) : null);
+  // refresh: 같은 드로어에서 다시 파싱이 끝나면 값도 다시 읽는다.
+  const values = usePage<ValueRow>(snapshotId ? withQuery(`${snapshotsPath(snapshotId)}/values`, { rule_key: rule }) : null, refresh);
   const items = values.items;
   useEffect(() => {
     if (!items.length) return;
@@ -361,13 +364,19 @@ type ProfileLine = DocumentProfile & Partial<Pick<ApplicationRow, "heads_approve
 
 // 적용 프로파일: 문서 행의 profiles[]를 기본으로, 탭을 열 때 GET /snapshots/{sid}/applications로 검수·발행을 보강한다.
 function ProfilesTab({ doc, onReparse }: { doc: DocumentDetailData; onReparse: () => void }) {
-  const { go } = useNavigation();
+  const { go, refresh, changed } = useNavigation();
+  const { notify } = useToast();
+  // 한 건 재파싱(§4.9)은 한 번에 하나만 돌린다 — 같은 문서를 두 작업이 함께 잡으면 서버가 어차피 막는다.
+  const job = useJob();
+  const [running, setRunning] = useState("");
   const snapshotId = doc.current_snapshot?.snapshot_id || "";
-  const applications = useData<Page<ApplicationRow> | ApplicationRow[]>(snapshotId ? `${snapshotsPath(snapshotId)}/applications` : null);
+  const applications = useData<Page<ApplicationRow> | ApplicationRow[]>(snapshotId ? `${snapshotsPath(snapshotId)}/applications` : null, refresh);
   const loaded = Array.isArray(applications.data) ? applications.data : applications.data?.items ?? [];
   const rows: ProfileLine[] = doc.profiles.map((p) => {
     const app = loaded.find((a) => a.application_id === p.application_id);
-    return app ? { ...p, heads_approved: app.heads_approved, heads_total: app.heads_total, published: app.published, origin: app.origin } : p;
+    return app
+      ? { ...p, status: app.profile?.status, heads_approved: app.heads_approved, heads_total: app.heads_total, published: app.published, origin: app.origin }
+      : p;
   });
   for (const app of loaded)
     if (!rows.some((r) => r.application_id === app.application_id))
@@ -386,6 +395,63 @@ function ProfilesTab({ doc, onReparse }: { doc: DocumentDetailData; onReparse: (
       다른 프로파일로 파싱
     </button>
   );
+
+  // 이 행의 `다시 파싱`이 서버 가드(§4.9)에 막히는 이유. 눌러서 422를 받고 표 **아래** 오류 줄로 알게 하지 않는다.
+  // 상태를 모르면(옛 응답·아직 안 읽음) 막지 않는다 — 화면이 서버보다 엄해지지 않게.
+  function reparseBlocked(p: ProfileLine): string {
+    if (p.status === "deprecated") return "폐기된 프로파일로는 다시 파싱할 수 없습니다. 적용 기록은 그대로 둡니다.";
+    if (p.status && p.status !== "approved" && (p.heads_approved ?? 0) < (p.heads_total ?? 0))
+      return "매핑을 모두 승인해야 다시 파싱할 수 있습니다.";
+    return "";
+  }
+
+  // 같은 프로파일로 이 적용 건 하나만 다시 파싱한다(문서가 바뀌었거나 프로파일이 올라갔을 때).
+  // 판정은 프로파일 전체 재파싱과 같은 규칙이고, 결과는 토스트로 말한다.
+  async function reparseOne(row: ProfileLine) {
+    setRunning(row.application_id);
+    const finished = await job.run(`/applications/${encodeURIComponent(row.application_id)}/reparse`, {}, 10);
+    setRunning("");
+    // 요청 자체가 막혔다(승인되지 않은 프로파일·진행 중 작업 등) — 표 아래 오류 줄이 서버 문구를 그대로 보여 준다.
+    if (!finished) return;
+    const result = (finished.result || {}) as Partial<ApplicationReparse>;
+    const name = result.document_name || doc.document_name;
+    const label = profileLabel({ profile_name: result.profile?.name || row.profile_name, rev: result.profile?.rev ?? row.rev });
+    if (finished.state === "succeeded") {
+      const skipped = isReparseSkipped(result.outcome) || (!isReparseProcessed(result.outcome) && !!result.reason);
+      if (skipped)
+        notify(
+          `${name} · ${label} 다시 파싱 건너뜀 · ${reparseReasonLabel(result.reason) || "사유를 알 수 없습니다"}`,
+          result.reason === "review_required"
+            ? { label: "원본 보기", onClick: () => go(reviewRoute({ application_id: row.application_id })) }
+            : undefined,
+        );
+      else if (result.extraction && result.extraction.state !== "succeeded")
+        // 추출 실패는 작업을 실패로 만들지 않는다(실행 행에만 남는다) — 값 0개로 보이지 않게 따로 말한다.
+        notify(
+          `${name} · ${label} 다시 맞췄지만 값을 뽑지 못했습니다: ${result.extraction.error?.message || result.extraction.error?.code || "알 수 없는 오류"}`,
+        );
+      // 추출까지 가지 않았다(구조가 조금 달라 proposed 리비전만 올라갔다) — 값은 하나도 다시 뽑히지 않았고
+      // 그 문서는 검수 대기로 내려갔다. '완료'만 말하면 값이 갱신된 줄 안다(§7).
+      else if (!result.extraction && result.action !== "extract")
+        notify(`${name} · ${label} 다시 파싱 완료 · 검수가 필요합니다`, {
+          label: "원본 보기",
+          onClick: () => go(reviewRoute({ application_id: row.application_id })),
+        });
+      // action이 extract면 매칭은 그대로 두고 값만 다시 뽑은 것이다(승인이 끝난 초안 프로파일 경로).
+      else notify(
+        `${name} · ${label} 다시 파싱 완료${result.extraction ? ` · 값 ${result.extraction.values ?? 0}개` : ""}` +
+          (result.action === "extract" ? " · 값만 다시 뽑았습니다" : ""),
+      );
+      changed();
+    } else if (finished.state === "failed") {
+      notify(`${name} · ${label} 다시 파싱에 실패했습니다: ${finished.error_message || finished.error_code || "알 수 없는 오류"}`);
+      changed();
+    } else {
+      // job.run은 작업이 끝나야 돌아온다 — 여기까지 왔으면 취소된 것이다(진행 중이라고 말하면 거짓말이다).
+      notify(`${name} · ${label} 다시 파싱을 취소했습니다.`);
+      changed();
+    }
+  }
   return (
     <>
       {rows.length === 0 && (
@@ -422,6 +488,20 @@ function ProfilesTab({ doc, onReparse }: { doc: DocumentDetailData; onReparse: (
                     <button type="button" className="small" onClick={() => go(reviewRoute({ application_id: p.application_id }))}>
                       원본 보기
                     </button>
+                    <button
+                      type="button"
+                      className="small"
+                      disabled={job.busy || !!running || !!reparseBlocked(p)}
+                      title={
+                        reparseBlocked(p) ||
+                        (running && running !== p.application_id
+                          ? "다른 다시 파싱이 도는 중입니다 — 한 번에 한 건씩 처리합니다."
+                          : "이 문서를 같은 프로파일의 현재 리비전으로 다시 맞춥니다(이미 최신이면 아무것도 하지 않습니다).")
+                      }
+                      onClick={() => reparseOne(p)}
+                    >
+                      {running === p.application_id ? "다시 파싱 중…" : "다시 파싱"}
+                    </button>
                     <button type="button" className="small" onClick={() => go({ screen: "profiles", profile: p.profile_id, document: "", tab: "" })}>
                       프로파일 열기
                     </button>
@@ -431,6 +511,16 @@ function ProfilesTab({ doc, onReparse }: { doc: DocumentDetailData; onReparse: (
             </tbody>
           </table>
         </div>
+      )}
+      {job.error && (
+        <div className="app-error" role="alert">
+          <span>{job.error}</span>
+        </div>
+      )}
+      {running && (
+        <p className="app-muted app-small" role="status">
+          다시 파싱이 진행 중입니다. 닫아도 상단의 진행 중 작업 표시에서 확인할 수 있습니다.
+        </p>
       )}
       {applications.error && (
         <p className="app-muted app-small" role="status">
