@@ -20,6 +20,7 @@ CORE_TABLES = {
     "parsing_profile", "parsing_rule",
     "parsing_application", "application_sheet", "mapping", "mapping_revision", "mapping_region",
     "extraction_run", "extracted_value", "extracted_value_region",
+    "purge_guard",  # §1.10 삭제 가드(코어 DDL, 양쪽 모두)
 }
 # 애플리케이션 발급 UUID id 컬럼(그 외 *_id·*_key는 논리 키라 TEXT).
 UUID_COLUMNS = {
@@ -90,7 +91,7 @@ def pg_columns():
 def test_postgres_ddl_parses_and_table_set_matches_sqlite():
     tables = set(pg_columns())
     assert tables == sqlite_objects("table") == CORE_TABLES | {"schema_meta"}
-    assert len(CORE_TABLES) == 18
+    assert len(CORE_TABLES) == 19
     assert "runtime_job" not in tables and "snapshot_signature" not in tables
 
 
@@ -187,3 +188,22 @@ def test_no_sqlite_only_syntax_remains():
     assert "json_each" not in text.replace("jsonb_each", "")
     assert "RAISE(ABORT" not in text
     assert " IS NOT OLD." not in text and " IS NOT NEW." not in text
+
+
+def test_delete_guard_triggers_check_purge_guard_on_both_dialects():
+    """§1.10: DELETE 거부 트리거 여덟 개만 purge_guard를 보고, UPDATE 거부 여덟 개는 그대로다."""
+    guarded = {"document_snapshot", "sheet", "source_region", "mapping_revision",
+               "mapping_region", "extracted_value", "extracted_value_region", "extraction_run"}
+    sqlite_sql = {
+        r[0]: r[1]
+        for r in sqlite_conn().execute("SELECT name, sql FROM sqlite_master WHERE type='trigger'")
+    }
+    for table in guarded:
+        assert "NOT EXISTS (SELECT 1 FROM purge_guard)" in sqlite_sql[f"{table}_no_delete"], table
+        assert "purge_guard" not in sqlite_sql[f"{table}_no_update"], table
+    pg_functions = {t.trigname: t.funcname[-1].sval for t in by_type("CreateTrigStmt")}
+    for table in guarded - {"extraction_run"}:
+        assert pg_functions[f"{table}_no_delete"] == "v3_reject_delete_unless_purging", table
+        assert pg_functions[f"{table}_no_update"] == "v3_reject", table
+    assert pg_functions["extraction_run_no_delete"] == "v3_reject_finished_run_delete"
+    assert pg_functions["extraction_run_no_update"] == "v3_reject_finished_run"

@@ -123,7 +123,8 @@ def test_delete_schema_refuses_while_a_profile_uses_it(world):
     error = denied.json()["error"]
     assert error["code"] == "SCHEMA_IN_USE"
     assert error["message"] == (
-        f"이 스키마는 파싱 프로파일 1개({PROFILE_NAME})가 쓰고 있고 적용된 문서가 4개입니다. 프로파일 상세에서 '삭제'한 뒤 다시 시도하세요."
+        f"이 스키마는 파싱 프로파일 1개({PROFILE_NAME})가 쓰고 있고 적용된 문서가 4개입니다. "
+        f"프로파일 상세에서 '삭제'한 뒤 다시 시도하거나, 더 쓰지 않으려면 이 스키마를 '폐기'하세요."
     )
     assert error["detail"]["profile_count"] == 1 and error["detail"]["document_count"] == 4
     assert error["detail"]["profiles"] == [
@@ -400,7 +401,7 @@ def test_deleting_the_profile_unblocks_schema_delete(world):
     )
     denied = world.client.delete("/api/schemas/wh2")
     assert denied.status_code == 409 and denied.json()["error"]["code"] == "SCHEMA_IN_USE"
-    assert "'삭제'한 뒤 다시 시도하세요" in denied.json()["error"]["message"]
+    assert "'삭제'한 뒤 다시 시도하거나, 더 쓰지 않으려면 이 스키마를 '폐기'하세요." in denied.json()["error"]["message"]
     removed = world.client.delete(f"/api/profiles/{profile['profile_id']}")
     assert removed.status_code == 200, removed.text
     assert removed.json()["deleted"]["rules"] == 1
@@ -439,3 +440,135 @@ def test_recreating_a_deleted_key_does_not_resurrect_old_revisions(world):
 def test_schema_revision_zero_is_rejected(world):
     body = world.get(f"/schemas/{SCHEMA_KEY}/revisions/0", expect=422)
     assert body["error"]["code"] == "VALIDATION_ERROR"
+
+
+# ---------------------------------------------------------------------------- 스키마 폐기·폐기 해제(§4.2.3)
+
+
+def _profile_body(schema_key=SCHEMA_KEY, name="폐기 확인용"):
+    return {
+        "name": name,
+        "schema_key": schema_key,
+        "definition": {
+            "format": "parsing-profile",
+            "schema_version": "3.0",
+            "profile_name": name,
+            "schema_key": schema_key,
+            "sheet_roles": {"main": {"cardinality": "one", "match": {"name": "공정 기록"}}},
+            "anchors": {},
+            "rules": [_rule("lot", "LOT")] if schema_key == SCHEMA_KEY else [_rule("bin", "적치장")],
+        },
+    }
+
+
+def test_deprecate_schema_returns_the_detail_shape_and_hides_it_from_the_default_list(world):
+    detail = world.get(f"/schemas/{SCHEMA_KEY}")
+    assert detail["status"] == "active"
+
+    body = world.post(f"/schemas/{SCHEMA_KEY}/deprecate")
+    assert body["status"] == "deprecated"
+    # 응답은 GET /schemas/{key}와 같은 형태다 — 화면이 이 하나로 헤더·칩·버튼을 갱신한다.
+    assert body == world.get(f"/schemas/{SCHEMA_KEY}")
+    assert set(body) == set(detail) and [f["field_key"] for f in body["fields"]] == [f["field_key"] for f in detail["fields"]]
+    # 정의·리비전·필드·프로파일·적용 건은 그대로다(리비전도 올리지 않는다).
+    assert body["current_rev"] == detail["current_rev"] and body["application_count"] == detail["application_count"]
+    assert body["profile_count"] == detail["profile_count"] and files(world, SCHEMA_KEY) == ["current.json", "r0001.json"]
+
+    assert [s["schema_key"] for s in world.get("/schemas")["items"]] == []
+    assert [s["schema_key"] for s in world.get("/schemas?status=deprecated")["items"]] == [SCHEMA_KEY]
+    assert [s["schema_key"] for s in world.get("/schemas?status=all")["items"]] == [SCHEMA_KEY]
+    # 상세·트리·그래프·필드·연관 목록은 상태와 무관하게 열린다.
+    assert world.get(f"/schemas/{SCHEMA_KEY}/tree")["nodes"]
+    assert world.get(f"/schemas/{SCHEMA_KEY}/graph")["nodes"]
+    assert world.get(f"/schemas/{SCHEMA_KEY}/profiles")["items"]
+
+    again = world.post(f"/schemas/{SCHEMA_KEY}/deprecate", expect=409)
+    assert again["error"] == {"code": "ALREADY_DEPRECATED", "message": "이미 폐기된 스키마입니다."}
+    assert world.get("/schemas?status=bogus", expect=422)["error"]["code"] == "VALIDATION_ERROR"
+    assert world.post("/schemas/없는키/deprecate", expect=404)["error"]["code"] == "UNKNOWN_SCHEMA"
+
+
+def test_deprecated_schema_refuses_new_profiles_but_keeps_editing_and_building(world):
+    world.post(f"/schemas/{SCHEMA_KEY}/deprecate")
+    denied = world.post("/profiles", _profile_body(), expect=422)
+    assert denied["error"] == {
+        "code": "SCHEMA_DEPRECATED",
+        "message": "폐기된 파싱 스키마에는 새 프로파일을 만들 수 없습니다. 스키마 상세에서 '폐기 해제'한 뒤 다시 시도하세요.",
+    }
+    assert len(world.get("/profiles")["items"]) == 1
+
+    # 이미 있는 프로파일의 새 리비전과 import-preview는 막지 않는다.
+    current = world.get(f"/profiles/{world.profile_id}/revisions/1")
+    revised = copy.deepcopy(current)
+    revised["description"] = "폐기 뒤에도 고칠 수 있다"
+    saved = world.client.put(f"/api/profiles/{world.profile_id}", json={"definition": revised})
+    assert saved.status_code == 200 and saved.json()["current_rev"] == 2
+    preview = world.post("/profiles/import-preview", {"schema_key": SCHEMA_KEY, "definition": revised})
+    assert preview["errors"] == []
+
+    # 필드 추가·수정과 PUT /schemas도 된다 — 폐기는 잠금이 아니다.
+    created = world.post(
+        f"/schemas/{SCHEMA_KEY}/fields",
+        {"field_key": "extra_note", "name": "추가 비고", "type": "text"},
+        expect=201,
+    )
+    assert created["field_key"] == "extra_note"
+
+    # 빌드 API는 폐기 스키마의 schema_key를 받는다(목록에서만 빠진다).
+    document_ids = [d["document_id"] for d in world.summary["documents"] if d["document_id"]]
+    found = world.post("/builds/candidates", {"document_ids": document_ids, "schema_key": SCHEMA_KEY})
+    assert found["summary"]["usable"] >= 1 and found["fields"]
+
+
+def test_deprecated_schema_keeps_auto_applying_its_approved_profile(world):
+    world.post(f"/schemas/{SCHEMA_KEY}/deprecate")
+    source = world.root / "data/raw" / demo.IDENTICAL_DOCUMENTS[1]
+    (world.root / "data/raw/공정데이터_2024_07.xlsx").write_bytes(source.read_bytes())
+    job = world.post("/documents/register?wait=60", {"source_refs": ["공정데이터_2024_07.xlsx"]})
+    assert job["state"] == "succeeded", job
+    registered = job["result"]["documents"][0]
+    # 스키마 폐기는 "새 정의를 더 만들지 말라"는 뜻이지 "돌고 있는 파싱을 멈추라"는 뜻이 아니다.
+    assert [a["compatibility"] for a in registered["applied"]] == ["identical"]
+    assert registered["status"] == "normal"
+
+
+def test_activate_schema_brings_it_back_to_the_default_list(world):
+    world.post(f"/schemas/{SCHEMA_KEY}/deprecate")
+    body = world.post(f"/schemas/{SCHEMA_KEY}/activate")
+    assert body["status"] == "active" and body == world.get(f"/schemas/{SCHEMA_KEY}")
+    assert [s["schema_key"] for s in world.get("/schemas")["items"]] == [SCHEMA_KEY]
+    assert [s["schema_key"] for s in world.get("/schemas?status=deprecated")["items"]] == []
+    again = world.post(f"/schemas/{SCHEMA_KEY}/activate", expect=409)
+    assert again["error"] == {"code": "ALREADY_ACTIVE", "message": "이미 활성 상태인 스키마입니다."}
+    assert world.post("/schemas/없는키/activate", expect=404)["error"]["code"] == "UNKNOWN_SCHEMA"
+    # 폐기 해제 뒤에는 새 프로파일도 다시 만들 수 있다.
+    assert world.post("/profiles", _profile_body(), expect=201)["status"] == "draft"
+
+
+def test_saving_a_revision_does_not_quietly_undo_the_deprecation(world):
+    """폐기를 되돌리는 길은 `activate` 하나다 — 설명 한 줄 수정이 가드를 풀면 아무 화면도 그것을 알리지 않는다."""
+    world.post(f"/schemas/{SCHEMA_KEY}/deprecate")
+    current = world.get(f"/schemas/{SCHEMA_KEY}/revisions/1")
+    revised = copy.deepcopy(current)
+    revised["description"] = "설명만 바꾼다"
+    saved = world.client.put(f"/api/schemas/{SCHEMA_KEY}", json={"definition": revised})
+    assert saved.status_code == 200 and saved.json()["current_rev"] == 2
+    assert world.get(f"/schemas/{SCHEMA_KEY}")["status"] == "deprecated"
+
+    # 필드 PATCH도 같은 UPDATE를 탄다.
+    field_key = world.get(f"/schemas/{SCHEMA_KEY}")["fields"][0]["field_key"]
+    patched = world.client.patch(f"/api/schemas/{SCHEMA_KEY}/fields/{field_key}", json={"description": "필드 설명만 바꾼다"})
+    assert patched.status_code == 200
+    assert world.get(f"/schemas/{SCHEMA_KEY}")["status"] == "deprecated"
+    # 가드도 그대로 산다 — 새 리비전을 저장했다고 새 프로파일이 붙지 않는다.
+    assert world.post("/profiles", _profile_body(), expect=422)["error"]["code"] == "SCHEMA_DEPRECATED"
+    assert [s["schema_key"] for s in world.get("/schemas")["items"]] == []
+    # 새 스키마를 만들 때의 status는 그대로 active다.
+    assert world.post(f"/schemas/{SCHEMA_KEY}/activate")["status"] == "active"
+
+
+def test_deprecating_a_schema_does_not_open_the_delete_path(world):
+    world.post(f"/schemas/{SCHEMA_KEY}/deprecate")
+    denied = world.client.delete(f"/api/schemas/{SCHEMA_KEY}")
+    assert denied.status_code == 409 and denied.json()["error"]["code"] == "SCHEMA_IN_USE"
+    assert world.get(f"/schemas/{SCHEMA_KEY}?", expect=200)["current_rev"] == 1

@@ -70,8 +70,9 @@ export default function ProfileDetail({ profileId }: { profileId: string }) {
   const reparse = useJob();
   const [message, setMessage] = useState("");
   const [saveError, setSaveError] = useState("");
-  const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // 프로파일 폐기는 되돌릴 수 없다(스키마 폐기와 달리 '폐기 해제'가 없다) — 확인 경험도 삭제와 같게 둔다.
+  const [deprecating, setDeprecating] = useState(false);
   // 정의 편집기가 "저장 안 한 편집이 있다"고 알려 주는 자리(재파싱 전 확인용).
   const dirtyRef = useRef(false);
   const markDirty = useCallback((value: boolean) => {
@@ -80,18 +81,11 @@ export default function ProfileDetail({ profileId }: { profileId: string }) {
 
   // 폐기 — 적용된 문서가 있어 지울 수 없는 프로파일의 사용을 멈추는 길(§4.2.1).
   async function deprecate() {
-    if (!window.confirm(`'${profile?.profile_name}'을(를) 폐기합니다. 새 문서에 더 이상 붙지 않습니다. 계속할까요?`)) return;
     setMessage("");
-    setBusy(true);
-    try {
-      await api(base + "/deprecate", {});
-      notify(`${profile?.profile_name} 프로파일을 폐기했습니다.`);
-      changed();
-    } catch (failure) {
-      setMessage(errorMessage(failure));
-    } finally {
-      setBusy(false);
-    }
+    await api(base + "/deprecate", {});
+    setDeprecating(false);
+    notify(`${profile?.profile_name} 프로파일을 폐기했습니다.`);
+    changed();
   }
 
   async function runReparse(mode: "rematch" | "fill") {
@@ -163,16 +157,15 @@ export default function ProfileDetail({ profileId }: { profileId: string }) {
                 <button
                   type="button"
                   className="small"
-                  disabled={busy}
-                  title="더 이상 이 프로파일을 새 문서에 붙이지 않습니다. 이미 적용된 문서와 추출값은 그대로 둡니다."
-                  onClick={deprecate}
+                  title="더 이상 이 프로파일을 새 문서에 붙이지 않습니다. 이미 적용된 문서와 추출값은 그대로 둡니다. 되돌릴 수 없습니다."
+                  onClick={() => setDeprecating(true)}
                 >
                   폐기
                 </button>
               )}
               {/* 적용된 문서가 없을 때만 지울 수 있다(§4.2.1) — 언제나 실패하는 버튼은 두지 않는다. */}
               {profile.document_count === 0 && (
-                <button type="button" className="small danger" disabled={busy} onClick={() => setDeleting(true)}>
+                <button type="button" className="small danger" onClick={() => setDeleting(true)}>
                   삭제
                 </button>
               )}
@@ -189,6 +182,16 @@ export default function ProfileDetail({ profileId }: { profileId: string }) {
             <p className="app-muted app-small" role="status">
               재파싱 진행 중…
             </p>
+          )}
+          {deprecating && (
+            <DeleteDialog
+              label="프로파일 폐기"
+              message={`'${profile.profile_name}'을(를) 폐기합니다. 새 문서에 더 이상 붙지 않습니다. 이미 적용된 문서와 추출값은 그대로 두지만, 스키마 폐기와 달리 화면에서 되돌릴 수 없습니다.`}
+              busyLabel="폐기하는 중…"
+              confirmLabel="폐기"
+              onCancel={() => setDeprecating(false)}
+              onConfirm={deprecate}
+            />
           )}
           {deleting && (
             <DeleteDialog
@@ -267,7 +270,7 @@ function SummaryBar({
   );
 }
 
-// 팝오버 틀: 바깥 클릭·Escape로 닫힌다.
+// 팝오버 틀: 바깥 클릭·Escape로 닫히고, 닫을 때 초점을 연 버튼으로 되돌린다.
 function Popover({ label, onClose, align = "left", children }: { label: string; onClose: () => void; align?: "left" | "right"; children: React.ReactNode }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -286,6 +289,15 @@ function Popover({ label, onClose, align = "left", children }: { label: string; 
       document.removeEventListener("keydown", escape);
     };
   }, [onClose]);
+  // 팝오버 안에 초점이 있는 채로 닫히면(Escape·닫기 버튼) 초점이 body로 떨어져 Tab이 화면 맨 위로 돌아간다.
+  // 팝오버를 연 버튼으로 되돌린다. 바깥을 눌러 닫은 경우에는 그 자리를 뺏지 않는다.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    return () => {
+      const active = document.activeElement;
+      if ((!active || active === document.body) && opener?.isConnected) opener.focus();
+    };
+  }, []);
   return (
     <div
       className={"app-popover " + align}

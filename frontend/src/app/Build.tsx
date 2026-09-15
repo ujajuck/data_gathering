@@ -102,7 +102,10 @@ export default function Build() {
   const goStep = (n: number) => go({ step: n > 1 ? n : null });
 
   const schemas = useData<Page<SchemaRow>>(step >= 2 ? "/schemas" : null);
-  const schemaRow = schemas.data?.items.find((s) => s.schema_key === schemaKey) || null;
+  const listedSchema = schemas.data?.items.find((s) => s.schema_key === schemaKey) || null;
+  // 목록 기본은 활성만이다(§4.2.3). draft에 남아 있던 폐기 스키마는 상세를 한 번 읽어 이름·상태를 보이고 진행을 막지 않는다.
+  const extraSchema = useData<SchemaRow>(schemaKey && schemas.data && !listedSchema ? "/schemas/" + encodeURIComponent(schemaKey) : null);
+  const schemaRow = listedSchema || extraSchema.data;
 
   const input: BuildInput | null =
     columnsValid && schemaKey ? { document_ids: draft.document_ids, schema_key: schemaKey, columns: outputColumns, row_mode: rowMode } : null;
@@ -150,6 +153,7 @@ export default function Build() {
         <SchemaStep
           schemas={schemas}
           schemaKey={schemaKey}
+          unlisted={listedSchema ? null : extraSchema.data}
           candidates={current}
           onChange={(key) => setBuildDraftSchema(key || undefined)}
           onBack={() => goStep(1)}
@@ -288,6 +292,7 @@ function DocumentsStep({
 function SchemaStep({
   schemas,
   schemaKey,
+  unlisted,
   candidates,
   onChange,
   onBack,
@@ -296,6 +301,8 @@ function SchemaStep({
 }: {
   schemas: { data: Page<SchemaRow> | null; loading: boolean; error: { message: string } | null };
   schemaKey: string;
+  // 목록에 없는(폐기된) draft 스키마 — 있으면 선택지에 그대로 둔다.
+  unlisted: SchemaRow | null;
   candidates: Loaded<BuildCandidates> | null;
   onChange: (key: string) => void;
   onBack: () => void;
@@ -329,8 +336,19 @@ function SchemaStep({
                 {schemaLabel(s)} · 필드 {s.field_count}개 · 프로파일 {s.profile_count}개 · 문서 {s.document_count}개
               </option>
             ))}
+            {unlisted && (
+              <option value={unlisted.schema_key}>
+                {schemaLabel(unlisted)} · 필드 {unlisted.field_count}개 · 프로파일 {unlisted.profile_count}개 · 문서 {unlisted.document_count}개
+              </option>
+            )}
           </select>
         </label>
+        {unlisted?.status === "deprecated" && (
+          <span className="app-inline">
+            <Chip kind="muted">폐기</Chip>
+            <span className="app-muted app-small">폐기된 스키마입니다. 이미 고른 스키마라 그대로 쓸 수 있습니다.</span>
+          </span>
+        )}
       </div>
       {schemaKey && candidates?.loading && (
         <p className="app-muted app-loading" role="status">

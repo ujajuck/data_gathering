@@ -1,8 +1,9 @@
 // 문서 화면(§7 Documents): 상단 `문서 검색(250ms) · 상태 필터 · 프로파일 필터 · + 문서 등록`, 표 `[선택] · 문서명 · 상태 ·
 // 적용 프로파일(vN, +N) · 연결 스키마 · 현재 Snapshot · 최근 처리`, 정렬 헤더(열마다 첫 방향), keyset Pager,
-// 다중 선택 → 고정 하단 바 `N개 선택 · 데이터 빌드에 추가`(토스트 `N개 문서 · 데이터 빌드로 이동 ›`).
+// 다중 선택 → 고정 하단 바 `N개 선택 · 선택 해제 · 데이터 빌드에 추가 · 삭제`(토스트 `N개 문서 · 데이터 빌드로 이동 ›`).
 // 행 클릭 → DocumentDetail(모달, ?document=). `+ 문서 등록` → DocumentRegister.
-import { useState } from "react";
+// 삭제(§4.13)는 선택 바(다중)와 상세 드로어 헤더(단건)가 같은 확인 대화상자(DocumentDelete)를 연다.
+import { useEffect, useRef, useState } from "react";
 import {
   Pager,
   State,
@@ -23,6 +24,8 @@ import { STATUS_LABELS, STATUS_ORDER } from "./types";
 import { Chip, Heading, StatusChip, statusDetailText } from "./ui";
 import { addToBuildDraft } from "./buildDraft";
 import DocumentDetail from "./DocumentDetail";
+import DocumentDelete from "./DocumentDelete";
+import type { DeleteTarget } from "./DocumentDelete";
 import DocumentRegister from "./DocumentRegister";
 
 type SortKey = "document_name" | "status" | "last_processed_at";
@@ -58,6 +61,8 @@ export default function Documents() {
   const sort = route.sort || DEFAULT_SORT;
   const [selected, setSelected] = useState<string[]>([]);
   const [registerOpen, setRegisterOpen] = useState(false);
+  // 삭제 확인 대화상자의 대상(단건·다중 공용). null이면 닫혀 있다.
+  const [deleting, setDeleting] = useState<DeleteTarget[] | null>(null);
   // 쓰기(등록·승인)와 작업 종료 알림(JobBar)마다 다시 읽는다: 대화상자를 닫은 뒤 끝난 일괄 등록 결과도 목록에 뜬다.
   const writeSeq = useWriteSeq();
   const documents = usePage<DocumentRow>(
@@ -81,6 +86,22 @@ export default function Documents() {
     go({ status: "", profile_id: "", schema_key: "" });
   }
   const pageIds = items.map((d) => d.document_id);
+  // 지금까지 본 문서(삭제 확인 문구용): 이름과 '대표 문서인 프로파일'. 선택은 같은 조건 안에서 페이지를 넘겨도 남는다.
+  const seen = useRef(new Map<string, DeleteTarget>());
+  const loaded = documents.data?.items;
+  useEffect(() => {
+    for (const doc of loaded ?? [])
+      seen.current.set(doc.document_id, {
+        document_id: doc.document_id,
+        document_name: doc.document_name,
+        reference_profiles: (doc.reference_of ?? []).map((r) => r.profile_name),
+      });
+  }, [loaded]);
+  // 조건이 바뀌면 선택을 비운다 — 지금 보이지 않는 문서가 되돌릴 수 없는 삭제에 딸려 가지 않게 한다(§7).
+  // 페이지 이동은 조건이 같으므로 선택을 지우지 않는다(확인 대화상자가 고른 문서를 전부 이름으로 보여 준다).
+  useEffect(() => {
+    setSelected([]);
+  }, [search, status, profileId, route.schema_key, sort]);
   const allSelected = pageIds.length > 0 && pageIds.every((id) => selected.includes(id));
   function addSelected(ids: string[]) {
     const added = addToBuildDraft(ids);
@@ -91,7 +112,12 @@ export default function Documents() {
     setSelected([]);
   }
   const openDocument = (doc: DocumentRow) => go({ document: doc.document_id, tab: "", sheet: "" });
-  const backgroundInert = detailOpen || registerOpen;
+  // 선택한 문서를 이름과 함께 대화상자로 넘긴다. 선택은 페이지를 넘겨도 남으므로 한 번 본 행의 이름을 기억해 둔다
+  // (되돌릴 수 없는 일이라 확인 문구가 무엇을 지우는지 이름으로 말해야 한다). 대상은 하나도 빼지 않는다.
+  function askDelete(ids: string[]) {
+    setDeleting(ids.map((id) => seen.current.get(id) || { document_id: id, document_name: "이름을 알 수 없는 문서" }));
+  }
+  const backgroundInert = detailOpen || registerOpen || !!deleting;
 
   return (
     <>
@@ -262,11 +288,41 @@ export default function Documents() {
               <button type="button" className="primary" onClick={() => addSelected(selected)}>
                 데이터 빌드에 추가
               </button>
+              <button type="button" className="danger" onClick={() => askDelete(selected)}>
+                삭제
+              </button>
             </div>
           )}
         </section>
       </div>
-      {detailOpen && <DocumentDetail documentId={route.document} onAddToBuild={(id) => addSelected([id])} />}
+      {detailOpen && (
+        <DocumentDetail
+          documentId={route.document}
+          inert={!!deleting}
+          onAddToBuild={(id) => addSelected([id])}
+          onDelete={(doc) =>
+            setDeleting([
+              {
+                document_id: doc.document_id,
+                document_name: doc.document_name,
+                reference_profiles: (doc.reference_of ?? []).map((r) => r.profile_name),
+              },
+            ])
+          }
+        />
+      )}
+      {deleting && (
+        <DocumentDelete
+          targets={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={() => {
+            // 지운 문서는 목록·선택·상세 드로어 어디에도 남기지 않는다.
+            setSelected([]);
+            if (route.document) go({ document: "", tab: "", sheet: "" });
+            changed();
+          }}
+        />
+      )}
       {registerOpen && (
         <DocumentRegister
           onClose={() => {

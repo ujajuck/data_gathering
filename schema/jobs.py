@@ -531,7 +531,9 @@ class Jobs:
                 )
             last_check = [0.0]
 
-            def checkpoint(completed=None, total=None, force=False):
+            def checkpoint(completed=None, total=None, force=False, result=None):
+                """진행률·heartbeat를 올린다. `result`를 주면 그때까지의 부분 결과도 함께 적는다 —
+                되돌릴 수 없는 작업(§4.13 문서 삭제)은 서버가 중단돼도 무엇을 지웠는지 남아야 한다."""
                 if self.stop.is_set():
                     raise Cancelled()
                 if not force and time.monotonic() - last_check[0] < 0.25:
@@ -542,8 +544,10 @@ class Jobs:
                     if state["cancel_requested"] or state["state"] != "running":
                         raise Cancelled()
                     conn.execute(
-                        "UPDATE runtime_job SET heartbeat_at=?,completed=coalesce(?,completed),total=coalesce(?,total) WHERE job_id=?",
-                        (now(), completed, total, job["job_id"]),
+                        "UPDATE runtime_job SET heartbeat_at=?,completed=coalesce(?,completed),total=coalesce(?,total)"
+                        + (",result_json=?" if result is not None else "")
+                        + " WHERE job_id=?",
+                        (now(), completed, total, *([dump(result)] if result is not None else []), job["job_id"]),
                     )
 
             try:
@@ -578,14 +582,20 @@ class Jobs:
             self.failure_handler(job["kind"], json.loads(job["payload_json"]), exc)
         except Exception:
             pass
+        # 핸들러가 예외에 실어 보낸 부분 결과(§4.13 취소 시점까지 지운 문서)는 그대로 작업 기록에 남긴다.
+        partial, done = getattr(exc, "partial", None), getattr(exc, "completed", None)
         with self.db.connect(write=True) as conn:
             conn.execute(
-                "UPDATE runtime_job SET state=?,error_code=?,error_message=?,finished_at=? WHERE job_id=? AND state IN ('queued','running')",
+                "UPDATE runtime_job SET state=?,error_code=?,error_message=?,finished_at=?,completed=coalesce(?,completed)"
+                + (",result_json=?" if partial is not None else "")
+                + " WHERE job_id=? AND state IN ('queued','running')",
                 (
                     "cancelled" if exc.code == "CANCELLED" else "failed",
                     exc.code,
                     exc.message,
                     now(),
+                    done,
+                    *([dump(partial)] if partial is not None else []),
                     job["job_id"],
                 ),
             )

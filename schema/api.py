@@ -36,6 +36,7 @@ from .contracts import (
     BuildCandidatesRequest,
     Contract,
     BuildPreviewRequest,
+    DocumentDeleteRequest,
     BuildRequest,
     FieldPatchRequest,
     ImportPreviewRequest,
@@ -67,7 +68,7 @@ NO_CACHE = "private, no-cache"
 DocumentStatus = Literal["not_extracted", "locked", "unmatched", "review", "changed", "failed", "normal"]
 DocumentSort = Literal["document_name", "status", "last_processed_at", "-document_name", "-status", "-last_processed_at"]
 JobState = Literal["queued", "running", "succeeded", "failed", "cancelled"]
-JobKind = Literal["register", "extract", "reparse", "build", "test", "queue_action"]
+JobKind = Literal["register", "extract", "reparse", "build", "test", "queue_action", "delete"]
 
 
 class RegisterDirectoryRequest(Contract):
@@ -79,6 +80,7 @@ class RegisterDirectoryRequest(Contract):
 
 
 ProfileStatus = Literal["draft", "approved", "deprecated"]
+SchemaListStatus = Literal["active", "deprecated", "all"]
 BuildFormat = Literal["csv", "xlsx", "sqlite"]
 FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 AUTHORIZE_TTL_SECONDS = 30
@@ -394,9 +396,11 @@ def _field_usage(conn, schema_id):
     return usage
 
 
-def schema_list(service):
+def schema_list(service, status="active"):
+    """§4.2.3 목록. 기본이 active라 폐기 스키마는 스키마 화면·새 프로파일 대화상자·데이터 빌드 선택에서 빠진다."""
+    where, params = ("", ()) if status == "all" else ("WHERE s.status=? ", (status,))
     with service.db.connect() as conn:
-        found = rows(conn, f"SELECT s.*, {SCHEMA_COUNTS} FROM parsing_schema s ORDER BY s.schema_name")
+        found = rows(conn, f"SELECT s.*, {SCHEMA_COUNTS} FROM parsing_schema s {where}ORDER BY s.schema_name", params)
     return {"items": [_schema_public(r) for r in found], "has_more": False, "next_cursor": None}
 
 
@@ -885,6 +889,16 @@ def install(app: FastAPI, root, start_worker=True):
             raise Problem("ONE_DOCUMENT_REQUIRED", "기존 문서의 새 snapshot은 한 파일씩 등록하세요.")
         return job_response(service.register_documents(body.source_refs, body.provider, body.document_id, user, wait))
 
+    @router.post("/documents/delete", response_model=JobResponse, status_code=202)
+    def delete_documents(body: DocumentDeleteRequest, wait: float = Wait, user=Depends(principal)):
+        """§4.13 다중 삭제(작업). 한 건이 실패해도 작업은 succeeded이고 요약이 결과물이다."""
+        return job_response(service.delete_documents(body.document_ids, body.purge_source, user, wait))
+
+    @router.delete("/documents/{document_id}")
+    def delete_document(document_id: str, purge_source: bool = False, user=Depends(principal)):
+        """§4.13 단건 삭제(동기). 없는 문서 404 UNKNOWN_DOCUMENT, 진행 중 작업이 있으면 409 DOCUMENT_BUSY."""
+        return service.delete_document(document_id, purge_source, user)
+
     @router.get("/documents")
     def documents(
         q: str = Query("", max_length=200),
@@ -1117,8 +1131,9 @@ def install(app: FastAPI, root, start_worker=True):
 
     # ---- 스키마 -------------------------------------------------------------------------------
     @router.get("/schemas")
-    def schemas(user=Depends(principal)):
-        return schema_list(service)
+    def schemas(status: SchemaListStatus = "active", user=Depends(principal)):
+        """§4.2.3 status=active(기본)|deprecated|all."""
+        return schema_list(service, status)
 
     @router.post("/schemas", status_code=201)
     def create_schema(body: SchemaDefinitionRequest, user=Depends(principal)):
@@ -1141,6 +1156,18 @@ def install(app: FastAPI, root, start_worker=True):
     def delete_schema(schema_key: str, user=Depends(principal)):
         """§4.2.1. 쓰는 프로파일·적용 건이 있으면 409 SCHEMA_IN_USE(아무것도 지우지 않는다)."""
         return service.delete_schema(schema_key, user)
+
+    @router.post("/schemas/{schema_key}/deprecate")
+    def deprecate_schema(schema_key: str, user=Depends(principal)):
+        """§4.2.3. 응답은 GET /schemas/{key}와 같은 형태라 화면이 이 하나로 헤더·칩·버튼을 갱신한다."""
+        service.deprecate_schema(schema_key, user)
+        return schema_detail(service, schema_key)
+
+    @router.post("/schemas/{schema_key}/activate")
+    def activate_schema(schema_key: str, user=Depends(principal)):
+        """§4.2.3 폐기 해제 — 되돌릴 수 있는 일이라 확인 없이 바로 부른다."""
+        service.activate_schema(schema_key, user)
+        return schema_detail(service, schema_key)
 
     @router.get("/schemas/{schema_key}/tree")
     def schema_tree_view(schema_key: str, user=Depends(principal)):

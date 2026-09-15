@@ -336,6 +336,14 @@ CREATE TABLE extracted_value_region (
 );
 CREATE INDEX value_region_by_region ON extracted_value_region(region_id);
 
+-- §1.10 삭제 가드. 커밋된 DB에서는 언제나 비어 있다 — §4.13 문서 삭제가 같은 쓰기 트랜잭션에서 행을 넣고,
+-- 자식부터 지우고, 커밋 전에 그 행을 지운다. 아래 DELETE 거부 트리거 여덟 개가 이 표를 보고,
+-- 가드가 열린 트랜잭션 안에서만 통과한다. 가드 밖의 DELETE(실수로 친 `DELETE FROM extracted_value`)는 여전히 ABORT다.
+CREATE TABLE purge_guard (
+    token TEXT PRIMARY KEY NOT NULL,
+    opened_at TEXT NOT NULL
+);
+
 -- §1.7 뷰: 현재 snapshot의 발행된 실행 값만. 과거 snapshot/미발행 실행의 값이 섞이지 않는다.
 CREATE VIEW current_value AS
 SELECT d.document_id, a.application_id, a.profile_id, v.*
@@ -488,7 +496,8 @@ WHEN OLD.status IN ('succeeded','failed','cancelled')
 BEGIN SELECT RAISE(ABORT, 'extraction_run is immutable after completion'); END;
 CREATE TRIGGER extraction_run_no_delete BEFORE DELETE ON extraction_run
 WHEN OLD.status IN ('succeeded','failed','cancelled')
-BEGIN SELECT RAISE(ABORT, 'extraction_run is immutable after completion'); END;
+BEGIN SELECT RAISE(ABORT, 'extraction_run is immutable after completion')
+  WHERE NOT EXISTS (SELECT 1 FROM purge_guard); END;
 CREATE TRIGGER run_state_transition BEFORE UPDATE ON extraction_run
 WHEN OLD.status IN ('queued','running') BEGIN
     SELECT RAISE(ABORT, 'invalid extraction state transition') WHERE NOT (
@@ -503,31 +512,33 @@ WHEN OLD.status IN ('queued','running') BEGIN
 END;
 
 -- 불변 테이블: INSERT만 허용한다. 수정/철회는 새 snapshot·새 리비전·새 실행으로 표현한다.
+-- 삭제만 예외다(§1.10): purge_guard가 열린 트랜잭션(= §4.13 문서 삭제) 안에서만 DELETE가 통과한다.
+-- UPDATE 거부는 가드를 보지 않는다 — 살아 있는 기록은 여전히 고칠 수 없다.
 CREATE TRIGGER document_snapshot_no_update BEFORE UPDATE ON document_snapshot
 BEGIN SELECT RAISE(ABORT, 'document_snapshot is immutable'); END;
 CREATE TRIGGER document_snapshot_no_delete BEFORE DELETE ON document_snapshot
-BEGIN SELECT RAISE(ABORT, 'document_snapshot is immutable'); END;
+BEGIN SELECT RAISE(ABORT, 'document_snapshot is immutable') WHERE NOT EXISTS (SELECT 1 FROM purge_guard); END;
 CREATE TRIGGER sheet_no_update BEFORE UPDATE ON sheet
 BEGIN SELECT RAISE(ABORT, 'sheet is immutable'); END;
 CREATE TRIGGER sheet_no_delete BEFORE DELETE ON sheet
-BEGIN SELECT RAISE(ABORT, 'sheet is immutable'); END;
+BEGIN SELECT RAISE(ABORT, 'sheet is immutable') WHERE NOT EXISTS (SELECT 1 FROM purge_guard); END;
 CREATE TRIGGER source_region_no_update BEFORE UPDATE ON source_region
 BEGIN SELECT RAISE(ABORT, 'source_region is immutable'); END;
 CREATE TRIGGER source_region_no_delete BEFORE DELETE ON source_region
-BEGIN SELECT RAISE(ABORT, 'source_region is immutable'); END;
+BEGIN SELECT RAISE(ABORT, 'source_region is immutable') WHERE NOT EXISTS (SELECT 1 FROM purge_guard); END;
 CREATE TRIGGER mapping_revision_no_update BEFORE UPDATE ON mapping_revision
 BEGIN SELECT RAISE(ABORT, 'mapping_revision is immutable'); END;
 CREATE TRIGGER mapping_revision_no_delete BEFORE DELETE ON mapping_revision
-BEGIN SELECT RAISE(ABORT, 'mapping_revision is immutable'); END;
+BEGIN SELECT RAISE(ABORT, 'mapping_revision is immutable') WHERE NOT EXISTS (SELECT 1 FROM purge_guard); END;
 CREATE TRIGGER mapping_region_no_update BEFORE UPDATE ON mapping_region
 BEGIN SELECT RAISE(ABORT, 'mapping_region is immutable'); END;
 CREATE TRIGGER mapping_region_no_delete BEFORE DELETE ON mapping_region
-BEGIN SELECT RAISE(ABORT, 'mapping_region is immutable'); END;
+BEGIN SELECT RAISE(ABORT, 'mapping_region is immutable') WHERE NOT EXISTS (SELECT 1 FROM purge_guard); END;
 CREATE TRIGGER extracted_value_no_update BEFORE UPDATE ON extracted_value
 BEGIN SELECT RAISE(ABORT, 'extracted_value is immutable'); END;
 CREATE TRIGGER extracted_value_no_delete BEFORE DELETE ON extracted_value
-BEGIN SELECT RAISE(ABORT, 'extracted_value is immutable'); END;
+BEGIN SELECT RAISE(ABORT, 'extracted_value is immutable') WHERE NOT EXISTS (SELECT 1 FROM purge_guard); END;
 CREATE TRIGGER extracted_value_region_no_update BEFORE UPDATE ON extracted_value_region
 BEGIN SELECT RAISE(ABORT, 'extracted_value_region is immutable'); END;
 CREATE TRIGGER extracted_value_region_no_delete BEFORE DELETE ON extracted_value_region
-BEGIN SELECT RAISE(ABORT, 'extracted_value_region is immutable'); END;
+BEGIN SELECT RAISE(ABORT, 'extracted_value_region is immutable') WHERE NOT EXISTS (SELECT 1 FROM purge_guard); END;

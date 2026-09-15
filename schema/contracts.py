@@ -28,6 +28,13 @@ class RegisterRequest(Contract):
     document_id: Identifier | None = None
 
 
+class DocumentDeleteRequest(Contract):
+    """§4.13 다중 삭제 본문. 상한(200개)은 service가 TOO_MANY_DOCUMENTS로 돌려주므로 여기서는 넉넉히만 막는다."""
+
+    document_ids: Annotated[list[Identifier], Field(max_length=5000)]
+    purge_source: bool = False
+
+
 class ApplicationRequest(Contract):
     profile_id: Identifier
     sheet_bindings: SheetBindings | None = None

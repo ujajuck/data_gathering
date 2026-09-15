@@ -36,7 +36,7 @@ describe("작업 내역 화면", () => {
     const table = screen.getByRole("table", { name: "작업 목록" });
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["종류", "대상", "상태", "시작", "종료", "결과/오류"]);
     expect(within(table).getByText("묶음 처리")).toBeTruthy();
-    expect(within(screen.getByLabelText("종류")).getAllByRole("option").map((o) => o.textContent)).toEqual(["전체", "등록", "추출", "재파싱", "빌드", "테스트", "묶음 처리"]);
+    expect(within(screen.getByLabelText("종류")).getAllByRole("option").map((o) => o.textContent)).toEqual(["전체", "등록", "추출", "재파싱", "빌드", "테스트", "묶음 처리", "삭제"]);
     expect(rowOf("전체 승인 · 공정데이터_A양식 v2").textContent).toContain("처리 4건");
     expect(rowOf("빌드 · 문서 3개").textContent).toContain("출력 Header가 비어 있습니다.");
     expect(within(rowOf("공정데이터_B양식 v1 · 재파싱")).getByText("진행 중 2/5", { selector: ".app-chip" })).toBeTruthy();
@@ -208,6 +208,34 @@ describe("작업 내역 화면", () => {
     expect(row.textContent).toContain("등록");
     expect(row.textContent).toContain("3000개 중 2990개 등록 · 200개 변경 없음 · 10개 실패 · 2개 잠김");
     expect(row.textContent).not.toContain("문서 500개");
+  });
+
+  it("문서 삭제 행은 무엇을 지웠는지 요약하고 갈 곳이 없다(target_kind=workspace)", async () => {
+    const f = jobsFixture();
+    f.overrides.set("GET /jobs", () =>
+      page([
+        job({
+          kind: "delete",
+          label: "문서 2개 삭제",
+          target_kind: "workspace",
+          target_id: null,
+          completed: 2,
+          total: 2,
+          result: {
+            documents_count: 2,
+            profiles_reset: [{ profile_id: ids.profile, profile_name: "공정데이터_A양식" }],
+            summary: { requested: 2, deleted: 2, failed: 0 },
+          },
+        }),
+      ]),
+    );
+    f.renderApp("?screen=jobs");
+    const table = await screen.findByRole("table", { name: "작업 목록" });
+    const row = within(table).getAllByRole("row")[1];
+    expect(row.textContent).toContain("삭제");
+    expect(row.textContent).toContain("문서 2개를 지웠습니다.");
+    expect(row.textContent).toContain("파싱 프로파일 1개가 초안으로 내려갔습니다");
+    expect(within(row).queryByRole("button", { name: "이동" })).toBeNull();
   });
 
   it("작업 목록 필터는 URL·API에 반영되고, 진행 중 작업은 취소할 수 있다(낙관적 갱신)", async () => {

@@ -39,7 +39,19 @@ const TABS: { id: Tab; label: string }[] = [
 
 const snapshotsPath = (sid: string) => `/snapshots/${encodeURIComponent(sid)}`;
 
-export default function DocumentDetail({ documentId, onAddToBuild }: { documentId: string; onAddToBuild: (id: string) => void }) {
+export default function DocumentDetail({
+  documentId,
+  onAddToBuild,
+  onDelete,
+  inert = false,
+}: {
+  documentId: string;
+  onAddToBuild: (id: string) => void;
+  // 단건 삭제(§4.13)는 목록 화면이 확인 대화상자를 연다 — 드로어와 같은 대화상자를 쓴다.
+  onDelete: (doc: DocumentDetailData) => void;
+  // 삭제 확인 대화상자가 떠 있는 동안 드로어를 비활성으로 둔다(곧 지울 문서를 빌드에 담는 모순을 막는다).
+  inert?: boolean;
+}) {
   const { route, go, refresh, changed } = useNavigation();
   const document = useData<DocumentDetailData>("/documents/" + encodeURIComponent(documentId), refresh);
   const doc = document.data;
@@ -51,6 +63,7 @@ export default function DocumentDetail({ documentId, onAddToBuild }: { documentI
   return (
     <Modal
       label="문서 상세"
+      inert={inert}
       onClose={close}
       head={
         doc ? (
@@ -92,11 +105,19 @@ export default function DocumentDetail({ documentId, onAddToBuild }: { documentI
             <button type="button" onClick={() => onAddToBuild(doc.document_id)}>
               데이터 빌드에 추가
             </button>
+            <button type="button" className="danger" onClick={() => onDelete(doc)}>
+              삭제
+            </button>
           </>
         )
       }
     >
-      <State resource={document} />
+      {/* 지워진 문서를 가리키는 옛 작업 내역 행에서 들어오면 404다 — 무엇이 일어났는지 한 줄로 말한다(§7). */}
+      {document.error?.status === 404 ? (
+        <EmptyState>이 문서는 삭제되었습니다.</EmptyState>
+      ) : (
+        <State resource={document} />
+      )}
       {doc && (
         <div className="app-stack">
           {doc.last_error && (

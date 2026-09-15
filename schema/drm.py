@@ -416,8 +416,14 @@ class SessionCache:
                 raise
             self.unlocked += 1
             self.last_unlock_ms = round((time.monotonic() - started) * 1000)
-        self.prune(folder, keep=final)
-        return self._track(DecryptedSession(name, final, False, self.last_unlock_ms, not ttl))
+        # 해제본을 **먼저** 추적하고 정리는 그 뒤다. 순서가 반대면 `prune`에서 예외가 날 때 세션이 미아가 되고
+        # (`release_all`이 모르는 평문 파일이 남는다), 이미 성공한 해제가 실패로 보고된다.
+        session = self._track(DecryptedSession(name, final, False, self.last_unlock_ms, not ttl))
+        try:
+            self.prune(folder, keep=final)
+        except Exception:
+            pass  # 정리는 부수적이다 — 여기서 올린 예외가 해제 자체를 실패시키지 않는다(§3.5(3))
+        return session
 
     def _track(self, session):
         with self._lock:

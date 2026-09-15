@@ -224,7 +224,8 @@ test("요약 카드 · 신규 양식/매핑 검수/파싱 실패 큐 · 렌더 �
   // 작업 목록: 종류·상태 필터 목록, 시드 4건 + 위의 테스트·빌드 2건(최근 순), 상태 칩·시작/종료·결과 요약.
   const kindSelect = jobsCard(page).getByLabel("종류");
   const stateSelect = jobsCard(page).getByLabel("상태");
-  await expect(kindSelect.locator("option")).toHaveText(["전체", "등록", "추출", "재파싱", "빌드", "테스트", "묶음 처리"]);
+  // 종류 목록은 JOB_KIND_LABELS 그대로다 — 문서 삭제(§4.13)가 들어오면서 '삭제'가 마지막에 붙었다.
+  await expect(kindSelect.locator("option")).toHaveText(["전체", "등록", "추출", "재파싱", "빌드", "테스트", "묶음 처리", "삭제"]);
   await expect(stateSelect.locator("option")).toHaveText(["전체", "대기", "진행 중", "완료", "실패", "취소됨"]);
   await expect(jobsTable(page).getByRole("columnheader")).toHaveText(["종류", "대상", "상태", "시작", "종료", "결과/오류"]);
   await expect(jobRows(page)).toHaveCount(6);

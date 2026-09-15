@@ -210,6 +210,23 @@ def test_prune_drops_the_oldest_over_the_session_cap(ws, adapter, monkeypatch):
     assert not stale.exists() and len(list(folder.glob("*.xlsx"))) == 1
 
 
+def test_a_failing_prune_does_not_fail_the_unlock(ws, adapter, monkeypatch):
+    """정리(`prune`)는 부수적이다 — 거기서 예외가 나도 이미 끝난 해제를 실패로 만들지 않는다.
+
+    순서가 중요하다: 세션을 추적하기 **전에** 정리하면 예외가 난 순간 해제본이 미아가 되고
+    (`release_all`이 모르는 평문 파일이 남는다) 호출자는 성공한 해제를 실패로 본다."""
+    monkeypatch.setenv("SCHEMA_DRM_CACHE_TTL_SECONDS", "0")  # 재사용 없음 → 연산이 끝나면 지워져야 한다
+    monkeypatch.setattr(
+        drm.SessionCache, "prune", lambda self, folder=None, keep=None: (_ for _ in ()).throw(OSError(13, "simulated"))
+    )
+    folder = drm.temp_dir(create=True)
+    sheets = make_reader(ws, "local-xlsx", "tester", PROTECTED).describe(PROTECTED)["sheets"]
+    assert sheets and drm.SESSIONS.unlocked == 1 and drm.SESSIONS.failed == 0
+    drm.SESSIONS.release_all()
+    assert drm.SESSIONS.released == 1  # 추적된 세션이라 놓을 때 실제로 지워졌다
+    assert list(folder.glob("*.xlsx")) == []  # 평문이 남지 않는다
+
+
 # ---------------------------------------------------------------- (4) 감사
 
 
@@ -228,6 +245,32 @@ def test_every_protected_access_leaves_one_audit_line(ws, adapter):
     # 해제본 경로·내용은 남기지 않는다.
     assert token not in files[0].read_text(encoding="utf-8")
     assert str(drm.temp_dir()) not in files[0].read_text(encoding="utf-8")
+
+
+def test_audit_temp_removed_is_what_was_actually_deleted(ws, adapter, monkeypatch):
+    """감사 줄의 `temp_removed`는 설정값(TTL)이 아니라 **이 연산이 실제로 지운** 해제본 수다.
+
+    운영자가 이 줄로 답해야 하는 질문은 "평문이 남았나"이고, 설정만 읽어서는 답이 되지 않는다
+    (TTL 0인데 삭제가 실패했거나, TTL이 살아 있어 일부러 남긴 경우를 구분하지 못한다)."""
+    def audit_line():
+        path = next(iter((ws / "data/audit").glob("drm-*.jsonl")))
+        return json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
+
+    record = dict(provider="fake-drm", principal="tester", source_ref=PROTECTED, operation="describe", outcome="ok", reader="drm")
+
+    monkeypatch.setenv("SCHEMA_DRM_CACHE_TTL_SECONDS", "0")  # 재사용 없음 → 연산이 끝나면 지운다
+    make_reader(ws, "local-xlsx", "tester", PROTECTED).describe(PROTECTED)
+    drm.SESSIONS.release_all()  # jobs.py가 감사보다 **먼저** 부르는 자리
+    drm.record_access(ws, **record)
+    assert audit_line()["temp_removed"] == 1
+
+    # Reader는 연산마다 별도 프로세스라 세는 값도 연산 단위다 — 다음 연산은 0에서 시작한다.
+    drm.SESSIONS.reset()
+    monkeypatch.setenv("SCHEMA_DRM_CACHE_TTL_SECONDS", "900")  # 재사용 → 일부러 남긴다
+    make_reader(ws, "local-xlsx", "tester", PROTECTED).describe(PROTECTED)
+    drm.SESSIONS.release_all()
+    drm.record_access(ws, **record)
+    assert audit_line()["temp_removed"] == 0 and list(drm.temp_dir().glob("*.xlsx"))
 
 
 def test_plain_documents_are_not_audited(ws):

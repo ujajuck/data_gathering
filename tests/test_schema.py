@@ -145,8 +145,8 @@ class CoreSchemaTests(unittest.TestCase):
         self.assertEqual(self.scalar("PRAGMA integrity_check"), "ok")
         self.assertEqual(self.scalar("SELECT version FROM schema_meta"), 3)
         core = {r[0] for r in self.rows("SELECT name FROM sqlite_master WHERE type='table'")}
-        # 런타임 표(§1.6 runtime_job·snapshot_signature·source_digest)를 뺀 코어 18개
-        self.assertEqual(len(core - {"schema_meta", "runtime_job", "snapshot_signature", "source_digest"}), 18)
+        # 런타임 표(§1.6 runtime_job·snapshot_signature·source_digest)를 뺀 코어 19개(§1.10 purge_guard 포함)
+        self.assertEqual(len(core - {"schema_meta", "runtime_job", "snapshot_signature", "source_digest"}), 19)
         self.assertEqual(self.scalar("SELECT published_run_id FROM parsing_application WHERE application_id='app-1'"), "run-1")
         self.assertEqual(self.rows("SELECT edit_seq, current_revision_id FROM mapping ORDER BY mapping_id"),
                          [(1, "rev-lot-1"), (1, "rev-temp-1")])
@@ -162,6 +162,47 @@ class CoreSchemaTests(unittest.TestCase):
             self.assertIn("runtime_job", names)
             self.assertIn("mapping_revision", names)
             Database(Path(tmp))  # 두 번째 열기는 버전을 확인만 한다
+
+    def test_opening_a_pre_guard_workspace_adds_the_guard_and_the_delete_job_kind(self):
+        """§1.10·§1.6 이관: 가드 없이 만든 옛 DB를 열면 purge_guard·여덟 트리거·runtime_job kind가 갖춰진다."""
+        import re
+        import tempfile
+        from schema.db import Database
+
+        core = DDL.read_text(encoding="utf-8")
+        legacy_core = re.sub(r"CREATE TABLE purge_guard \(.*?\);", "", core, flags=re.S)
+        legacy_core = legacy_core.replace("\n  WHERE NOT EXISTS (SELECT 1 FROM purge_guard)", "")
+        legacy_core = legacy_core.replace(" WHERE NOT EXISTS (SELECT 1 FROM purge_guard)", "")
+        legacy_core = "\n".join(l for l in legacy_core.splitlines() if "purge_guard" not in l)
+        legacy_runtime = RUNTIME_DDL.replace(",'queue_action','delete')", ",'queue_action')")
+        self.assertNotIn("purge_guard", legacy_core)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old = sqlite3.connect(root / "workspace.db")
+            old.executescript(legacy_core)
+            old.executescript(legacy_runtime)
+            old.execute(
+                "INSERT INTO runtime_job (job_id,kind,state,principal,payload_json,request_key,request_hash,created_at)"
+                " VALUES ('j-1','build','succeeded','local','{}','k-1','h-1',?)", (AT,))
+            old.commit()
+            old.close()
+            db = Database(root)
+            with db.connect() as conn:
+                self.assertTrue(conn.execute("SELECT 1 FROM sqlite_master WHERE name='purge_guard'").fetchone())
+                self.assertIn("'delete'", conn.execute("SELECT sql FROM sqlite_master WHERE name='runtime_job'").fetchone()[0])
+                self.assertEqual(conn.execute("SELECT count(*) FROM runtime_job").fetchone()[0], 1)  # 작업 내역은 남는다
+                guarded = [
+                    r[0] for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE '%_no_delete'"
+                        " AND sql LIKE '%purge_guard%'")
+                ]
+                self.assertEqual(len(guarded), 8, guarded)
+                self.assertEqual(
+                    [r[0] for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE '%_no_update'"
+                        " AND sql LIKE '%purge_guard%'")],
+                    [])
+            Database(root)  # 두 번째 열기는 아무것도 바꾸지 않는다
 
     def test_current_value_view_follows_current_snapshot_and_published_run(self):
         self.assertEqual(self.scalar("SELECT count(*) FROM current_value"), 4)
@@ -182,6 +223,7 @@ class CoreSchemaTests(unittest.TestCase):
 
     # --- 불변 테이블 -------------------------------------------------------------------------
     def test_immutable_tables_reject_update_and_delete(self):
+        """§1.10: UPDATE는 언제나 거부, DELETE는 purge_guard가 없는 한 거부(= 평범한 DELETE는 여전히 막힌다)."""
         cases = [
             ("UPDATE document_snapshot SET filename='x'", "document_snapshot is immutable"),
             ("DELETE FROM document_snapshot WHERE snapshot_id='snap-2'", "document_snapshot is immutable"),
@@ -202,6 +244,44 @@ class CoreSchemaTests(unittest.TestCase):
         for sql, message in cases:
             with self.subTest(sql=sql):
                 self.assertRejected(message, self.conn.execute, sql)
+        self.assertEqual(self.scalar("SELECT count(*) FROM purge_guard"), 0)
+        self.assertEqual(self.scalar("SELECT count(*) FROM extracted_value"), 4)
+
+    def test_delete_guard_opens_delete_only_inside_the_guarded_transaction(self):
+        """§1.10·§4.13: purge_guard 행이 있는 트랜잭션에서만 여덟 표의 DELETE가 통과한다. UPDATE는 가드가 있어도 막힌다."""
+        insert(self.conn, "purge_guard", token="t-1", opened_at=AT)
+        for sql in ["UPDATE extracted_value SET value_text='999'",
+                    "UPDATE document_snapshot SET filename='x'",
+                    "UPDATE mapping_revision SET status='rejected'"]:
+            with self.subTest(sql=sql):
+                self.assertRejected("immutable", self.conn.execute, sql)
+        # §4.13의 삭제 순서 그대로: 자식부터, published_run_id를 먼저 끊는다.
+        self.conn.execute("UPDATE parsing_application SET published_run_id=NULL")
+        self.conn.execute("DELETE FROM extracted_value_region")
+        self.assertEqual(self.conn.execute("DELETE FROM extracted_value").rowcount, 4)
+        self.assertEqual(self.conn.execute("DELETE FROM extraction_run").rowcount, 1)
+        self.conn.execute("DELETE FROM mapping_region")
+        self.conn.execute("DELETE FROM mapping_revision")
+        self.conn.execute("DELETE FROM mapping")
+        self.conn.execute("DELETE FROM application_sheet")
+        self.conn.execute("DELETE FROM parsing_application")
+        self.conn.execute("DELETE FROM source_region")
+        self.conn.execute("DELETE FROM sheet")
+        self.assertEqual(self.conn.execute("DELETE FROM document_snapshot").rowcount, 2)
+        self.conn.execute("DELETE FROM document")
+        self.conn.execute("DELETE FROM purge_guard WHERE token='t-1'")
+        self.conn.commit()  # 지연 FK(document.current_snapshot_id·mapping.current_revision_id)도 통과한다
+        self.assertEqual(self.rows("PRAGMA foreign_key_check"), [])
+        # 스키마·프로파일 projection은 그대로다(§4.13 "남기는 것").
+        self.assertEqual(self.scalar("SELECT count(*) FROM parsing_field"), 4)
+        self.assertEqual(self.scalar("SELECT count(*) FROM parsing_rule"), 2)
+        # 가드를 닫으면 다시 막힌다.
+        insert(self.conn, "document", document_id="doc-9", document_name="x.xlsx", provider="local-xlsx",
+               source_path="raw/x.xlsx", file_type="xlsx", created_at=AT, updated_at=AT)
+        insert(self.conn, "document_snapshot", snapshot_id="snap-9", document_id="doc-9", revision_no=9,
+               change_token="sha-9", content_sha256="sha-9", filename="x.xlsx", captured_at=AT)
+        self.assertRejected("document_snapshot is immutable", self.conn.execute,
+                            "DELETE FROM document_snapshot WHERE snapshot_id='snap-9'")
 
     # --- CAS ---------------------------------------------------------------------------------
     def test_cas_same_expected_seq_twice_conflicts_and_keeps_revision_count(self):

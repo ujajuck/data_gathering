@@ -78,6 +78,17 @@ export function copyRawDocument(from: string, to: string): string {
   ).trim();
 }
 
+// 원본 폴더(<workspace>/data/raw) 안의 파일이 남아 있는지 본다(문서 삭제 §4.13: `purge_source=false`면 원본은 그대로다).
+export function rawFileExists(sourceRef: string): boolean {
+  return (
+    runPython(
+      "import sys; from pathlib import Path; print('yes' if (Path(sys.argv[1]) / 'data/raw' / sys.argv[2]).exists() else 'no')",
+      workspaceRoot(),
+      sourceRef,
+    ).trim() === "yes"
+  );
+}
+
 // 원본 폴더 아래에 하위 폴더까지 있는 트리를 만든다(§4.1.1 폴더 일괄 등록 시나리오용).
 // `copy_from`은 시드 문서를 복사하고(양식이 그대로라 프로파일 매치가 유지된다), `text`는 대상이 아닌 파일
 // (`~$임시.xlsx`·`메모.txt`)을 만든다. 중간 폴더는 자동으로 만든다. 만든 경로(원본 폴더 기준)를 돌려준다.

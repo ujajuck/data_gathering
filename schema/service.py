@@ -54,6 +54,7 @@ VALUE_BATCH = 200
 VALUE_REGION_LIMIT = 1000
 RUN_VALUE_LIMIT = 1_000_000
 DEFAULT_WAIT = 60
+DELETE_LIMIT = 200  # §4.13 한 번에 지울 수 있는 문서 수(목록 한 페이지 상한과 같다)
 CANONICAL_CACHE = 64
 
 
@@ -372,7 +373,35 @@ class Service:
         self._render_lock = threading.Lock()
         self._canonicals = {}
         if start_worker:
+            self.reclaim_render_cache()
             self.jobs.start()
+
+    def reclaim_render_cache(self):
+        """시작 시 고아 렌더 캐시를 회수한다(§4.13) — `document_snapshot`에 없는 snapshot 디렉터리를 지운다.
+
+        문서를 지울 때 렌더 서버가 내려가 있었으면 `invalidate`가 실패해 셀 내용이 디스크에 남는다.
+        렌더 서버는 이 표를 읽을 수 없으므로 회수는 서비스 쪽에서 돈다. 실패는 다음 시작에서 다시 시도한다."""
+        base = self.root / "data/render-cache"
+        try:
+            names = [d.name for d in base.iterdir() if d.is_dir()]
+        except OSError:
+            return 0
+        if not names:
+            return 0
+        with self.db.connect() as conn:
+            live = {r[0] for r in conn.execute("SELECT snapshot_id FROM document_snapshot")}
+        reclaimed = 0
+        for name in names:
+            if name in live:
+                continue
+            try:
+                self.render.invalidate(name)
+                reclaimed += 1
+            except Exception:
+                log.exception("render cache reclaim failed: %s", name)
+        if reclaimed:
+            log.info("고아 렌더 캐시 %d건을 회수했습니다.", reclaimed)
+        return reclaimed
 
     @property
     def render(self):
@@ -405,6 +434,8 @@ class Service:
             return self.execute_extraction(payload, principal, checkpoint)
         if kind == "reparse":
             return self.execute_reparse(payload["profile_id"], payload["mode"], principal, checkpoint)
+        if kind == "delete":
+            return self._delete_job(payload, principal, checkpoint)
         if kind == "queue_action":
             from .operations import execute_queue_action
 
@@ -548,7 +579,8 @@ class Service:
                     if schema:
                         sid = schema["schema_id"]
                         conn.execute(
-                            "UPDATE parsing_schema SET schema_name=?,description=?,definition_path=?,current_rev=?,definition_sha256=?,status='active',updated_at=? WHERE schema_id=?",
+                            # status는 건드리지 않는다 — 폐기를 되돌리는 길은 `POST /schemas/{key}/activate` 하나다(§4.2.3).
+                            "UPDATE parsing_schema SET schema_name=?,description=?,definition_path=?,current_rev=?,definition_sha256=?,updated_at=? WHERE schema_id=?",
                             (canonical["schema_name"], canonical.get("description"), relative, rev, sha, stamp, sid),
                         )
                     else:
@@ -808,10 +840,10 @@ class Service:
                 names = ", ".join(p["profile_name"] for p in profiles[:2]) + (f", 외 {len(profiles) - 2}개" if len(profiles) > 2 else "")
                 message = (
                     f"이 스키마는 파싱 프로파일 {len(profiles)}개({names})가 쓰고 있고 적용된 문서가 {documents}개입니다. "
-                    "프로파일 상세에서 '삭제'한 뒤 다시 시도하세요."
+                    "프로파일 상세에서 '삭제'한 뒤 다시 시도하거나, 더 쓰지 않으려면 이 스키마를 '폐기'하세요."
                     if profiles
-                    # 적용 기록을 지우는 기능은 없다 — 할 수 없는 일을 지시하지 않는다.
-                    else f"이 스키마는 문서 {documents}개에 적용된 기록이 있어 지울 수 없습니다."
+                    # 적용 기록을 지우는 길은 §4.13 문서 삭제뿐이므로 여기서는 시키지 않는다(스키마를 치우려고 하는 일이 아니다).
+                    else f"이 스키마는 문서 {documents}개에 적용된 기록이 있어 지울 수 없습니다. 더 쓰지 않으려면 '폐기'하세요."
                 )
                 raise Problem(
                     "SCHEMA_IN_USE",
@@ -868,6 +900,30 @@ class Service:
             result["leftover_path"] = left
         return result
 
+    def _schema_status(self, schema_key, status, principal=None):
+        """§4.2.3 폐기·폐기 해제. 정의 파일·리비전·필드·프로파일·적용 건·추출값은 하나도 건드리지 않는다."""
+        with self.db.connect(write=True) as conn:
+            schema = conn.execute("SELECT * FROM parsing_schema WHERE schema_key=?", (schema_key,)).fetchone()
+            if schema is None:
+                raise Problem("UNKNOWN_SCHEMA", f"파싱 스키마 {schema_key!r}를 찾을 수 없습니다.", 404)
+            if schema["status"] == status:
+                if status == "deprecated":
+                    raise Problem("ALREADY_DEPRECATED", "이미 폐기된 스키마입니다.", 409)
+                raise Problem("ALREADY_ACTIVE", "이미 활성 상태인 스키마입니다.", 409)
+            conn.execute(
+                "UPDATE parsing_schema SET status=?,updated_at=? WHERE schema_id=?",
+                (status, now(), schema["schema_id"]),
+            )
+        return {"schema_key": schema_key, "schema_name": schema["schema_name"], "status": status}
+
+    def deprecate_schema(self, schema_key, principal=None):
+        """스키마 폐기 — 새 프로파일을 붙일 수 없게 되고 목록 기본에서 빠진다. 승인된 프로파일의 자동 적용은 계속된다(§4.2.3)."""
+        return self._schema_status(schema_key, "deprecated", principal)
+
+    def activate_schema(self, schema_key, principal=None):
+        """스키마 폐기 해제 — 되돌릴 수 있는 일이라 확인 없이 부른다(§4.2.3)."""
+        return self._schema_status(schema_key, "active", principal)
+
     # ---- 프로파일 ---------------------------------------------------------------------
     def _profile_row(self, conn, profile_id):
         return one(
@@ -893,6 +949,12 @@ class Service:
             fields = self.schema_fields(schema_key, conn) if schema else None
         if schema is None:
             raise Problem("UNKNOWN_SCHEMA", f"파싱 스키마 {schema_key!r}를 찾을 수 없습니다.", 404)
+        if profile_id is None and schema["status"] == "deprecated":
+            # 새 프로파일만 막는다 — 이미 있는 프로파일의 새 리비전(PUT)과 import-preview는 계속 된다(§4.2.3).
+            raise Problem(
+                "SCHEMA_DEPRECATED",
+                "폐기된 파싱 스키마에는 새 프로파일을 만들 수 없습니다. 스키마 상세에서 '폐기 해제'한 뒤 다시 시도하세요.",
+            )
         canonical, report = to_canonical(definition, schema_key, fields, format or "auto")
         canonical["schema_key"] = schema_key
         with self.db.connect(write=True) as conn:
@@ -2534,8 +2596,8 @@ class Service:
     def deprecate_profile(self, profile_id, principal=None):
         """프로파일 폐기 — 더 이상 새 문서에 붙이지 않고, 스키마 삭제도 막지 않는다(§4.2.1의 탈출구).
 
-        이미 적용된 문서와 추출값은 건드리지 않는다(기록이다). 폐기한 프로파일은 목록의 프로파일 수와
-        `GET /schemas/{key}`의 profile_count에서 빠진다."""
+        이미 적용된 문서와 추출값은 건드리지 않는다(기록이다). `GET /schemas/{key}`의 profile_count는
+        폐기한 프로파일도 센다 — 스키마 삭제가 막히는 기준이 '규칙 행이 남아 있는가'이기 때문이다(§4.2.1)."""
         with self.db.connect(write=True) as conn:
             profile = self._profile_row(conn, profile_id)
             if profile["status"] == "deprecated":
@@ -2628,8 +2690,12 @@ class Service:
             return "review_required"
         if agg["published_run_id"] and all_approved and agg["profile_rev"] == profile["current_rev"]:
             return "up_to_date"
-        with self.db.connect() as conn:
-            app = self._application_row(conn, agg["application_id"])
+        try:
+            with self.db.connect() as conn:
+                app = self._application_row(conn, agg["application_id"])
+        except Problem:
+            # 이 페이지를 읽은 뒤 그 문서가 지워졌다(§4.13). 한 건의 삭제가 나머지 재파싱을 죽이지 않게 건너뛴다.
+            return "deleted"
         try:
             matches = self._read(app["provider"], principal, "match", {"source_ref": app["source_path"], "expected_token": app["change_token"], "profiles": [self._reader_profile(profile)]}, checkpoint)
         except Cancelled:
@@ -2786,6 +2852,235 @@ class Service:
                 (status, dump(new_detail), last_processed, last_error, now(), document_id),
             )
         return {"document_id": document_id, "status": status, "detail": new_detail}
+
+    # ---- 문서 삭제(§4.13) ------------------------------------------------------------------
+    def _delete_busy_guard(self, conn, document_id):
+        """그 문서(또는 그 문서의 적용 건)를 대상으로 도는 작업이 있으면 409. 돌고 있는 추출이 FK 없이 끝나지 않게 한다."""
+        busy = conn.execute(
+            "SELECT 1 FROM runtime_job WHERE state IN ('queued','running') AND ("
+            "  (target_kind='document' AND target_id=?)"
+            "  OR (target_kind='application' AND target_id IN ("
+            "        SELECT a.application_id FROM parsing_application a"
+            "        JOIN document_snapshot s ON s.snapshot_id=a.snapshot_id WHERE s.document_id=?))"
+            # 재파싱(§4.9)은 프로파일 하나로 여러 문서의 추출을 돈다 — 그 문서에 붙은 프로파일이 대상이면 그것도 '진행 중'이다.
+            "  OR (target_kind='profile' AND target_id IN ("
+            "        SELECT a.profile_id FROM parsing_application a"
+            "        JOIN document_snapshot s ON s.snapshot_id=a.snapshot_id WHERE s.document_id=?))) LIMIT 1",
+            (document_id, document_id, document_id),
+        ).fetchone()
+        if busy:
+            raise Problem("DOCUMENT_BUSY", "이 문서에 진행 중인 작업이 있습니다. 끝난 뒤 다시 지우세요.", 409)
+
+    def _purge_source_file(self, document):
+        """§4.13 `purge_source=true` — `<ws>/data/raw` 안의 원본 파일 하나만 지운다. → (지웠는가, source_error|None).
+
+        경로는 등록 때와 같은 규칙으로 만든다: `normalize_source_ref` → raw 아래로 한 조각씩 이어 붙이며
+        중간 폴더·마지막 파일 어느 하나라도 심볼릭 링크면 따라가지 않는다 → 최종 경로가 raw 밖이면 지우지 않는다.
+        폴더는 지우지 않는다(지우는 범위를 넓히지 않는다).
+
+        판정 기준은 provider가 아니라 **위치**다 — 보호 문서(DRM)도 원본은 `<ws>/data/raw`에 그대로 있고
+        Reader가 그 경로에서 읽는다. raw 아래에 파일이 없을 때만 `PURGE_UNSUPPORTED`(진짜 원격 vault)다."""
+        try:
+            source_ref = normalize_source_ref(document["source_path"])
+        except Problem:
+            return False, {"code": "SOURCE_OUTSIDE_RAW", "message": "원본 경로가 data/raw 밖을 가리켜 지우지 않았습니다."}
+        raw = (self.root / "data/raw").resolve()
+        path = raw
+        for part in source_ref.split("/"):
+            path = path / part
+            if path.is_symlink():
+                return False, {"code": "SOURCE_SYMLINK", "message": "원본 경로에 심볼릭 링크가 있어 따라가지 않았습니다."}
+        try:
+            inside = path.resolve().is_relative_to(raw)
+        except OSError:
+            inside = False
+        if not inside:
+            return False, {"code": "SOURCE_OUTSIDE_RAW", "message": "원본 경로가 data/raw 밖을 가리켜 지우지 않았습니다."}
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            if document["provider"] != "local-xlsx":
+                return False, {"code": "PURGE_UNSUPPORTED", "message": "작업 공간 안에 지울 원본 파일이 없습니다."}
+            return False, {"code": "SOURCE_MISSING", "message": "원본 파일이 이미 없습니다."}
+        except OSError as exc:
+            return False, {"code": "SOURCE_REMOVE_FAILED", "message": f"원본 파일을 지우지 못했습니다({exc.strerror})."}
+        return True, None
+
+    def _delete_one(self, document_id, purge_source, principal, profiles_reset):
+        """문서 하나를 자기 트랜잭션에서 지운다(§4.13). 자식부터 지우고, 커밋 뒤에 캐시·해제본·원본 파일을 정리한다."""
+        with self.db.connect() as conn:
+            if conn.execute("SELECT 1 FROM document WHERE document_id=?", (document_id,)).fetchone() is None:
+                raise Problem("UNKNOWN_DOCUMENT", "문서를 찾을 수 없습니다.", 404)
+            self._delete_busy_guard(conn, document_id)
+        with self.db.connect(write=True) as conn:
+            # 사전 검사와 이 트랜잭션 사이에 같은 문서가 지워졌을 수 있다 — 그때도 코드는 UNKNOWN_DOCUMENT(404)다.
+            document = conn.execute("SELECT * FROM document WHERE document_id=?", (document_id,)).fetchone()
+            if document is None:
+                raise Problem("UNKNOWN_DOCUMENT", "문서를 찾을 수 없습니다.", 404)
+            self._delete_busy_guard(conn, document_id)
+            scope = "snapshot_id IN (SELECT snapshot_id FROM document_snapshot WHERE document_id=?)"
+            args = (document_id,)
+            snapshots = rows(conn, "SELECT snapshot_id, change_token FROM document_snapshot WHERE document_id=?", args)
+            reset = rows(
+                conn,
+                f"SELECT DISTINCT p.profile_id, p.profile_name FROM parsing_profile p JOIN parsing_application a "
+                f"ON a.application_id=p.reference_application_id WHERE a.{scope} ORDER BY p.profile_name",
+                args,
+            )
+            token = uid()
+            try:
+                # §1.10 가드는 이 트랜잭션에서만 열린다 — 커밋 전에 지우므로 커밋된 DB에는 남지 않는다.
+                insert(conn, "purge_guard", token=token, opened_at=now())
+                # 1. 대표 문서 참조를 먼저 끊는다(FK가 application을 잡고 있다).
+                if reset:
+                    conn.execute(
+                        f"UPDATE parsing_profile SET reference_application_id=NULL,reference_profile_rev=NULL,"
+                        f"reference_signature=NULL,status='draft',updated_at=? WHERE reference_application_id IN "
+                        f"(SELECT application_id FROM parsing_application WHERE {scope})",
+                        (now(), *args),
+                    )
+                # 2. 발행 참조를 끊는다(published_run_id FK가 extraction_run을 잡고 있다).
+                conn.execute(f"UPDATE parsing_application SET published_run_id=NULL WHERE {scope}", args)
+                # 3~7. 자식부터. mapping.current_revision_id는 DEFERRABLE이라 NULL로 내리지 않는다.
+                conn.execute(f"DELETE FROM extracted_value_region WHERE {scope}", args)
+                values = conn.execute(f"DELETE FROM extracted_value WHERE {scope}", args).rowcount
+                runs = conn.execute(f"DELETE FROM extraction_run WHERE {scope}", args).rowcount
+                conn.execute(f"DELETE FROM mapping_region WHERE {scope}", args)
+                conn.execute(f"DELETE FROM mapping_revision WHERE {scope}", args)
+                mappings = conn.execute(f"DELETE FROM mapping WHERE {scope}", args).rowcount
+                conn.execute(f"DELETE FROM application_sheet WHERE {scope}", args)
+                applications = conn.execute(f"DELETE FROM parsing_application WHERE {scope}", args).rowcount
+                conn.execute(f"DELETE FROM source_region WHERE {scope}", args)
+                conn.execute(f"DELETE FROM sheet WHERE {scope}", args)
+                conn.execute(f"DELETE FROM snapshot_signature WHERE {scope}", args)
+                count = conn.execute("DELETE FROM document_snapshot WHERE document_id=?", args).rowcount
+                conn.execute("DELETE FROM document WHERE document_id=?", args)
+                # 8. §1.6 스캔 캐시(다음 스캔이 다시 계산한다).
+                conn.execute(
+                    "DELETE FROM source_digest WHERE provider=? AND source_path=?",
+                    (document["provider"], document["source_path"]),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise _integrity(exc) from None
+            finally:
+                conn.execute("DELETE FROM purge_guard WHERE token=?", (token,))
+        for row in reset:
+            profiles_reset.setdefault(row["profile_id"], row)
+        # 커밋 뒤(DB 밖). 실패해도 DB 삭제는 유효하므로 삼키고 기록만 남긴다(§4.4와 같은 규칙).
+        render_error = None
+        for snapshot in snapshots:
+            try:
+                self.render.invalidate(snapshot["snapshot_id"])
+            except Problem as exc:
+                # 캐시가 남으면 지운 문서의 셀 내용이 디스크에 남는다 — 응답·작업 기록에 드러내고 시작 시 회수한다.
+                render_error = render_error or {"code": exc.code, "message": exc.message}
+            except Exception:
+                log.exception("render invalidate failed: %s", snapshot["snapshot_id"])
+                render_error = render_error or {"code": "RENDER_PURGE_FAILED", "message": "렌더 캐시를 지우지 못했습니다. 서버를 다시 시작하면 회수합니다."}
+            from . import drm
+
+            drm.SESSIONS.drop(document["provider"], document["source_path"], snapshot["change_token"], workspace=self.root)
+        result = {
+            "document_id": document_id,
+            "document_name": document["document_name"],
+            "source_ref": document["source_path"],
+            "deleted": {"snapshots": count, "applications": applications, "mappings": mappings, "runs": runs, "values": values},
+            "source_removed": False,
+        }
+        if render_error:
+            result["render_error"] = render_error
+        if purge_source:
+            removed, error = self._purge_source_file(document)
+            result["source_removed"] = removed
+            if error:
+                result["source_error"] = error
+        return result
+
+    def _delete_documents(self, document_ids, purge_source, principal, checkpoint=lambda *a, **k: None):
+        """§4.13 본문 — 한 문서가 한 트랜잭션이고, 한 건이 실패해도 나머지를 막지 않는다(요약이 결과물이다)."""
+        profiles_reset, documents = {}, []
+        deleted = failed = 0
+        total = len(document_ids)
+
+        def summary():
+            return {
+                "documents": list(documents),
+                "profiles_reset": [{"profile_id": p["profile_id"], "profile_name": p["profile_name"]} for p in profiles_reset.values()],
+                "summary": {"requested": total, "deleted": deleted, "failed": failed},
+            }
+
+        checkpoint(0, total, force=True)
+        try:
+            for n, document_id in enumerate(document_ids):
+                try:
+                    row = self._delete_one(document_id, purge_source, principal, profiles_reset)
+                    deleted += 1
+                except Cancelled:
+                    raise
+                except Problem as exc:
+                    failed += 1
+                    row = {
+                        "document_id": document_id,
+                        "document_name": None,
+                        "source_ref": None,
+                        "deleted": {"snapshots": 0, "applications": 0, "mappings": 0, "runs": 0, "values": 0},
+                        "source_removed": False,
+                        "error": {"code": exc.code, "message": exc.message},
+                    }
+                documents.append(row)
+                # 되돌릴 수 없는 삭제라 문서마다(force) 진행률과 **그때까지의 요약**을 함께 적는다 —
+                # 서버가 중단돼(INTERRUPTED) 결과를 쓰지 못해도 무엇이 사라졌는지 작업 기록에 남는다.
+                checkpoint(n + 1, total, force=True, result=summary())
+            checkpoint(total, total, force=True, result=summary())
+        except Cancelled as exc:
+            # Jobs._fail이 result_json·진행률로 적는다(§4.13 '취소하면 result_json은 그때까지의 요약').
+            exc.partial, exc.completed = summary(), len(documents)
+            raise
+        return summary()
+
+    def delete_document(self, document_id, purge_source=False, principal=None):
+        """`DELETE /documents/{id}` — 단건·동기. 작업 내역(kind='delete')에 무엇을 지웠는지 남긴다."""
+        principal = principal or self.principal
+        with self.db.connect() as conn:
+            document = conn.execute("SELECT document_name FROM document WHERE document_id=?", (document_id,)).fetchone()
+        if document is None:
+            raise Problem("UNKNOWN_DOCUMENT", "문서를 찾을 수 없습니다.", 404)
+        payload = {"document_ids": [document_id], "purge_source": bool(purge_source)}
+        # target_id는 언제나 NULL이다 — 지워진 문서를 가리키면 작업 내역의 이동이 없는 문서로 간다.
+        jid = self.jobs.record_sync("delete", principal, "workspace", None, f"{document['document_name']} 삭제", payload)
+        try:
+            result = self._delete_documents([document_id], bool(purge_source), principal)
+        except Problem as exc:
+            self.jobs.finish_sync(jid, error=exc)
+            raise
+        except Exception:
+            self.jobs.finish_sync(jid, error=Problem("JOB_FAILED", "문서를 지우지 못했습니다. 서버 기록을 확인하세요.", 500))
+            raise
+        error = result["documents"][0].get("error")
+        if error:
+            # 단건 경로는 실패를 HTTP 오류로 돌려준다 — 작업 행도 지운 것이 없는 채로 failed다.
+            failure = Problem(error["code"], error["message"], 404 if error["code"] == "UNKNOWN_DOCUMENT" else 409)
+            self.jobs.finish_sync(jid, error=failure)
+            raise failure
+        self.jobs.finish_sync(jid, result)
+        return result
+
+    def delete_documents(self, document_ids, purge_source=False, principal=None, wait=0):
+        """`POST /documents/delete` — 다중·작업. 중복 id는 한 번만 센다(§4.13)."""
+        principal = principal or self.principal
+        if not isinstance(document_ids, list) or not document_ids:
+            raise Problem("VALIDATION_ERROR", "지울 문서를 1개 이상 고르세요.")
+        ids = list(dict.fromkeys(document_ids))
+        if len(ids) > DELETE_LIMIT:
+            raise Problem("TOO_MANY_DOCUMENTS", f"한 번에 최대 {DELETE_LIMIT}개까지 지울 수 있습니다. 나누어 지우세요.")
+        job = self.jobs.submit(
+            "delete", {"document_ids": ids, "purge_source": bool(purge_source)}, principal, uid(),
+            target_kind="workspace", target_id=None, label=f"문서 {len(ids)}개 삭제",
+        )
+        return self.job_result(job, wait, principal)
+
+    def _delete_job(self, payload, principal, checkpoint):
+        return self._delete_documents(payload["document_ids"], bool(payload.get("purge_source")), principal, checkpoint)
 
     # ---- 값 조회 ---------------------------------------------------------------------------
     def _value_public(self, r, regions, firsts):
@@ -2986,11 +3281,33 @@ class Service:
             result = page(found, limit, ("sort_key", "document_id"), scope)
             snapshot_ids = [d["current_snapshot_id"] for d in result["items"] if d["current_snapshot_id"]]
             aggs = self._application_aggregates(conn, "a.snapshot_id IN (%s)" % ",".join("?" for _ in snapshot_ids), tuple(snapshot_ids)) if snapshot_ids else []
-        result["items"] = [self._document_public(d, [a for a in aggs if a["snapshot_id"] == d["current_snapshot_id"]]) for d in result["items"]]
+            references = self._reference_profiles(conn, [d["document_id"] for d in result["items"]])
+        result["items"] = [
+            self._document_public(d, [a for a in aggs if a["snapshot_id"] == d["current_snapshot_id"]], references.get(d["document_id"], []))
+            for d in result["items"]
+        ]
         return result
 
+    def _reference_profiles(self, conn, document_ids):
+        """document_id → [{profile_id, profile_name}] — 그 문서를 대표 문서로 삼은 프로파일(§4.13).
+
+        현재 snapshot만 보면 안 된다: 새 snapshot이 생겨도 `reference_application_id`는 옛 snapshot의 적용 건을 가리키고,
+        삭제는 그 문서의 **모든** snapshot을 지우므로 그때도 프로파일이 초안으로 내려간다."""
+        if not document_ids:
+            return {}
+        out = {}
+        for r in conn.execute(
+            "SELECT DISTINCT s.document_id, p.profile_id, p.profile_name FROM parsing_profile p "
+            "JOIN parsing_application a ON a.application_id=p.reference_application_id "
+            "JOIN document_snapshot s ON s.snapshot_id=a.snapshot_id WHERE s.document_id IN (%s) ORDER BY p.profile_name"
+            % ",".join("?" for _ in document_ids),
+            tuple(document_ids),
+        ):
+            out.setdefault(r["document_id"], []).append({"profile_id": r["profile_id"], "profile_name": r["profile_name"]})
+        return out
+
     @staticmethod
-    def _document_public(d, aggs):
+    def _document_public(d, aggs, reference_of=()):
         schemas = {}
         for a in aggs:
             schemas.setdefault(a["schema_key"], {"schema_key": a["schema_key"], "schema_name": a["schema_name"]})
@@ -3008,6 +3325,8 @@ class Service:
                 for a in aggs
             ],
             "schemas": list(schemas.values()),
+            # 이 문서를 대표 문서로 삼은 프로파일. 지우면 초안으로 내려가므로(§4.13) 화면이 삭제 **전에** 경고한다.
+            "reference_of": list(reference_of),
             "last_processed_at": d["last_processed_at"],
             "last_error": d["last_error"],
             "created_at": d["created_at"],
@@ -3018,7 +3337,8 @@ class Service:
         with self.db.connect() as conn:
             d = one(conn, "SELECT d.*, s.revision_no, s.captured_at, s.change_token, s.content_sha256 FROM document d LEFT JOIN document_snapshot s ON s.snapshot_id=d.current_snapshot_id WHERE d.document_id=?", (document_id,), "문서를 찾을 수 없습니다.")
             aggs = self._application_aggregates(conn, "a.snapshot_id=?", (d["current_snapshot_id"],)) if d["current_snapshot_id"] else []
-        return self._document_public(d, aggs)
+            references = self._reference_profiles(conn, [document_id])
+        return self._document_public(d, aggs, references.get(document_id, []))
 
     def document_snapshots(self, document_id):
         with self.db.connect() as conn:

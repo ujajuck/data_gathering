@@ -3,6 +3,40 @@
 작업 단위(=커밋)마다 한 항목씩 기록한다. 상세 근거·검증 방법은 각 커밋
 메시지에 있고, 여기는 흐름을 한눈에 보는 색인이다. 최신이 위.
 
+## 2026-09-15 — 문서 삭제·스키마 폐기 (claude/system-redesign-e2e-docs)
+
+- **되돌릴 수 없는 정리에 길을 냈다 — 문서는 지우고, 정의는 폐기한다** (이 커밋)
+  - **막다른 길**: 문서를 지울 수 없어 적용 기록이 영원히 남고 → 프로파일은 폐기만 되고 → 그 스키마도 못 지웠다.
+    잘못된 폴더를 일괄 등록하면 되돌릴 방법이 아예 없었다. 진실이 무엇인가로 갈랐다 —
+    `<ws>/data/raw`의 원본과 `<ws>/schemas`·`<ws>/profiles`의 정의만 진실이고, 문서 아래 기록은 전부 그 둘에서
+    다시 만들 수 있는 파생물이다(근거: [decisions.md §19](design/decisions.md))
+  - **문서 삭제(§4.13)**: `DELETE /documents/{id}`(단건·동기)와 `POST /documents/delete`(다중·작업, 한 번에 200개까지).
+    그 문서의 snapshot·시트·영역·서명·적용 건·매핑·리비전·추출 실행·값·렌더 캐시·`source_digest`를 지우고,
+    원본 파일·정의·작업 내역은 남긴다. `purge_source=true`면 `data/raw`의 원본 **하나**만 지우되 경로를 등록 때와 같은
+    규칙으로 정규화하고 심볼릭 링크는 따라가지 않으며 raw 밖이면 지우지 않는다 — 원본 삭제가 실패해도 DB 삭제는 유효하고
+    `source_error{code}`로만 알린다(`summary.failed`에 세지 않는다). 대표 문서를 지우면 그 프로파일은 초안으로 내려가고
+    (`profiles_reset[]`), 지운 내역은 `runtime_job(kind='delete', target_id=NULL)`에 남는다
+  - **불변식을 삭제에 한해 좁혔다(§1.10)**: 불변 테이블 여덟 개의 **DELETE 거부 트리거에만**
+    `WHERE NOT EXISTS (SELECT 1 FROM purge_guard)`를 달아, 삭제 트랜잭션이 가드 행을 넣고 지운 뒤 커밋 전에 닫는 동안에만 통과한다.
+    가드 밖에서 친 `DELETE FROM extracted_value`는 여전히 ABORT이고 **`<table>_no_update` 여덟 개는 한 글자도 바꾸지 않았다**.
+    옛 작업 공간을 위한 이관 2건도 넣었다 — `runtime_job.kind` CHECK에 `'delete'`를 넣는 표 재작성(`CREATE TABLE IF NOT EXISTS`로는
+    안 바뀌어 옛 DB에서 삭제가 `CHECK constraint failed`로 죽는다)과 `purge_guard`·트리거 추가(정의를 코어 DDL 파일에서 그대로 읽는다)
+  - **스키마 폐기(§4.2.3)**: `parsing_schema.status`의 `'deprecated'`는 DDL에 처음부터 있었는데 그것을 설정하는 API도 화면도 없었다.
+    `POST /schemas/{key}/deprecate`·`/activate`(응답은 `GET /schemas/{key}`와 같은 형태)와 `GET /schemas?status=`(기본 `active`)를 넣었다.
+    폐기 스키마는 목록 기본·새 프로파일 대상·데이터 빌드 선택에서 빠지고 `POST /profiles`가 422 `SCHEMA_DEPRECATED`로 막히지만,
+    **이미 승인된 프로파일은 새 문서에 계속 적용된다**(멈추려면 프로파일을 폐기한다). 낱말은 프로파일과 맞춰 **'폐기' 하나**로 통일하고
+    `frontend/tests/terms.test.tsx`가 '비활성화'를 금지어로 막는다
+  - **저순위 결함(백엔드)**: `SessionCache.acquire`가 해제본을 추적하기 **전에** `prune`을 부르던 순서를 뒤집었다 —
+    정리에서 예외가 나면 이미 끝난 해제가 실패로 보고되고 세션이 미아가 되어(`release_all`이 모르는) TTL 0 평문이 남았다.
+    정리는 부수적이므로 예외를 삼킨다. 나머지 다섯 건(`.gitignore`의 `**/data/audit/` 하위 경로 · `GET /schemas/{key}/revisions/0`의 422 ·
+    `SCHEMA_ACCESS_TOKEN` 개명 경고 · 감사 줄 `temp_removed`가 실제 삭제 수 · 마지막 필드의 `LAST_FIELD`와 안내)은
+    재현해 보니 **이미 고쳐져 있어** 손대지 않고 회귀 테스트만 보강했다
+  - 문서: 아키텍처 §1(ERD에 `purge_guard`·표 23개·인덱스 39개·트리거 이름 2건 정정, 좁힌 불변식) · §2(모듈 표) ·
+    **§2.6 문서 삭제와 정의 폐기**(시퀀스) · §3(API 지도) · §4(선택 바·폐기 버튼) · §5(테스트 표) · §6(백업 대상),
+    README에 **만들고 고치고 치우는 법** 표(문서=삭제 / 스키마·프로파일=폐기, 쓰이지 않은 것만 삭제), 결정 [§19](design/decisions.md)
+  - 검증: `python3 -m pytest tests -q -p no:cacheprovider` **287 passed · 50 subtests**(53.7s) ·
+    `cd frontend && npx vitest run` **15 files / 168 tests passed** · 브라우저 E2E 결과는 [e2e-results.md](e2e-results.md)
+
 ## 2026-09-14 — 재설계·레거시 정리 (claude/system-redesign-e2e-docs)
 
 - **리뷰 반영 2차 — 보호 문서 파생물·출처 방어·삭제 경로의 빈자리** (이 커밋 — 적대적 리뷰 high 7 / medium 20건)

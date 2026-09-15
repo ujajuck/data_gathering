@@ -131,6 +131,8 @@ export function documentRows(): DocumentRow[] {
           ]
         : [],
       schemas: hasProfile ? [SCHEMA] : [],
+      // 첫 문서가 그 프로파일의 대표 문서다(§4.13 — 지우면 프로파일이 초안으로 내려간다).
+      reference_of: i === 0 ? [{ profile_id: ids.profile, profile_name: "공정데이터_A양식" }] : [],
       last_processed_at: status === "locked" ? null : iso(30 * (i + 1)),
       last_error: status === "failed" ? "선택자 'find 온도'가 시트 Sheet1에서 셀을 찾지 못했습니다." : status === "locked" ? "DRM Reader가 필요합니다." : null,
     };
@@ -503,7 +505,11 @@ export function appFixture() {
           { rev: 1, current: false, created_at: iso(3000), byte_size: 1024, rule_count: 2 },
         ]),
     ],
-    ["GET", /^\/schemas$/, () => page(schemaRows)],
+    // §4.2.3 목록 상태 필터: 기본은 active. 화면이 파라미터를 붙이지 않으면 활성만 돌려준다.
+    ["GET", /^\/schemas$/, (_, call) => {
+      const status = call.url.searchParams.get("status") || "active";
+      return page(schemaRows.filter((s) => status === "all" || (s.status || "active") === status));
+    }],
     ["GET", /^\/schemas\/([^/]+)$/, (m) => schemaRows.find((s) => s.schema_key === m[1]) || reply(404, errorBody("NOT_FOUND", "스키마를 찾을 수 없습니다."))],
     ["GET", /^\/schemas\/([^/]+)\/tree$/, () => schemaTree],
     ["GET", /^\/schemas\/([^/]+)\/graph$/, () => ({

@@ -344,6 +344,13 @@ CREATE TABLE extracted_value_region (
 );
 CREATE INDEX value_region_by_region ON extracted_value_region(region_id);
 
+-- §1.10 삭제 가드. 커밋된 DB에서는 언제나 비어 있다 — §4.13 문서 삭제가 같은 트랜잭션에서 행을 넣고 지운다.
+-- 아래 DELETE 거부 트리거 여덟 개가 이 표를 보고, 가드가 열린 트랜잭션 안에서만 DELETE가 통과한다.
+CREATE TABLE purge_guard (
+    token TEXT PRIMARY KEY NOT NULL,
+    opened_at TIMESTAMPTZ NOT NULL
+);
+
 -- §1.7 뷰: 현재 snapshot의 발행된 실행 값만.
 CREATE VIEW current_value AS
 SELECT d.document_id, a.application_id, a.profile_id, v.*
@@ -361,6 +368,25 @@ END
 $fn$;
 
 -- 완료된 실행만 거부하는 불변 트리거(INSERT 뒤 queued/running 동안은 갱신 가능).
+-- §1.10 삭제 가드: purge_guard에 행이 있는 트랜잭션(= §4.13 문서 삭제)에서만 DELETE가 통과한다.
+CREATE OR REPLACE FUNCTION v3_reject_delete_unless_purging() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM purge_guard) THEN
+        RAISE EXCEPTION '%', TG_ARGV[0];
+    END IF;
+    RETURN OLD;
+END
+$fn$;
+
+CREATE OR REPLACE FUNCTION v3_reject_finished_run_delete() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+    IF OLD.status IN ('succeeded','failed','cancelled') AND NOT EXISTS (SELECT 1 FROM purge_guard) THEN
+        RAISE EXCEPTION 'extraction_run is immutable after completion';
+    END IF;
+    RETURN OLD;
+END
+$fn$;
+
 CREATE OR REPLACE FUNCTION v3_reject_finished_run() RETURNS trigger LANGUAGE plpgsql AS $fn$
 BEGIN
     IF OLD.status IN ('succeeded','failed','cancelled') THEN
@@ -612,35 +638,35 @@ CREATE TRIGGER application_identity BEFORE UPDATE ON parsing_application
 CREATE TRIGGER extraction_run_no_update BEFORE UPDATE ON extraction_run
     FOR EACH ROW WHEN (OLD.status IN ('succeeded','failed','cancelled')) EXECUTE FUNCTION v3_reject_finished_run();
 CREATE TRIGGER extraction_run_no_delete BEFORE DELETE ON extraction_run
-    FOR EACH ROW WHEN (OLD.status IN ('succeeded','failed','cancelled')) EXECUTE FUNCTION v3_reject_finished_run();
+    FOR EACH ROW WHEN (OLD.status IN ('succeeded','failed','cancelled')) EXECUTE FUNCTION v3_reject_finished_run_delete();
 CREATE TRIGGER run_state_transition BEFORE UPDATE ON extraction_run
     FOR EACH ROW WHEN (OLD.status IN ('queued','running')) EXECUTE FUNCTION v3_run_state_transition();
 
 CREATE TRIGGER document_snapshot_no_update BEFORE UPDATE ON document_snapshot
     FOR EACH ROW EXECUTE FUNCTION v3_reject('document_snapshot is immutable');
 CREATE TRIGGER document_snapshot_no_delete BEFORE DELETE ON document_snapshot
-    FOR EACH ROW EXECUTE FUNCTION v3_reject('document_snapshot is immutable');
+    FOR EACH ROW EXECUTE FUNCTION v3_reject_delete_unless_purging('document_snapshot is immutable');
 CREATE TRIGGER sheet_no_update BEFORE UPDATE ON sheet
     FOR EACH ROW EXECUTE FUNCTION v3_reject('sheet is immutable');
 CREATE TRIGGER sheet_no_delete BEFORE DELETE ON sheet
-    FOR EACH ROW EXECUTE FUNCTION v3_reject('sheet is immutable');
+    FOR EACH ROW EXECUTE FUNCTION v3_reject_delete_unless_purging('sheet is immutable');
 CREATE TRIGGER source_region_no_update BEFORE UPDATE ON source_region
     FOR EACH ROW EXECUTE FUNCTION v3_reject('source_region is immutable');
 CREATE TRIGGER source_region_no_delete BEFORE DELETE ON source_region
-    FOR EACH ROW EXECUTE FUNCTION v3_reject('source_region is immutable');
+    FOR EACH ROW EXECUTE FUNCTION v3_reject_delete_unless_purging('source_region is immutable');
 CREATE TRIGGER mapping_revision_no_update BEFORE UPDATE ON mapping_revision
     FOR EACH ROW EXECUTE FUNCTION v3_reject('mapping_revision is immutable');
 CREATE TRIGGER mapping_revision_no_delete BEFORE DELETE ON mapping_revision
-    FOR EACH ROW EXECUTE FUNCTION v3_reject('mapping_revision is immutable');
+    FOR EACH ROW EXECUTE FUNCTION v3_reject_delete_unless_purging('mapping_revision is immutable');
 CREATE TRIGGER mapping_region_no_update BEFORE UPDATE ON mapping_region
     FOR EACH ROW EXECUTE FUNCTION v3_reject('mapping_region is immutable');
 CREATE TRIGGER mapping_region_no_delete BEFORE DELETE ON mapping_region
-    FOR EACH ROW EXECUTE FUNCTION v3_reject('mapping_region is immutable');
+    FOR EACH ROW EXECUTE FUNCTION v3_reject_delete_unless_purging('mapping_region is immutable');
 CREATE TRIGGER extracted_value_no_update BEFORE UPDATE ON extracted_value
     FOR EACH ROW EXECUTE FUNCTION v3_reject('extracted_value is immutable');
 CREATE TRIGGER extracted_value_no_delete BEFORE DELETE ON extracted_value
-    FOR EACH ROW EXECUTE FUNCTION v3_reject('extracted_value is immutable');
+    FOR EACH ROW EXECUTE FUNCTION v3_reject_delete_unless_purging('extracted_value is immutable');
 CREATE TRIGGER extracted_value_region_no_update BEFORE UPDATE ON extracted_value_region
     FOR EACH ROW EXECUTE FUNCTION v3_reject('extracted_value_region is immutable');
 CREATE TRIGGER extracted_value_region_no_delete BEFORE DELETE ON extracted_value_region
-    FOR EACH ROW EXECUTE FUNCTION v3_reject('extracted_value_region is immutable');
+    FOR EACH ROW EXECUTE FUNCTION v3_reject_delete_unless_purging('extracted_value_region is immutable');

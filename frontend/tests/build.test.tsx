@@ -61,6 +61,30 @@ describe("데이터 빌드 화면", () => {
     expect(getBuildDraft().document_ids).toHaveLength(2);
   });
 
+  // §4.2.3: 목록 기본은 활성만이다. draft에 남아 있던 폐기 스키마는 선택지에 그대로 두고 진행을 막지 않는다.
+  it("2단계: draft의 폐기 스키마는 목록에 없어도 `폐기` 칩과 함께 그대로 보인다", async () => {
+    const f = buildFixture({ schemaKey: "legacy_std" });
+    f.overrides.set("GET /schemas/legacy_std", () => ({
+      schema_key: "legacy_std",
+      schema_name: "옛 공정 표준",
+      current_rev: 2,
+      status: "deprecated",
+      field_count: 4,
+      profile_count: 1,
+      document_count: 2,
+    }));
+    f.renderApp("?screen=build&step=2");
+    await screen.findByRole("heading", { name: "파싱 스키마 선택" });
+    await f.waitForApi(/^\/schemas$/);
+    // 목록에 없으므로 상세를 한 번 읽어 이름·상태를 채운다.
+    await f.waitForApi(/^\/schemas\/legacy_std$/);
+    const select = (await screen.findByLabelText("파싱 스키마")) as HTMLSelectElement;
+    expect(select.value).toBe("legacy_std");
+    expect(within(select).getByRole("option", { name: /옛 공정 표준 v2/ })).toBeTruthy();
+    expect(screen.getByText("폐기", { selector: ".app-chip" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "다음: 출력 설정" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("2단계: 스키마를 고르면 schema_key로 후보를 다시 조회하고, 3단계 헤더는 빈 값·중복이면 오류와 함께 다음이 비활성화된다", async () => {
     const f = buildFixture();
     f.renderApp("?screen=build");

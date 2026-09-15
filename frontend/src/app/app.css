@@ -1219,6 +1219,12 @@
   flex-direction: column;
   gap: 4px;
 }
+/* 되돌릴 수 없는 삭제의 확인 목록: 200건도 스크롤로 전부 확인할 수 있게 한다(§4.13). */
+.app-scroll-list {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 6px;
+}
 .app-region-list li {
   display: flex;
   align-items: center;

@@ -1,8 +1,8 @@
 // 문서 화면 테스트 픽스처: 공용 appFixture 위에 원본 폴더 트리(GET /sources?directory=)와 파일별 등록 결과
-// (POST /documents/register?wait=10), 폴더 일괄 등록(§4.1.1 GET /sources/scan · POST /documents/register-directory)을
-// 덧붙인다.
-import type { RegisterResult, SourceEntry, SourceScan } from "../src/app/types";
-import { job, page, uuid, appFixture } from "./fixture";
+// (POST /documents/register?wait=10), 폴더 일괄 등록(§4.1.1 GET /sources/scan · POST /documents/register-directory),
+// 문서 삭제(§4.13 DELETE /documents/{id} · POST /documents/delete)를 덧붙인다.
+import type { DocumentDeleteResult, DocumentDeleteRow, DocumentRow, RegisterResult, SourceEntry, SourceScan } from "../src/app/types";
+import { ids, job, page, uuid, appFixture } from "./fixture";
 
 type Row = Record<string, any>;
 
@@ -93,9 +93,75 @@ export function registerDirectoryResult(directory: string, includeUnchanged = fa
   };
 }
 
+// §4.13 삭제 결과 한 행. 지운 행 수는 문서마다 조금씩 다르게 둔다(요약이 이 다섯 수를 세지 않는다는 것을 확인할 수 있게).
+export function deletedRow(doc: DocumentRow, purge: boolean, index: number): DocumentDeleteRow {
+  const removable = doc.provider === "local-xlsx";
+  return {
+    document_id: doc.document_id,
+    document_name: doc.document_name,
+    source_ref: `2024/${doc.document_name}`,
+    deleted: { snapshots: 1 + index, applications: doc.profiles.length, mappings: 2, runs: 1, values: 40 + index },
+    source_removed: purge && removable,
+    source_error: purge && !removable ? { code: "PURGE_UNSUPPORTED", message: "로컬 원본이 아니어서 원본 파일을 지울 수 없습니다." } : null,
+  };
+}
+
+// 대표 문서(공정데이터_2024_01.xlsx)를 지우면 그 프로파일이 초안으로 내려간다(§4.13 대표 문서 참조 되돌림).
+export function documentDeleteResult(documents: DocumentRow[], requested: string[], purge: boolean): DocumentDeleteResult {
+  const unique = [...new Set(requested)];
+  const rows = unique.map((id, i) => {
+    const doc = documents.find((d) => d.document_id === id);
+    return doc
+      ? deletedRow(doc, purge, i)
+      : ({
+          document_id: id,
+          document_name: null,
+          source_ref: null,
+          deleted: { snapshots: 0, applications: 0, mappings: 0, runs: 0, values: 0 },
+          source_removed: false,
+          error: { code: "UNKNOWN_DOCUMENT", message: "문서를 찾을 수 없습니다." },
+        } as DocumentDeleteRow);
+  });
+  const failed = rows.filter((r) => r.error).length;
+  return {
+    documents: rows,
+    profiles_reset: unique.includes(ids.document(1)) ? [{ profile_id: ids.profile, profile_name: "공정데이터_A양식" }] : [],
+    summary: { requested: unique.length, deleted: unique.length - failed, failed },
+  };
+}
+
 export function documentsFixture() {
   const f = appFixture();
   const registered: Row[] = [];
+  // 삭제 호출 기록: {ids, purge, wait}. 목록에서도 실제로 지워 목록 갱신을 확인할 수 있게 한다.
+  const deleted: Row[] = [];
+  const applyDelete = (requested: string[], purge: boolean) => {
+    const result = documentDeleteResult(f.state.documents, requested, purge);
+    const gone = new Set(result.documents.filter((r) => !r.error).map((r) => r.document_id));
+    f.state.documents = f.state.documents.filter((d) => !gone.has(d.document_id));
+    return result;
+  };
+  for (const doc of f.state.documents)
+    f.overrides.set(`DELETE /documents/${doc.document_id}`, (call) => {
+      const purge = call.url.searchParams.get("purge_source") === "true";
+      deleted.push({ ids: [doc.document_id], purge, single: true });
+      return applyDelete([doc.document_id], purge);
+    });
+  f.overrides.set("POST /documents/delete", (call) => {
+    const requested: string[] = call.body?.document_ids || [];
+    const purge = !!call.body?.purge_source;
+    deleted.push({ ids: requested, purge, wait: call.url.searchParams.get("wait") });
+    const result = applyDelete(requested, purge);
+    return job({
+      kind: "delete",
+      target_kind: "workspace",
+      target_id: null,
+      label: `문서 ${result.summary.requested}개 삭제`,
+      completed: result.summary.requested,
+      total: result.summary.requested,
+      result: result as unknown as Row,
+    });
+  });
   const scanned: Row[] = [];
   const registeredDirectory: Row[] = [];
   f.overrides.set("GET /sources", (call) => page(SOURCE_TREE[call.url.searchParams.get("directory") || ""] || []));
@@ -123,5 +189,5 @@ export function documentsFixture() {
       result: result as unknown as Row,
     });
   });
-  return { ...f, registered, scanned, registeredDirectory };
+  return { ...f, registered, scanned, registeredDirectory, deleted };
 }

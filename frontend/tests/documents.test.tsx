@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STATUS_LABELS, STATUS_ORDER } from "../src/app/types";
 import { getBuildDraft } from "../src/app/buildDraft";
 import { UUID_RE, errorBody, job, page, reply, appFixture } from "./fixture";
-import { documentsFixture, registerDirectoryResult } from "./documents-fixture";
+import { documentDeleteResult, documentsFixture, registerDirectoryResult } from "./documents-fixture";
 
 const route = () => new URLSearchParams(location.search);
 const documentsTable = () => screen.findByRole("table", { name: "문서 목록" });
@@ -593,5 +593,311 @@ describe("폴더 일괄 등록(§4.1.1)", () => {
     await user.click(footer(dialog).getByRole("button", { name: "추가 등록" }));
     expect(await within(dialog).findByRole("table", { name: "원본 파일 목록" })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "원본 폴더 전체 등록" })).toBeTruthy();
+  });
+});
+
+// §4.13 문서 삭제 — 되돌릴 수 없는 일이라 무엇을 지우는지 확인 대화상자가 이름으로 말하고, 원본 파일 삭제는 기본 해제다.
+describe("문서 삭제(§4.13)", () => {
+  const deleteDialog = () => screen.findByRole("dialog", { name: "문서 삭제" });
+  const confirmButton = (dialog: HTMLElement) => footer(dialog).getByRole("button", { name: "삭제" });
+
+  // 목록에서 두 문서를 고르고 선택 바의 `삭제`를 눌러 확인 대화상자까지 연다.
+  async function selectTwo() {
+    const f = documentsFixture();
+    f.renderApp("?screen=documents");
+    await documentsTable();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("checkbox", { name: "공정데이터_2024_01.xlsx 선택" }));
+    await user.click(screen.getByRole("checkbox", { name: "공정데이터_2024_02.xlsx 선택" }));
+    await user.click(within(screen.getByRole("region", { name: "선택한 문서" })).getByRole("button", { name: "삭제" }));
+    return { f, user, dialog: await deleteDialog() };
+  }
+
+  it("선택 바의 `삭제`는 문서 수·이름과 기본 해제된 원본 체크박스를 보이고, 확인하면 POST /documents/delete를 부른다", async () => {
+    const { f, user, dialog } = await selectTwo();
+    expect(dialog.textContent).toContain("문서 2개를 지웁니다. 각 문서의 snapshot·적용 건·매핑·추출값이 함께 사라지고 되돌릴 수 없습니다.");
+    const listed = within(dialog).getByRole("list", { name: "지울 문서" });
+    expect(within(listed).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["공정데이터_2024_01.xlsx", "공정데이터_2024_02.xlsx"]);
+    const purge = within(dialog).getByRole("checkbox", { name: /원본 파일도 함께 지우기/ });
+    expect((purge as HTMLInputElement).checked).toBe(false);
+    expect(dialog.textContent).toContain("체크하지 않으면 원본 파일은 그대로 남고, 다시 등록하면 같은 문서가 만들어집니다.");
+    expect(footer(dialog).getByRole("button", { name: "취소" })).toBeTruthy();
+
+    await user.click(confirmButton(dialog));
+    await f.waitForApi(/^\/documents\/delete\?wait=10/, "POST");
+    expect(f.deleted).toHaveLength(1);
+    expect(f.deleted[0]).toMatchObject({ ids: [f.ids.document(1), f.ids.document(2)], purge: false, wait: "10" });
+    expect(f.callsTo(/^\/documents\/delete/, "POST")[0].body).toEqual({
+      document_ids: [f.ids.document(1), f.ids.document(2)],
+      purge_source: false,
+    });
+    // 실패가 없으면 대화상자는 닫히고 결과는 토스트로 요약한다(대표 문서를 지웠으므로 프로파일 초안 줄이 붙는다).
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "문서 삭제" })).toBeNull());
+    const toast = await screen.findByText(/문서 2개를 지웠습니다\./);
+    expect(toast.textContent).toContain("파싱 프로파일 1개가 초안으로 내려갔습니다 — 대표 문서를 다시 지정해 승인하세요.");
+    expect(toast.textContent).not.toContain("원본 파일");
+    // 초안으로 내려간 프로파일을 바로 볼 수 있게 목록으로 가는 길을 붙인다.
+    expect(screen.getByRole("button", { name: "파싱 프로파일 열기" })).toBeTruthy();
+    // 목록을 다시 읽고 선택을 비운다.
+    await waitFor(() => expect(screen.queryByText("2개 선택")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "공정데이터_2024_01.xlsx 선택" })).toBeNull());
+  });
+
+  it("원본 파일도 함께 지우기를 켜면 purge_source=true로 보내고 결과에 원본 삭제 수를 알린다", async () => {
+    const { f, user, dialog } = await selectTwo();
+    await user.click(within(dialog).getByRole("checkbox", { name: /원본 파일도 함께 지우기/ }));
+    await user.click(confirmButton(dialog));
+    await f.waitForApi(/^\/documents\/delete\?wait=10/, "POST");
+    expect(f.callsTo(/^\/documents\/delete/, "POST")[0].body.purge_source).toBe(true);
+    const toast = await screen.findByText(/문서 2개를 지웠습니다\./);
+    expect(toast.textContent).toContain("원본 파일 2개도 지웠습니다.");
+  });
+
+  it("상세 드로어의 `삭제`는 같은 대화상자를 단건 문구로 열고 DELETE /documents/{id}를 부른다", async () => {
+    const f = documentsFixture();
+    f.renderApp(`?screen=documents&document=${f.ids.document(2)}`);
+    const drawer = await screen.findByRole("dialog", { name: "문서 상세" });
+    const user = userEvent.setup();
+    await user.click(await within(drawer).findByRole("button", { name: "삭제" }));
+    const dialog = await deleteDialog();
+    expect(dialog.textContent).toContain("'공정데이터_2024_02.xlsx'을(를) 지웁니다. 이 문서의 snapshot·적용 건·매핑·추출값이 함께 사라지고 되돌릴 수 없습니다.");
+    // 단건에는 이름 목록을 따로 두지 않는다(문구가 이미 이름을 말한다).
+    expect(within(dialog).queryByRole("list", { name: "지울 문서" })).toBeNull();
+    // Escape는 확인 대화상자만 닫는다(뒤의 상세 드로어는 그대로 열려 있다).
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "문서 삭제" })).toBeNull());
+    expect(screen.getByRole("dialog", { name: "문서 상세" })).toBeTruthy();
+    await user.click(within(drawer).getByRole("button", { name: "삭제" }));
+    const reopened = await deleteDialog();
+    await user.click(confirmButton(reopened));
+    await f.waitForApi(new RegExp(`^/documents/${f.ids.document(2)}\\?purge_source=false`), "DELETE");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // 드로어도 함께 닫힌다.
+    expect(route().get("document")).toBeNull();
+    expect(await screen.findByText(/문서 1개를 지웠습니다\./)).toBeTruthy();
+  });
+
+  it("진행 중 작업(DOCUMENT_BUSY)은 대화상자에 그대로 보이고 `삭제`를 잠그지 않는다", async () => {
+    const { f, user, dialog } = await selectTwo();
+    let busy = true;
+    f.overrides.set("POST /documents/delete", (call) => {
+      if (busy) return reply(409, errorBody("DOCUMENT_BUSY", "이 문서에 진행 중인 작업이 있습니다. 끝난 뒤 다시 지우세요."));
+      const result = documentDeleteResult(f.state.documents, call.body?.document_ids || [], false);
+      return job({ kind: "delete", target_kind: "workspace", target_id: null, label: "문서 2개 삭제", result: result as unknown as Record<string, unknown> });
+    });
+    await user.click(confirmButton(dialog));
+    expect((await within(dialog).findByRole("alert")).textContent).toContain("이 문서에 진행 중인 작업이 있습니다. 끝난 뒤 다시 지우세요.");
+    expect((confirmButton(dialog) as HTMLButtonElement).disabled).toBe(false);
+    // 작업이 끝나면 같은 대화상자에서 다시 누를 수 있다(두 문서 모두 그대로 남아 있다).
+    busy = false;
+    await user.click(confirmButton(dialog));
+    await f.waitForApi(/^\/documents\/delete/, "POST", 2);
+    expect(f.callsTo(/^\/documents\/delete/, "POST")[1].body.document_ids).toEqual([f.ids.document(1), f.ids.document(2)]);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "문서 삭제" })).toBeNull());
+  });
+
+  it("한 건이 실패하면 대화상자를 열어 둔 채 무엇이 실패했는지 보이고, 다시 누르면 남은 문서만 보낸다", async () => {
+    const { f, user, dialog } = await selectTwo();
+    let attempt = 0;
+    f.overrides.set("POST /documents/delete", (call) => {
+      attempt++;
+      const requested: string[] = call.body?.document_ids || [];
+      if (attempt === 1)
+        return job({
+          kind: "delete",
+          target_kind: "workspace",
+          target_id: null,
+          label: "문서 2개 삭제",
+          result: {
+            documents: [
+              { document_id: f.ids.document(1), document_name: "공정데이터_2024_01.xlsx", source_ref: "2024/공정데이터_2024_01.xlsx", deleted: { snapshots: 1, applications: 1, mappings: 2, runs: 1, values: 40 }, source_removed: false },
+              { document_id: f.ids.document(2), document_name: "공정데이터_2024_02.xlsx", source_ref: null, deleted: { snapshots: 0, applications: 0, mappings: 0, runs: 0, values: 0 }, source_removed: false, error: { code: "DOCUMENT_BUSY", message: "이 문서에 진행 중인 작업이 있습니다. 끝난 뒤 다시 지우세요." } },
+            ],
+            profiles_reset: [],
+            summary: { requested: 2, deleted: 1, failed: 1 },
+          } as unknown as Record<string, unknown>,
+        });
+      return job({
+        kind: "delete",
+        target_kind: "workspace",
+        target_id: null,
+        label: "문서 1개 삭제",
+        result: {
+          documents: requested.map((id) => ({ document_id: id, document_name: "공정데이터_2024_02.xlsx", source_ref: null, deleted: { snapshots: 1, applications: 1, mappings: 1, runs: 1, values: 3 }, source_removed: false })),
+          profiles_reset: [],
+          summary: { requested: requested.length, deleted: requested.length, failed: 0 },
+        } as unknown as Record<string, unknown>,
+      });
+    });
+    await user.click(confirmButton(dialog));
+    const result = await within(dialog).findByRole("status", { name: "삭제 결과" });
+    expect(result.textContent).toContain("문서 1개를 지웠습니다.");
+    expect(result.textContent).toContain("실패 1건");
+    expect(within(dialog).getByRole("list", { name: "지우지 못한 문서" }).textContent).toContain("이 문서에 진행 중인 작업이 있습니다.");
+    // 남은 한 건만 다시 보낸다 — 이미 지운 문서를 또 보내지 않는다(한 건이므로 단건 경로로 간다).
+    expect(dialog.textContent).toContain("'공정데이터_2024_02.xlsx'을(를) 지웁니다.");
+    await user.click(confirmButton(dialog));
+    await f.waitForApi(new RegExp(`^/documents/${f.ids.document(2)}\\?purge_source=false`), "DELETE");
+    expect(f.callsTo(/^\/documents\/delete/, "POST")).toHaveLength(1);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "문서 삭제" })).toBeNull());
+  });
+
+  it("원본 파일을 지우지 못하면 문서는 지워진 채로 대화상자에 그 사유를 남긴다", async () => {
+    const f = documentsFixture();
+    // 보안 문서(provider가 local-xlsx가 아니다)는 원본을 지울 수 없다.
+    f.renderApp(`?screen=documents&document=${f.ids.document(7)}`);
+    const drawer = await screen.findByRole("dialog", { name: "문서 상세" });
+    const user = userEvent.setup();
+    await user.click(await within(drawer).findByRole("button", { name: "삭제" }));
+    const dialog = await deleteDialog();
+    await user.click(within(dialog).getByRole("checkbox", { name: /원본 파일도 함께 지우기/ }));
+    await user.click(confirmButton(dialog));
+    const result = await within(dialog).findByRole("status", { name: "삭제 결과" });
+    expect(result.textContent).toContain("문서 1개를 지웠습니다.");
+    expect(result.textContent).toContain("원본 파일 1개는 지우지 못했습니다.");
+    expect(within(dialog).getByRole("list", { name: "지우지 못한 원본 파일" }).textContent).toContain("로컬 원본이 아니어서 원본 파일을 지울 수 없습니다.");
+    // 문서는 지워졌으므로 더 지울 것이 없다.
+    expect((confirmButton(dialog) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  // 되돌릴 수 없는 삭제가 도는 중에는 어느 길로도 대화상자가 닫히지 않는다 — 닫히면 사용자는 취소했다고 믿는데
+  // 요청은 끝까지 가고, 부분 실패 내역을 볼 곳이 사라진다(§7).
+  it("삭제가 도는 중에는 Escape·배경 클릭·×가 대화상자를 닫지 않는다", async () => {
+    const { f, user, dialog } = await selectTwo();
+    let release: (value: unknown) => void = () => {};
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    f.overrides.set("POST /documents/delete", async (call) => {
+      await pending;
+      const result = documentDeleteResult(f.state.documents, call.body?.document_ids || [], false);
+      return job({ kind: "delete", target_kind: "workspace", target_id: null, label: "문서 2개 삭제", result: result as unknown as Record<string, unknown> });
+    });
+    await user.click(confirmButton(dialog));
+    await waitFor(() => expect(footer(dialog).getByRole("button", { name: "지우는 중…" })).toBeTruthy());
+    // 취소 버튼이 잠긴 것과 같은 뜻이어야 한다.
+    expect((footer(dialog).getByRole("button", { name: "취소" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(dialog).getByRole("button", { name: "닫기" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "문서 삭제" })).toBeTruthy();
+    const backdrops = document.querySelectorAll(".app-modal-backdrop");
+    fireEvent.click(backdrops[backdrops.length - 1]);
+    expect(screen.getByRole("dialog", { name: "문서 삭제" })).toBeTruthy();
+    release(null);
+    // 요청이 끝나면 그때 닫힌다(취소한 줄 알았던 삭제가 몰래 끝나 있는 일이 없다).
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "문서 삭제" })).toBeNull());
+    expect(await screen.findByText(/문서 2개를 지웠습니다\./)).toBeTruthy();
+  });
+
+  it("검색·필터·정렬이 바뀌면 선택을 비운다 — 화면에 없는 문서가 삭제에 딸려 가지 않는다", async () => {
+    const f = documentsFixture();
+    f.renderApp("?screen=documents");
+    await documentsTable();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("checkbox", { name: "공정데이터_2024_01.xlsx 선택" }));
+    expect(await screen.findByText("1개 선택")).toBeTruthy();
+    await user.selectOptions(screen.getByLabelText("상태"), "review");
+    await waitFor(() => expect(screen.queryByText("1개 선택")).toBeNull());
+    // 정렬도 마찬가지다(필터를 바꾼 뒤 보이는 첫 행을 고른다).
+    const visible = screen.getAllByRole("checkbox").filter((c) => c.getAttribute("aria-label") !== "전체 선택");
+    await user.click(visible[0]);
+    expect(await screen.findByText("1개 선택")).toBeTruthy();
+    await user.click(within(header(/문서명/)).getByRole("button"));
+    await waitFor(() => expect(screen.queryByText("1개 선택")).toBeNull());
+    expect(f.callsTo(/^\/documents\?/).length).toBeGreaterThan(1);
+  });
+
+  it("이름 10개를 넘으면 `외 N개`와 함께 전체 목록을 펼쳐 확인할 수 있다", async () => {
+    const f = documentsFixture();
+    const base = f.state.documents[0];
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      ...base,
+      document_id: f.ids.document(100 + i),
+      document_name: `대량문서_${String(i + 1).padStart(2, "0")}.xlsx`,
+      profiles: [],
+      schemas: [],
+    }));
+    f.overrides.set("GET /documents", () => page(many));
+    f.renderApp("?screen=documents");
+    await documentsTable();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("checkbox", { name: "전체 선택" }));
+    expect(await screen.findByText("12개 선택")).toBeTruthy();
+    await user.click(within(screen.getByRole("region", { name: "선택한 문서" })).getByRole("button", { name: "삭제" }));
+    const dialog = await deleteDialog();
+    expect(within(within(dialog).getByRole("list", { name: "지울 문서" })).getAllByRole("listitem")).toHaveLength(11);
+    expect(dialog.textContent).toContain("외 2개");
+    // 감추지 않는다 — 200건까지도 이름으로 확인할 수 있어야 한다.
+    const all = within(dialog).getByRole("list", { name: "지울 문서 전체" });
+    expect(within(all).getAllByRole("listitem").map((li) => li.textContent)).toEqual(many.map((d) => d.document_name));
+    expect(within(dialog).getByText("지울 문서 12개 모두 보기")).toBeTruthy();
+  });
+
+  it("대표 문서를 지우기 전에 프로파일이 초안으로 내려간다고 알린다", async () => {
+    const f = documentsFixture();
+    f.renderApp(`?screen=documents&document=${f.ids.document(1)}`);
+    const drawer = await screen.findByRole("dialog", { name: "문서 상세" });
+    const user = userEvent.setup();
+    await user.click(await within(drawer).findByRole("button", { name: "삭제" }));
+    const dialog = await deleteDialog();
+    expect(dialog.textContent).toContain("대표 문서입니다 — 파싱 프로파일 '공정데이터_A양식'");
+    expect(dialog.textContent).toContain("새 문서에 자동 적용되지 않습니다.");
+  });
+
+  it("대표 문서가 아니면 초안 경고를 붙이지 않는다", async () => {
+    const f = documentsFixture();
+    f.renderApp(`?screen=documents&document=${f.ids.document(2)}`);
+    const drawer = await screen.findByRole("dialog", { name: "문서 상세" });
+    const user = userEvent.setup();
+    await user.click(await within(drawer).findByRole("button", { name: "삭제" }));
+    expect((await deleteDialog()).textContent).not.toContain("대표 문서입니다");
+  });
+
+  it("확인 대화상자가 열린 동안 뒤의 상세 드로어는 조작할 수 없다(inert)", async () => {
+    const f = documentsFixture();
+    f.renderApp(`?screen=documents&document=${f.ids.document(2)}`);
+    const drawer = await screen.findByRole("dialog", { name: "문서 상세" });
+    const user = userEvent.setup();
+    expect(drawer.hasAttribute("inert")).toBe(false);
+    await user.click(await within(drawer).findByRole("button", { name: "삭제" }));
+    await deleteDialog();
+    // 곧 지울 문서를 빌드 대기열에 넣는 모순 상태를 막는다.
+    expect(drawer.hasAttribute("inert")).toBe(true);
+  });
+
+  it("렌더 캐시를 지우지 못하면 문서는 지워진 채로 그 사실을 남긴다", async () => {
+    const f = documentsFixture();
+    f.overrides.set(`DELETE /documents/${f.ids.document(2)}`, () => ({
+      documents: [
+        {
+          document_id: f.ids.document(2),
+          document_name: "공정데이터_2024_02.xlsx",
+          source_ref: "2024/공정데이터_2024_02.xlsx",
+          deleted: { snapshots: 1, applications: 1, mappings: 2, runs: 1, values: 40 },
+          source_removed: false,
+          render_error: { code: "RENDER_UNAVAILABLE", message: "렌더 서버에 연결할 수 없습니다." },
+        },
+      ],
+      profiles_reset: [],
+      summary: { requested: 1, deleted: 1, failed: 0 },
+    }));
+    f.renderApp(`?screen=documents&document=${f.ids.document(2)}`);
+    const drawer = await screen.findByRole("dialog", { name: "문서 상세" });
+    const user = userEvent.setup();
+    await user.click(await within(drawer).findByRole("button", { name: "삭제" }));
+    const dialog = await deleteDialog();
+    await user.click(confirmButton(dialog));
+    const result = await within(dialog).findByRole("status", { name: "삭제 결과" });
+    expect(result.textContent).toContain("문서 1개의 렌더 캐시를 지우지 못했습니다 — 서버를 다시 시작하면 회수합니다.");
+    expect(within(dialog).getByRole("list", { name: "렌더 캐시를 지우지 못한 문서" }).textContent).toContain("렌더 서버에 연결할 수 없습니다.");
+  });
+
+  it("지워진 문서를 가리키는 옛 작업 내역 행으로 들어가면 404 대신 한 줄로 알린다", async () => {
+    const f = appFixture();
+    f.overrides.set(`GET /documents/${f.ids.document(1)}`, () => reply(404, errorBody("UNKNOWN_DOCUMENT", "문서를 찾을 수 없습니다.")));
+    f.renderApp(`?screen=documents&document=${f.ids.document(1)}`);
+    const drawer = await screen.findByRole("dialog", { name: "문서 상세" });
+    expect(await within(drawer).findByText("이 문서는 삭제되었습니다.")).toBeTruthy();
+    expect(within(drawer).queryByRole("alert")).toBeNull();
   });
 });

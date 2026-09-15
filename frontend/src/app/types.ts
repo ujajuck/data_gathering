@@ -136,6 +136,9 @@ export type DocumentRow = {
   current_snapshot: SnapshotRef | null;
   profiles: DocumentProfile[];
   schemas: SchemaRef[];
+  // 이 문서를 대표 문서로 삼은 파싱 프로파일(§4.13 — 지우면 초안으로 내려간다). 삭제 확인이 미리 알린다.
+  // 현재 snapshot만이 아니라 그 문서의 모든 snapshot을 본다(삭제가 지우는 범위와 같다).
+  reference_of?: { profile_id: string; profile_name: string }[];
   last_processed_at: string | null;
   last_error: string | null;
 };
@@ -238,6 +241,60 @@ export type RegisterResult = {
 export function registerSummaryText(summary: RegisterSummary): string {
   const base = `${summary.targeted}개 중 ${summary.registered}개 등록 · ${summary.unchanged}개 변경 없음 · ${summary.failed}개 실패`;
   return summary.locked ? `${base} · ${summary.locked}개 잠김` : base;
+}
+
+// ---------------------------------------------------------------- 문서 삭제(§4.13)
+
+// 실제로 지운 행 수. 시트·영역·리비전·값 영역·서명은 이 다섯에 딸린 것이라 세지 않는다.
+export type DocumentDeleteCounts = {
+  snapshots: number;
+  applications: number;
+  mappings: number;
+  runs: number;
+  values: number;
+};
+
+export type DocumentDeleteRow = {
+  document_id: string;
+  // 이름을 알 수 없는 실패 행(없는 id)은 null이다.
+  document_name: string | null;
+  source_ref: string | null;
+  deleted: DocumentDeleteCounts;
+  source_removed: boolean;
+  // 원본 파일을 지우려 했으나 못 지운 경우에만 온다(문서 삭제 자체는 성공이다).
+  source_error?: { code: string; message: string } | null;
+  // 렌더 캐시를 지우지 못한 경우에만 온다 — 지운 문서의 셀 내용 파생물이 디스크에 남았다(§4.13).
+  render_error?: { code: string; message: string } | null;
+  // 이 행의 문서 삭제가 실패했을 때만 온다(summary.failed에 센다).
+  error?: { code: string; message: string } | null;
+};
+
+// DELETE /documents/{id} 200 · POST /documents/delete 작업의 result — 두 경로가 같은 형태다.
+export type DocumentDeleteResult = {
+  documents: DocumentDeleteRow[];
+  profiles_reset: { profile_id: string; profile_name: string }[];
+  summary: { requested: number; deleted: number; failed: number };
+};
+
+export const sourceRemovedCount = (result: DocumentDeleteResult): number =>
+  (result.documents ?? []).filter((d) => d.source_removed).length;
+export const sourceFailedCount = (result: DocumentDeleteResult): number =>
+  (result.documents ?? []).filter((d) => !d.source_removed && d.source_error).length;
+export const renderFailedCount = (result: DocumentDeleteResult): number => (result.documents ?? []).filter((d) => d.render_error).length;
+
+// 결과 요약(§7 · §4.13): 첫 줄은 언제나, 나머지는 해당할 때만. 토스트와 대화상자가 같은 문구를 쓴다.
+export function deleteSummaryLines(result: DocumentDeleteResult): string[] {
+  const lines = [`문서 ${result.summary?.deleted ?? 0}개를 지웠습니다.`];
+  const removed = sourceRemovedCount(result);
+  const failedSource = sourceFailedCount(result);
+  if (removed) lines.push(`원본 파일 ${removed}개도 지웠습니다.`);
+  if (failedSource) lines.push(`원본 파일 ${failedSource}개는 지우지 못했습니다.`);
+  const failedRender = renderFailedCount(result);
+  if (failedRender) lines.push(`문서 ${failedRender}개의 렌더 캐시를 지우지 못했습니다 — 서버를 다시 시작하면 회수합니다.`);
+  if (result.summary?.failed) lines.push(`실패 ${result.summary.failed}건`);
+  if (result.profiles_reset?.length)
+    lines.push(`파싱 프로파일 ${result.profiles_reset.length}개가 초안으로 내려갔습니다 — 대표 문서를 다시 지정해 승인하세요.`);
+  return lines;
 }
 
 // ---------------------------------------------------------------- 프로파일
@@ -635,6 +692,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   build: "빌드",
   test: "테스트",
   queue_action: "묶음 처리",
+  delete: "삭제",
 };
 
 export type JobResponse = {

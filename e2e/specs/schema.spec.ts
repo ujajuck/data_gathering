@@ -1,7 +1,8 @@
 // 파싱 스키마 화면 E2E(계약 §8 schema.spec): 목록 → 상세 헤더 → 구조 보기(트리/그래프 토글) → 필드 상세 → 사용 프로파일·연관 문서 탭 추적
-// → 필드에서 Source Review → 필드 편집(alias PATCH) → 변경 이력 → 생성·삭제(§4.2.1·§4.2.2).
-// 세 test()는 같은 작업 공간을 순서대로 쓴다(fullyParallel=false): 1번은 읽기만 하고, 2번이 PATCH로 새 리비전(r2)을 만들며,
-// 3번이 임시 스키마를 만들었다 지우고 사용 중인 필드·스키마 삭제가 409로 막히는지 본다. 모든 단언은 실제 표시 문구를 본다.
+// → 필드에서 Source Review → 필드 편집(alias PATCH) → 변경 이력 → 생성·삭제(§4.2.1·§4.2.2) → 폐기·폐기 해제(§4.2.3).
+// 네 test()는 같은 작업 공간을 순서대로 쓴다(fullyParallel=false): 1번은 읽기만 하고, 2번이 PATCH로 새 리비전(r2)을 만들며,
+// 3번이 임시 스키마를 만들었다 지우고 사용 중인 필드·스키마 삭제가 409로 막히는지 본다. 4번은 시드 스키마를 폐기했다가
+// 되돌린다(정의는 지우지 않는다 — 폐기는 되돌릴 수 있는 일이다). 모든 단언은 실제 표시 문구를 본다.
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { api, collectErrors, openScreen, resetWorkspace } from "./helpers";
@@ -618,7 +619,8 @@ test("새 스키마 생성(생성 전용) · 같은 키 재생성 거부 · 필�
   expect(schemaRefused.json.error.code).toBe("SCHEMA_IN_USE");
   expect(schemaRefused.json.error.detail).toMatchObject({ profile_count: 1, document_count: 4 });
   expect(schemaRefused.json.error.message).toContain(`이 스키마는 파싱 프로파일 1개(${PROFILE_NAME})가 쓰고 있고 적용된 문서가 4개입니다.`);
-  expect(schemaRefused.json.error.message).toContain("프로파일 상세에서 '삭제'한 뒤 다시 시도하세요.");
+  // §4.2.1: 지울 수 없을 때 가능한 행동 둘을 말한다 — 프로파일을 지우거나, 더 쓰지 않으려면 스키마를 '폐기'한다.
+  expect(schemaRefused.json.error.message).toContain("프로파일 상세에서 '삭제'한 뒤 다시 시도하거나, 더 쓰지 않으려면 이 스키마를 '폐기'하세요.");
   // 그 프로파일도 적용된 문서가 있어 지울 수 없다 — 그때 가능한 행동('폐기')만 안내한다.
   const profileRefused = await api(page, "DELETE", `/profiles/${(await api(page, "GET", "/profiles")).json.items[0].profile_id}`);
   expect(profileRefused.status).toBe(409);
@@ -652,5 +654,161 @@ test("새 스키마 생성(생성 전용) · 같은 키 재생성 거부 · 필�
   const conflicts = errors.errors.filter((e) => e.includes("409 (Conflict)"));
   expect(conflicts, "거부된 요청 수만큼의 409 리소스 오류").toHaveLength(3);
   errors.errors.splice(0, errors.errors.length, ...errors.errors.filter((e) => !e.includes("409 (Conflict)")));
+  errors.assertClean();
+});
+
+test("스키마 폐기 → 목록 기본(활성)에서 사라짐 → 상태 필터 · 새 프로파일/데이터 빌드 선택에서 빠짐 → 폐기 해제", async ({ page }) => {
+  const errors = collectErrors(page);
+  await gotoSchema(page, `&schema=${SCHEMA_KEY}`);
+  const detail = schemaDetail(page);
+  const list = schemaList(page);
+  const head = detail.locator(".app-card-head");
+
+  // ---- 시작 상태: 활성 칩 · '폐기' 버튼 하나(폐기 해제는 없다) · 쓰는 프로파일이 있어 '삭제'는 없다.
+  await expect(head.locator(".app-chip").first()).toHaveText("활성");
+  await expect(head.locator(".app-chip").first()).toHaveClass(/\bok\b/);
+  await expect(head.getByRole("button", { name: "폐기", exact: true })).toHaveCount(1);
+  await expect(head.getByRole("button", { name: "폐기 해제" })).toHaveCount(0);
+  await expect(head.getByRole("button", { name: "삭제" })).toHaveCount(0);
+  await expect(detail.getByText("폐기된 스키마입니다.", { exact: false })).toHaveCount(0);
+
+  // ---- '폐기' → 확인 대화상자(§4.2.3 문구 그대로, 주 행동은 '폐기').
+  await head.getByRole("button", { name: "폐기", exact: true }).click();
+  const confirm = page.getByRole("dialog", { name: "스키마 폐기" });
+  await expect(confirm).toBeVisible();
+  await expect(confirm.getByRole("heading", { level: 2, name: "스키마 폐기" })).toBeVisible();
+  await expect(
+    confirm.getByText(
+      `'${SCHEMA_NAME}'을(를) 폐기합니다. 새 파싱 프로파일을 이 스키마에 만들 수 없게 되고 목록 기본에서 숨깁니다. 이미 있는 프로파일·적용 건·추출값은 그대로이며 언제든 '폐기 해제'할 수 있습니다.`,
+    ),
+  ).toBeVisible();
+  await expect(confirm.getByRole("button", { name: "폐기", exact: true })).toBeEnabled();
+  // 취소하면 상태가 그대로다.
+  await confirm.getByRole("button", { name: "취소" }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(head.locator(".app-chip").first()).toHaveText("활성");
+
+  await head.getByRole("button", { name: "폐기", exact: true }).click();
+  const deprecated = page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith(`/api/schemas/${SCHEMA_KEY}/deprecate`));
+  await confirm.getByRole("button", { name: "폐기", exact: true }).click();
+  const deprecateResponse = await deprecated;
+  expect(deprecateResponse.status()).toBe(200);
+  // 응답은 GET /schemas/{key}와 같은 형태다 — 화면이 이 하나로 헤더·칩·버튼을 갱신한다(요약을 돌려주지 않는다).
+  const deprecateBody = await deprecateResponse.json();
+  expect(deprecateBody).toMatchObject({ schema_key: SCHEMA_KEY, schema_name: SCHEMA_NAME, status: "deprecated", profile_count: 1 });
+  expect(deprecateBody.application_count).toBeGreaterThan(0);
+  expect(Array.isArray(deprecateBody.fields)).toBe(true);
+  expect(deprecateBody).toEqual((await api(page, "GET", `/schemas/${SCHEMA_KEY}`)).json);
+  await expect(confirm).toHaveCount(0);
+  await expect(page.locator(".app-toast").filter({ hasText: `'${SCHEMA_NAME}' 스키마를 폐기했습니다.` })).toBeVisible();
+
+  // ---- 상세: 폐기 칩 · 안내 한 줄 · 버튼이 '폐기 해제' 하나로 바뀐다.
+  await expect(head.locator(".app-chip").first()).toHaveText("폐기");
+  await expect(head.locator(".app-chip").first()).toHaveClass(/\bmuted\b/);
+  await expect(head.getByRole("button", { name: "폐기", exact: true })).toHaveCount(0);
+  await expect(head.getByRole("button", { name: "폐기 해제" })).toHaveCount(1);
+  await expect(
+    detail.getByText("폐기된 스키마입니다. 이미 승인된 파싱 프로파일은 새 문서에 계속 적용됩니다 — 멈추려면 프로파일을 폐기하세요."),
+  ).toBeVisible();
+
+  // ---- 목록 기본(활성)에서 사라지고, 상태 필터로 다시 보인다.
+  await expect(list.getByRole("heading", { level: 3 })).toHaveText("스키마 목록 (0)");
+  // 기본값인 '활성'도 필터다 — 하나뿐인 스키마를 폐기했다고 '스키마가 통째로 없다'고 말하면 같은 스키마를 다시 만들게 된다.
+  await expect(
+    list.getByText("활성 파싱 스키마가 없습니다. 폐기한 스키마는 상태를 '폐기'로 바꿔 보고 '폐기 해제'할 수 있습니다."),
+  ).toBeVisible();
+  await expect(list.getByRole("button", { name: "새 스키마" })).toHaveCount(0);
+  await expect(list.getByRole("button", { name: "폐기된 스키마 보기" })).toHaveCount(1);
+  const statusFilter = list.getByLabel("상태");
+  await expect(statusFilter.locator("option")).toHaveText(["활성", "폐기", "전체"]);
+  await expect(statusFilter).toHaveValue("active");
+  await statusFilter.selectOption("deprecated");
+  await expect(page).toHaveURL(/schema_status=deprecated/);
+  await expect(list.getByRole("heading", { level: 3 })).toHaveText("스키마 목록 (1)");
+  const item = list.getByRole("button", { name: new RegExp(SCHEMA_NAME) });
+  await expect(item).toHaveCount(1);
+  await expect(item.locator(".app-chip")).toHaveText("폐기");
+  await statusFilter.selectOption("all");
+  await expect(list.getByRole("heading", { level: 3 })).toHaveText("스키마 목록 (1)");
+  // API도 같은 기준이다: 기본은 활성만.
+  expect((await api(page, "GET", "/schemas")).json.items).toHaveLength(0);
+  expect((await api(page, "GET", "/schemas?status=deprecated")).json.items.map((s: { schema_key: string }) => s.schema_key)).toEqual([SCHEMA_KEY]);
+  expect((await api(page, "GET", "/schemas?status=all")).json.items).toHaveLength(1);
+
+  // ---- 기존 프로파일·적용 건·추출값은 그대로다(폐기는 지우는 일이 아니다).
+  const profiles = await api(page, "GET", `/profiles?schema_key=${SCHEMA_KEY}`);
+  expect(profiles.json.items).toHaveLength(1);
+  expect(profiles.json.items[0]).toMatchObject({ profile_name: PROFILE_NAME, status: "approved" });
+  expect((await api(page, "GET", `/schemas/${SCHEMA_KEY}/documents`)).json.items.length).toBeGreaterThan(0);
+
+  // ---- '새 프로파일' 대화상자의 스키마 선택에서 빠진다.
+  await openScreen(page, "파싱 프로파일");
+  await page.getByRole("button", { name: "+ 새 프로파일" }).click();
+  const profileDialog = page.getByRole("dialog", { name: "새 프로파일" });
+  await expect(profileDialog.getByLabel("파싱 스키마").locator("option")).toHaveText(["스키마 없음"]);
+  await profileDialog.getByRole("button", { name: "취소" }).click();
+  await expect(profileDialog).toHaveCount(0);
+  // 서버도 막는다(422 SCHEMA_DEPRECATED) — 무엇을 하면 되는지 말한다.
+  const refusedProfile = await api(page, "POST", "/profiles", {
+    name: "폐기 스키마 프로파일",
+    schema_key: SCHEMA_KEY,
+    definition: { format: "parsing-profile", schema_version: "3.0", profile_name: "폐기 스키마 프로파일", schema_key: SCHEMA_KEY, rules: [] },
+  });
+  expect(refusedProfile.status).toBe(422);
+  expect(refusedProfile.json.error.code).toBe("SCHEMA_DEPRECATED");
+  expect(refusedProfile.json.error.message).toBe(
+    "폐기된 파싱 스키마에는 새 프로파일을 만들 수 없습니다. 스키마 상세에서 '폐기 해제'한 뒤 다시 시도하세요.",
+  );
+  expect((await api(page, "GET", "/profiles")).json.items).toHaveLength(1);
+
+  // ---- 데이터 빌드 2단계의 스키마 선택에서도 빠진다.
+  await openScreen(page, "문서");
+  await expect(page.getByRole("table", { name: "문서 목록" })).toBeVisible();
+  for (const name of PUBLISHED_DOCUMENTS.slice(0, 2)) await page.getByRole("checkbox", { name: `${name} 선택` }).check();
+  const selection = page.getByRole("region", { name: "선택한 문서" });
+  await expect(selection).toContainText("2개 선택");
+  await selection.getByRole("button", { name: "데이터 빌드에 추가" }).click();
+  await page.locator(".app-toast").filter({ hasText: "데이터 빌드로 이동 ›" }).getByRole("button", { name: "데이터 빌드로 이동" }).click();
+  await expect(page).toHaveURL(/screen=build/);
+  await expect(page.getByRole("heading", { level: 2, name: /^입력 문서 2개/ })).toBeVisible();
+  await page.getByRole("button", { name: "다음: 스키마" }).click();
+  await expect(page.getByRole("heading", { level: 2, name: "파싱 스키마 선택" })).toBeVisible();
+  await expect(page.getByLabel("파싱 스키마").locator("option")).toHaveText(["선택하세요"]);
+
+  // ---- '폐기 해제'는 확인 없이 바로(되돌릴 수 있는 일이다).
+  await page.goto(`/?screen=schema&schema=${SCHEMA_KEY}&schema_status=deprecated`);
+  await expect(head.locator(".app-chip").first()).toHaveText("폐기");
+  const activated = page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith(`/api/schemas/${SCHEMA_KEY}/activate`));
+  await head.getByRole("button", { name: "폐기 해제" }).click();
+  expect((await activated).status()).toBe(200);
+  expect(await (await activated).json()).toMatchObject({ schema_key: SCHEMA_KEY, status: "active" });
+  await expect(page.getByRole("dialog")).toHaveCount(0); // 확인 대화상자를 거치지 않는다
+  await expect(page.locator(".app-toast").filter({ hasText: `'${SCHEMA_NAME}' 스키마의 폐기를 해제했습니다.` })).toBeVisible();
+  await expect(head.locator(".app-chip").first()).toHaveText("활성");
+  await expect(head.getByRole("button", { name: "폐기", exact: true })).toHaveCount(1);
+  await expect(detail.getByText("폐기된 스키마입니다.", { exact: false })).toHaveCount(0);
+  // 기본(활성) 목록에 돌아온다.
+  await page.goto(`/?screen=schema&schema=${SCHEMA_KEY}`);
+  await expect(list.getByRole("heading", { level: 3 })).toHaveText("스키마 목록 (1)");
+  await expect(list.getByRole("button", { name: new RegExp(SCHEMA_NAME) }).locator(".app-chip")).toHaveCount(0);
+  // 새 프로파일 대화상자에도 다시 나온다.
+  await openScreen(page, "파싱 프로파일");
+  await page.getByRole("button", { name: "+ 새 프로파일" }).click();
+  await expect(page.getByRole("dialog", { name: "새 프로파일" }).getByLabel("파싱 스키마").locator("option")).toHaveText([SCHEMA_NAME]);
+  await page.getByRole("dialog", { name: "새 프로파일" }).getByRole("button", { name: "취소" }).click();
+
+  // ---- 같은 상태를 두 번 요청하면 409, 없는 키는 404. 어느 쪽도 상태를 바꾸지 않는다.
+  const activeTwice = await api(page, "POST", `/schemas/${SCHEMA_KEY}/activate`);
+  expect(activeTwice.status).toBe(409);
+  expect(activeTwice.json.error).toMatchObject({ code: "ALREADY_ACTIVE", message: "이미 활성 상태인 스키마입니다." });
+  expect((await api(page, "POST", `/schemas/${SCHEMA_KEY}/deprecate`)).status).toBe(200);
+  const deprecateTwice = await api(page, "POST", `/schemas/${SCHEMA_KEY}/deprecate`);
+  expect(deprecateTwice.status).toBe(409);
+  expect(deprecateTwice.json.error).toMatchObject({ code: "ALREADY_DEPRECATED", message: "이미 폐기된 스키마입니다." });
+  expect((await api(page, "POST", `/schemas/${SCHEMA_KEY}/activate`)).status).toBe(200);
+  expect((await api(page, "GET", `/schemas/${SCHEMA_KEY}`)).json.status).toBe("active");
+  const unknown = await api(page, "POST", "/schemas/nope_없는키/deprecate");
+  expect(unknown.status).toBe(404);
+  expect(unknown.json.error.code).toBe("UNKNOWN_SCHEMA");
   errors.assertClean();
 });

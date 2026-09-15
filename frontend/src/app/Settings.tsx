@@ -30,6 +30,8 @@ const LIMIT_LABELS: Record<string, string> = {
 const KNOWN_KEYS = new Set(["workspace", "render", "reader", "reader_factory", "limits", "paths"]);
 
 const labelOf = (key: string) => LIMIT_LABELS[key] || key;
+// `drm.magics`는 계약(§6)상 개수다. 옛 서버가 원문 목록을 보내도 화면은 개수로만 말한다.
+const magicCount = (value: unknown): number => (Array.isArray(value) ? value.length : typeof value === "number" ? value : 0);
 const text = (value: unknown) => (value === null || value === undefined || value === "" ? "-" : typeof value === "object" ? JSON.stringify(value) : String(value));
 
 export default function Settings() {
@@ -84,6 +86,9 @@ function SettingsCards({ data, extras }: { data: SettingsResponse; extras: [stri
   const limits = Object.entries(data.limits || {});
   const reader = data.reader || { factory: (data.reader_factory as string | null) ?? null };
   const drm = reader.drm;
+  // 연결 여부는 서버의 drm.available이 정한다. drm 블록을 주지 않는 서버에서는 어댑터 설정 유무로 읽는다 —
+  // 어댑터 이름을 보여 주면서 칩만 '연결 안 됨'이라고 말하지 않게.
+  const connected = drm?.available ?? !!reader.factory;
   const paths = Object.entries(data.paths || {});
   return (
     <div className="app-settings-grid">
@@ -103,14 +108,14 @@ function SettingsCards({ data, extras }: { data: SettingsResponse; extras: [stri
       <section className="app-card" aria-label="Reader">
         <div className="app-card-head">
           <h2>Reader</h2>
-          <Chip kind={drm?.available ? "ok" : "muted"}>{drm?.available ? "연결됨" : "연결 안 됨"}</Chip>
+          <Chip kind={connected ? "ok" : "muted"}>{connected ? "연결됨" : "연결 안 됨"}</Chip>
         </div>
         <dl className="app-kv">
-          <dt>Reader factory</dt>
-          <dd>{reader.factory || "기본(XLSX)"}</dd>
+          <dt>보안 읽기 어댑터</dt>
+          <dd>{reader.factory || "연결 안 됨"}</dd>
           {reader.revision !== undefined && reader.revision !== null && (
             <>
-              <dt>Reader 리비전</dt>
+              <dt>어댑터 버전</dt>
               <dd>{text(reader.revision)}</dd>
             </>
           )}
@@ -128,18 +133,20 @@ function SettingsCards({ data, extras }: { data: SettingsResponse; extras: [stri
           )}
           {drm && (
             <>
-              <dt>임시 폴더</dt>
-              <dd>{drm.temp_dir_ok ? <Chip kind="ok">정상</Chip> : <Chip kind="err">작업 공간 밖 폴더가 필요합니다</Chip>}</dd>
-              <dt>해제본 보관(초)</dt>
+              <dt>해제본 임시 폴더</dt>
+              <dd>{drm.temp_dir_ok ? <Chip kind="ok">정상</Chip> : <Chip kind="err">작업 공간 안(위험)</Chip>}</dd>
+              <dt>해제 캐시 유지(초)</dt>
               <dd>{text(drm.ttl_seconds)}</dd>
               <dt>해제본 캐시(MB)</dt>
               <dd>{text(drm.cache_mb)}</dd>
+              {/* §6은 개수(`magics: n`)다 — 원문 목록은 `python -m schema drm-probe --json`이 돌려준다. */}
               <dt>등록된 보호 문서 시그니처</dt>
-              <dd>{drm.magics ?? 0}개</dd>
+              <dd>{magicCount(drm.magics)}개</dd>
             </>
           )}
         </dl>
-        {!drm?.available && (
+        {/* 무엇을 설정해야 하는지는 어댑터가 없을 때만 안내한다 — 연결돼 있는데 설정하라고 하면 카드가 스스로와 어긋난다. */}
+        {!connected && (
           <p className="app-muted app-small">보호된 문서를 읽으려면 서버에 SCHEMA_READER_FACTORY를 설정하고 python -m schema drm-probe로 확인하세요.</p>
         )}
         <p className="app-muted app-small">이 서버는 기본으로 127.0.0.1에만 열립니다.</p>

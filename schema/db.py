@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import sqlite3
 import unicodedata
 from contextlib import contextmanager
@@ -21,10 +22,11 @@ SCHEMA_PATH = REPO_ROOT / "db/schema_sqlite.sql"
 # 런타임 경로가 아니다 — 옛 배치의 DB를 새 위치로 옮기지 않은 작업 공간에서 빈 DB를 만들지 않으려고만 본다.
 PREVIOUS_DB_PATH = "data/kg/v3.db"
 
-RUNTIME_DDL = """
+# runtime_job만 따로 둔다 — 옛 작업 공간의 kind CHECK 이관(_migrate_runtime_job)이 이 정의를 그대로 다시 쓴다.
+RUNTIME_JOB_DDL = """
 CREATE TABLE IF NOT EXISTS runtime_job (
   job_id TEXT PRIMARY KEY NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('register','extract','reparse','build','test','queue_action')),
+  kind TEXT NOT NULL CHECK (kind IN ('register','extract','reparse','build','test','queue_action','delete')),
   state TEXT NOT NULL CHECK (state IN ('queued','running','succeeded','failed','cancelled')),
   principal TEXT NOT NULL, payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
   result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
@@ -36,6 +38,9 @@ CREATE TABLE IF NOT EXISTS runtime_job (
   created_at TEXT NOT NULL, started_at TEXT, heartbeat_at TEXT, finished_at TEXT,
   UNIQUE (principal, kind, request_key)
 );
+"""
+
+RUNTIME_DDL = RUNTIME_JOB_DDL + """
 CREATE INDEX IF NOT EXISTS runtime_job_queue ON runtime_job(state, created_at, job_id);
 CREATE INDEX IF NOT EXISTS runtime_job_target ON runtime_job(target_kind, target_id);
 CREATE INDEX IF NOT EXISTS runtime_job_recent ON runtime_job(created_at DESC, job_id DESC);
@@ -189,6 +194,51 @@ def page(rows_, limit, keys, scope):
     }
 
 
+
+def _migrate_runtime_job(conn) -> bool:
+    """§1.6 `runtime_job.kind` CHECK에 'delete'가 없는 옛 작업 공간을 이관한다(표 재작성).
+
+    `CREATE TABLE IF NOT EXISTS`는 이미 있는 표의 CHECK를 고치지 않으므로, 이관하지 않으면 옛 DB에서
+    문서 삭제(§4.13)가 `CHECK constraint failed`로 죽는다. `runtime_job`은 다른 표가 FK로 가리키지 않아
+    교체가 안전하다. 이관했으면 True(호출자가 인덱스를 다시 만든다)."""
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='runtime_job'").fetchone()
+    if row is None or "'delete'" in (row[0] or ""):
+        return False
+    columns = ",".join(r[1] for r in conn.execute("PRAGMA table_info(runtime_job)"))
+    conn.executescript(
+        "BEGIN IMMEDIATE;\n"
+        + RUNTIME_JOB_DDL.replace("CREATE TABLE IF NOT EXISTS runtime_job", "CREATE TABLE runtime_job_new")
+        + f"\nINSERT INTO runtime_job_new ({columns}) SELECT {columns} FROM runtime_job;\n"
+        "DROP TABLE runtime_job;\n"
+        "ALTER TABLE runtime_job_new RENAME TO runtime_job;\nCOMMIT;"
+    )
+    return True
+
+
+def _core_statements(schema_text, pattern):
+    return [m.group(0) for m in re.finditer(pattern, schema_text, re.S)]
+
+
+def _migrate_purge_guard(conn, schema_path: Path) -> bool:
+    """§1.10 삭제 가드가 없는 옛 작업 공간에 `purge_guard`와 DELETE 거부 트리거 여덟 개를 넣는다.
+
+    문구가 어긋나지 않도록 표·트리거 정의를 코어 DDL 파일에서 그대로 읽어 쓴다(UPDATE 거부 트리거는 건드리지 않는다)."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='purge_guard'").fetchone():
+        return False
+    text = Path(schema_path).read_text(encoding="utf-8")
+    table = _core_statements(text, r"CREATE TABLE purge_guard \(.*?\);")
+    triggers = {
+        m.group(1): m.group(0)
+        for m in re.finditer(r"CREATE TRIGGER (\w+_no_delete)\b.*?\bEND;", text, re.S)
+        if "purge_guard" in m.group(0)
+    }
+    if not table or len(triggers) != 8:
+        raise Problem("WRONG_DATABASE", "코어 DDL에서 삭제 가드 정의를 찾을 수 없습니다.", 409)
+    script = "".join(f"DROP TRIGGER IF EXISTS {name};\n{sql}\n" for name, sql in triggers.items())
+    conn.executescript("BEGIN IMMEDIATE;\n" + table[0] + "\n" + script + "COMMIT;")
+    return True
+
+
 class Database:
     """WAL·foreign_keys·busy_timeout을 연결마다 설정한다. 새 DB는 DDL로 만들고, 다른 버전은 거부한다."""
 
@@ -225,7 +275,13 @@ class Database:
                     409,
                 )
             conn.executescript(RUNTIME_DDL)
+            if _migrate_runtime_job(conn):
+                conn.executescript(RUNTIME_DDL)  # 표를 다시 만들었으므로 인덱스를 되살린다
+            _migrate_purge_guard(conn, schema)
+            # WAL은 트랜잭션 밖에서만 바뀐다 — 아래 DELETE보다 먼저 친다.
             conn.execute("PRAGMA journal_mode=WAL")
+            # §1.10 방어: 커밋된 DB에 가드 행이 남는 상태는 없지만, 있으면 여기서 회수한다.
+            conn.execute("DELETE FROM purge_guard")
 
     @contextmanager
     def connect(self, write=False):

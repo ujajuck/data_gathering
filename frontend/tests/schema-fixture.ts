@@ -147,6 +147,9 @@ export function schemaFixture() {
     revised: [] as Row[],
     profileFilters: [] as (string | null)[],
     documentFilters: [] as (string | null)[],
+    // GET /schemas?status= 로 읽은 값들과 폐기·폐기 해제 호출 기록(§4.2.3).
+    statusFilters: [] as string[],
+    statusWrites: [] as Row[],
     deletedSchemas: [] as string[],
     deletedFields: [] as string[],
     created: [] as Row[],
@@ -168,12 +171,37 @@ export function schemaFixture() {
     state.schemas = state.schemas.map((x) => (x.schema_key === key ? { ...x, current_rev: next } : x));
     return next;
   };
-  f.overrides.set("GET /schemas", () => page(state.schemas));
+  // 목록 상태 필터(§4.2.3): 기본은 active. 어떤 값으로 읽었는지 state.statusFilters에 남긴다.
+  f.overrides.set("GET /schemas", (call) => {
+    const status = call.url.searchParams.get("status") || "active";
+    state.statusFilters.push(status);
+    return page(state.schemas.filter((s) => status === "all" || (s.status || "active") === status));
+  });
+  const detailOf = (key: string) => {
+    const row = state.schemas.find((x) => x.schema_key === key);
+    if (!row) return reply(404, errorBody("UNKNOWN_SCHEMA", "스키마를 찾을 수 없습니다."));
+    return { ...row, description: key === SCHEMA_KEY ? "공정 기록 표준 구조" : null };
+  };
+  const setStatus = (key: string, next: "active" | "deprecated") => {
+    state.schemas = state.schemas.map((x) => (x.schema_key === key ? { ...x, status: next } : x));
+    return detailOf(key);
+  };
   for (const s of [state.schemas[0], SECOND_SCHEMA]) {
-    f.overrides.set(`GET /schemas/${s.schema_key}`, () => {
+    f.overrides.set(`GET /schemas/${s.schema_key}`, () => detailOf(s.schema_key));
+    // §4.2.3 폐기·폐기 해제 — 응답은 스키마 상세와 같은 형태다.
+    f.overrides.set(`POST /schemas/${s.schema_key}/deprecate`, () => {
       const row = state.schemas.find((x) => x.schema_key === s.schema_key);
       if (!row) return reply(404, errorBody("UNKNOWN_SCHEMA", "스키마를 찾을 수 없습니다."));
-      return { ...row, description: s.schema_key === SCHEMA_KEY ? "공정 기록 표준 구조" : null };
+      if (row.status === "deprecated") return reply(409, errorBody("ALREADY_DEPRECATED", "이미 폐기된 스키마입니다."));
+      state.statusWrites.push({ schema_key: s.schema_key, action: "deprecate" });
+      return setStatus(s.schema_key, "deprecated");
+    });
+    f.overrides.set(`POST /schemas/${s.schema_key}/activate`, () => {
+      const row = state.schemas.find((x) => x.schema_key === s.schema_key);
+      if (!row) return reply(404, errorBody("UNKNOWN_SCHEMA", "스키마를 찾을 수 없습니다."));
+      if (row.status !== "deprecated") return reply(409, errorBody("ALREADY_ACTIVE", "이미 활성 상태인 스키마입니다."));
+      state.statusWrites.push({ schema_key: s.schema_key, action: "activate" });
+      return setStatus(s.schema_key, "active");
     });
   }
   f.overrides.set(`GET /schemas/${SCHEMA_KEY}/tree`, () => {
@@ -317,7 +345,9 @@ export function schemaFixture() {
         return reply(409, {
           error: {
             code: "SCHEMA_IN_USE",
-            message: "공정데이터_A양식, 공정데이터_B양식이 이 스키마를 씁니다. 적용 문서 5건이 남아 있습니다.",
+            // §4.2.1 개정 5 문구 — 이 제품에 실제로 있는 행동(프로파일 삭제 · 스키마 폐기)만 시킨다.
+            message:
+              "이 스키마는 파싱 프로파일 2개(공정데이터_A양식, 공정데이터_B양식)가 쓰고 있고 적용된 문서가 5개입니다. 프로파일 상세에서 '삭제'한 뒤 다시 시도하거나, 더 쓰지 않으려면 이 스키마를 '폐기'하세요.",
             detail: {
               profiles: profileRows.map((p) => ({ profile_id: p.profile_id, profile_name: p.profile_name, current_rev: p.current_rev, status: p.status, document_count: p.document_count })),
               profile_count: profileRows.length,

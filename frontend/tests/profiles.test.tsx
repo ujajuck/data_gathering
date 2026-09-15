@@ -103,6 +103,36 @@ describe("파싱 프로파일 화면", () => {
     expect(section.textContent).not.toMatch(UUID_RE);
   });
 
+  it("팝오버는 Escape·닫기로 닫히고 초점을 연 버튼으로 되돌린다", async () => {
+    const f = profilesFixture();
+    f.renderApp(`?screen=profiles&profile=${ids.profile}`);
+    const section = await screen.findByRole("region", { name: "프로파일 상세" });
+    const user = userEvent.setup();
+    const opener = await within(section).findByRole("button", { name: "대표 문서 지정" });
+
+    // 팝오버 안으로 초점이 들어간 뒤 Escape — 초점이 body로 떨어지면 Tab이 화면 맨 위로 돌아간다.
+    await user.click(opener);
+    const popover = await screen.findByRole("group", { name: "대표 문서 지정" });
+    (within(popover).getByRole("button", { name: "닫기" }) as HTMLElement).focus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("group", { name: "대표 문서 지정" })).toBeNull());
+    expect(document.activeElement).toBe(opener);
+
+    // 닫기(×) 버튼도 같다.
+    await user.click(opener);
+    const again = await screen.findByRole("group", { name: "대표 문서 지정" });
+    await user.click(within(again).getByRole("button", { name: "닫기" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "대표 문서 지정" })).toBeNull());
+    expect(document.activeElement).toBe(opener);
+
+    // 여는 버튼에 초점이 있는 채로 눌러도 Escape로 닫힌다(그때는 초점을 뺏지 않는다).
+    await user.click(opener);
+    await screen.findByRole("group", { name: "대표 문서 지정" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("group", { name: "대표 문서 지정" })).toBeNull());
+    expect(document.activeElement).toBe(opener);
+  });
+
   it("승인 후보가 없으면 팝오버가 그 이유를 안내한다", async () => {
     const f = profilesFixture();
     // 검수가 끝나지 않은 적용 건만 있다
@@ -240,8 +270,11 @@ describe("파싱 프로파일 화면", () => {
     await within(section).findByRole("button", { name: "폐기" });
     expect(within(section).queryByRole("button", { name: "삭제" })).toBeNull();
     const user = userEvent.setup();
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     await user.click(within(section).getByRole("button", { name: "폐기" }));
+    // 프로파일 폐기는 되돌릴 수 없다 — 스키마 폐기와 같은 확인 대화상자를 쓰고 그 사실을 문구에 담는다.
+    const dialog = await screen.findByRole("dialog", { name: "프로파일 폐기" });
+    expect(dialog.textContent).toContain("되돌릴 수 없습니다");
+    await user.click(within(dialog.querySelector(".app-modal-actions") as HTMLElement).getByRole("button", { name: "폐기" }));
     await waitFor(() => expect(f.profiles.deprecated).toEqual([ids.profile]));
     expect(await screen.findByText(/프로파일을 폐기했습니다/)).toBeTruthy();
   });
@@ -259,6 +292,8 @@ describe("파싱 프로파일 화면", () => {
     expect(within(dialog).queryByRole("button", { name: "대표 문서로 테스트" })).toBeNull();
     expect(within(dialog).queryByLabelText("테스트 문서")).toBeNull();
     await f.waitForApi(/^\/schemas/);
+    // 스키마 선택은 목록 기본(활성)만 읽는다 — 폐기 스키마에는 새 프로파일을 만들 수 없다(§4.2.3).
+    expect(f.callsTo(/^\/schemas(\?|$)/)[0].url.searchParams.get("status")).toBeNull();
     await waitFor(() => expect((within(dialog).getByLabelText("파싱 스키마") as HTMLSelectElement).value).toBe(SCHEMA_KEY));
     expect(within(dialog).getByLabelText("파일 업로드").getAttribute("type")).toBe("file");
     const editor = within(dialog).getByLabelText("정의 JSON") as HTMLTextAreaElement;

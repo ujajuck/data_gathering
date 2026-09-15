@@ -1,9 +1,11 @@
-// 문서 화면 E2E(계약 §8 documents.spec): 쉘·표·필터·정렬 → 등록 대화상자·상세 드로어·잠긴 문서 → 새 snapshot·데이터 빌드 인계.
-// 세 test()는 같은 작업 공간을 순서대로 쓴다(fullyParallel=false). 1번은 시드 6건을 그대로 보고, 2번이 7번째 문서를 등록하며,
-// 3번이 대표 문서를 바꿔 새 snapshot을 만든다. 모든 단언은 실제 표시 문구(한국어 라벨·셀 텍스트)를 본다.
+// 문서 화면 E2E(계약 §8 documents.spec): 쉘·표·필터·정렬 → 등록 대화상자·상세 드로어·잠긴 문서 → 새 snapshot·데이터 빌드 인계
+// → 문서 삭제(§4.13: 다중·단건·원본 파일·대표 문서 프로파일 초안·작업 내역·거부).
+// 여섯 test()는 같은 작업 공간을 순서대로 쓴다(fullyParallel=false). 1번은 시드 6건을 그대로 보고, 2번이 7번째 문서를 등록하며,
+// 3번이 대표 문서를 바꿔 새 snapshot을 만들고, 4~6번이 되돌릴 수 없는 삭제를 마지막에 돌린다(지운 문서는 다음 스펙 파일의
+// resetWorkspace()가 새 작업 공간을 시드하므로 남지 않는다). 모든 단언은 실제 표시 문구(한국어 라벨·셀 텍스트)를 본다.
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { DRM_MESSAGE, api, collectErrors, copyRawDocument, mutateFirstDocument, openDocument, openScreen, registerViaApi, resetWorkspace, waitForJobs } from "./helpers";
+import { DRM_MESSAGE, api, collectErrors, copyRawDocument, mutateFirstDocument, openDocument, openScreen, rawFileExists, registerViaApi, resetWorkspace, waitForJobs } from "./helpers";
 
 const REFERENCE = "공정데이터_2024_01.xlsx";
 const IDENTICAL = ["공정데이터_2024_02.xlsx", "공정데이터_2024_03.xlsx"];
@@ -483,5 +485,164 @@ test("새 snapshot(변경 감지) · Snapshot 이력 · 다중 선택 → 데이
   expect(page.url()).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
   const draft = await page.evaluate(() => JSON.parse(sessionStorage.getItem("schema.build.draft") || "null"));
   expect(draft?.document_ids).toHaveLength(2);
+  errors.assertClean();
+});
+
+test("문서 삭제 — 다중 선택 확인 대화상자 · 원본 보존 · 목록에서 사라짐 · 같은 파일 재등록", async ({ page }) => {
+  const errors = collectErrors(page);
+  await gotoDocuments(page);
+  await expect(documentsTable(page).getByRole("row")).toHaveCount(8); // 헤더 + 시드 6 + 등록한 복사본 1
+  const before = await api(page, "GET", "/documents");
+  const idOf = (name: string) => (before.json.items.find((d: { document_name: string }) => d.document_name === name) || {}).document_id as string;
+  const removedIds = IDENTICAL.map(idOf);
+  expect(removedIds.filter(Boolean)).toHaveLength(2);
+
+  // ---- 체크박스 2건 → 선택 바 → '삭제' → 확인 대화상자(§7 문구 그대로).
+  for (const name of IDENTICAL) await page.getByRole("checkbox", { name: `${name} 선택` }).check();
+  const selection = page.getByRole("region", { name: "선택한 문서" });
+  await expect(selection.getByRole("button")).toHaveText(["선택 해제", "데이터 빌드에 추가", "삭제"]);
+  await expect(selection).toContainText("2개 선택");
+  await selection.getByRole("button", { name: "삭제", exact: true }).click();
+  const confirm = page.getByRole("dialog", { name: "문서 삭제" });
+  await expect(confirm).toBeVisible();
+  await expect(confirm).toHaveAttribute("aria-modal", "true");
+  await expect(confirm.getByRole("heading", { level: 2, name: "문서 삭제" })).toBeVisible();
+  await expect(confirm.getByText("문서 2개를 지웁니다. 각 문서의 snapshot·적용 건·매핑·추출값이 함께 사라지고 되돌릴 수 없습니다.")).toBeVisible();
+  // 무엇을 지우는지 이름으로 보여 준다.
+  await expect(confirm.getByRole("list", { name: "지울 문서" }).getByRole("listitem")).toHaveText(IDENTICAL);
+  // 원본 파일 삭제는 기본 해제다 — 되돌릴 수 없는 일을 기본값으로 더 넓히지 않는다.
+  const purge = confirm.getByRole("checkbox", { name: "원본 파일도 함께 지우기 (data/raw)" });
+  await expect(purge).not.toBeChecked();
+  await expect(confirm.getByText("체크하지 않으면 원본 파일은 그대로 남고, 다시 등록하면 같은 문서가 만들어집니다.")).toBeVisible();
+  await expect(confirm.getByRole("button", { name: "취소" })).toBeEnabled();
+  // 취소하면 아무것도 지우지 않는다.
+  await confirm.getByRole("button", { name: "취소" }).click();
+  await expect(confirm).toHaveCount(0);
+  expect((await api(page, "GET", "/documents")).json.items).toHaveLength(7);
+  await expect(selection).toContainText("2개 선택");
+
+  // ---- 다시 열어 삭제: POST /documents/delete {document_ids, purge_source:false}.
+  await selection.getByRole("button", { name: "삭제", exact: true }).click();
+  const deleteRequest = page.waitForRequest((r) => r.method() === "POST" && r.url().includes("/api/documents/delete"));
+  await confirm.getByRole("button", { name: "삭제", exact: true }).click();
+  expect((await deleteRequest).postDataJSON()).toEqual({ document_ids: removedIds, purge_source: false });
+  await expect(confirm).toHaveCount(0);
+  await expect(page.locator(".app-toast").filter({ hasText: "문서 2개를 지웠습니다." })).toBeVisible();
+  // 목록·선택 바에서 사라지고 API에도 없다.
+  await expect(documentsTable(page).getByRole("row")).toHaveCount(6);
+  await expect(selection).toHaveCount(0);
+  for (const name of IDENTICAL) await expect(rowOf(page, name)).toHaveCount(0);
+  expect((await api(page, "GET", "/documents")).json.items).toHaveLength(5);
+  for (const id of removedIds) expect((await api(page, "GET", `/documents/${id}`)).status).toBe(404);
+  // 진실은 원본 파일이다 — 기본값(purge 해제)에서는 그대로 남아 있다.
+  for (const name of IDENTICAL) expect(rawFileExists(name), `${name} 원본은 남아 있어야 한다`).toBe(true);
+
+  // ---- 같은 파일을 다시 등록하면 새 문서로 들어온다(프로파일도 다시 붙는다).
+  const job = await registerViaApi(page, IDENTICAL);
+  expect(job.result.documents.map((d: { document_name: string; status: string }) => [d.document_name, d.status])).toEqual([
+    [IDENTICAL[0], "normal"],
+    [IDENTICAL[1], "normal"],
+  ]);
+  await waitForJobs(page);
+  await page.reload();
+  await expect(documentsTable(page).getByRole("row")).toHaveCount(8);
+  for (const name of IDENTICAL) {
+    await expect(statusChip(page, name)).toHaveText("정상");
+    await expect(rowOf(page, name).getByRole("cell").nth(3)).toHaveText(PROFILE_V1);
+  }
+  const after = await api(page, "GET", "/documents");
+  const restored = IDENTICAL.map((name) => after.json.items.find((d: { document_name: string }) => d.document_name === name).document_id);
+  expect(restored.filter(Boolean)).toHaveLength(2);
+  // 지운 문서의 id는 돌아오지 않는다 — 되살아난 것이 아니라 새로 만들어진 문서다.
+  for (const id of restored) expect(removedIds).not.toContain(id);
+  errors.assertClean();
+});
+
+test("문서 삭제 — 단건(상세 드로어) · 원본 파일까지 · 대표 문서 프로파일 초안 · 작업 내역", async ({ page }) => {
+  const errors = collectErrors(page);
+  await gotoDocuments(page);
+  const profilesBefore = await api(page, "GET", "/profiles");
+  const profile = profilesBefore.json.items.find((p: { profile_name: string }) => p.profile_name === "공정데이터_A양식");
+  expect(profile.status).toBe("approved");
+  const detail = await openDocument(page, REFERENCE);
+
+  // ---- 드로어 헤더의 '삭제' → 같은 확인 대화상자(단건 문구).
+  await detail.getByRole("button", { name: "삭제", exact: true }).click();
+  const confirm = page.getByRole("dialog", { name: "문서 삭제" });
+  await expect(confirm.getByText(`'${REFERENCE}'을(를) 지웁니다. 이 문서의 snapshot·적용 건·매핑·추출값이 함께 사라지고 되돌릴 수 없습니다.`)).toBeVisible();
+  // 단건에는 이름 목록을 따로 두지 않는다(확인 문구가 이미 이름을 말한다).
+  await expect(confirm.getByRole("list", { name: "지울 문서" })).toHaveCount(0);
+  // 대표 문서를 지우면 프로파일이 초안으로 내려간다 — 끝난 뒤의 토스트가 아니라 확인 전에 알린다(§4.13).
+  await expect(confirm.getByText("대표 문서입니다 — 파싱 프로파일 '공정데이터_A양식'", { exact: false })).toBeVisible();
+  // ---- 이번에는 원본 파일까지 지운다.
+  const purge = confirm.getByRole("checkbox", { name: "원본 파일도 함께 지우기 (data/raw)" });
+  await expect(purge).not.toBeChecked();
+  await purge.check();
+  expect(rawFileExists(REFERENCE)).toBe(true);
+  const deleteRequest = page.waitForRequest((r) => r.method() === "DELETE" && r.url().includes("/api/documents/"));
+  await confirm.getByRole("button", { name: "삭제", exact: true }).click();
+  expect((await deleteRequest).url()).toContain("purge_source=true");
+  await expect(confirm).toHaveCount(0);
+  // 드로어도 닫힌다(지운 문서를 열어 둔 채로 두지 않는다).
+  await expect(detail).toHaveCount(0);
+  await expect(page).not.toHaveURL(/document=/);
+
+  // ---- 요약: 지운 수 · 원본 파일 · 초안으로 내려간 프로파일.
+  const toast = page.locator(".app-toast").filter({ hasText: "문서 1개를 지웠습니다." });
+  await expect(toast).toBeVisible();
+  await expect(toast).toContainText("원본 파일 1개도 지웠습니다.");
+  await expect(toast).toContainText("파싱 프로파일 1개가 초안으로 내려갔습니다 — 대표 문서를 다시 지정해 승인하세요.");
+  expect(rawFileExists(REFERENCE), "원본 파일도 지워야 한다").toBe(false);
+  // openDocument가 채운 검색어를 지우고 목록 전체를 본다.
+  await filters(page).getByLabel("문서 검색").fill("");
+  await expect(documentsTable(page).getByRole("row")).toHaveCount(7);
+  await expect(rowOf(page, REFERENCE)).toHaveCount(0);
+
+  // ---- 대표 문서가 사라진 프로파일은 초안으로 내려가고 대표 문서 참조가 없다.
+  await toast.getByRole("button", { name: "파싱 프로파일 열기" }).click();
+  await expect(page).toHaveURL(/screen=profiles/);
+  const profileRow = page.getByRole("table", { name: "파싱 프로파일 목록" }).getByRole("row").filter({ hasText: "공정데이터_A양식" });
+  await expect(profileRow.getByRole("cell").nth(4).locator(".app-chip")).toHaveText("초안");
+  const reloaded = await api(page, "GET", `/profiles/${profile.profile_id}`);
+  expect(reloaded.json.status).toBe("draft");
+  expect(reloaded.json.reference?.application_id ?? null).toBeNull();
+
+  // ---- 작업 내역: 단건 `<문서명> 삭제`와 다중 `문서 N개 삭제`가 남는다(대상은 작업 공간, 이동 버튼 없음).
+  await openScreen(page, "작업 내역");
+  const jobsCard = page.getByRole("region", { name: "작업 목록 카드" });
+  await jobsCard.getByLabel("종류").selectOption("delete");
+  await expect(page).toHaveURL(/kind=delete/);
+  const jobRows = page.getByRole("table", { name: "작업 목록" }).locator("tbody tr");
+  await expect(jobRows).toHaveCount(2);
+  await expect(jobRows.locator("td:nth-child(1)")).toHaveText(["삭제", "삭제"]);
+  await expect(jobRows.locator("td:nth-child(2)")).toHaveText([`${REFERENCE} 삭제`, "문서 2개 삭제"]);
+  await expect(jobRows.locator("td:nth-child(3) .app-chip")).toHaveText(["완료", "완료"]);
+  await expect(jobRows.first().locator("td:nth-child(6)")).toContainText("문서 1개를 지웠습니다.");
+  await expect(jobRows.nth(1).locator("td:nth-child(6)")).toContainText("문서 2개를 지웠습니다.");
+  for (const row of await jobRows.all()) await expect(row.getByRole("button", { name: "이동" })).toHaveCount(0);
+  // API 기록도 같은 값이다.
+  const jobs = await api(page, "GET", "/jobs?kind=delete");
+  expect(jobs.json.items).toHaveLength(2);
+  expect(jobs.json.items[0]).toMatchObject({ kind: "delete", state: "succeeded", target_kind: "workspace", target_id: null });
+  expect(jobs.json.items[0].result.summary).toEqual({ requested: 1, deleted: 1, failed: 0 });
+  expect(jobs.json.items[0].result.documents[0]).toMatchObject({ document_name: REFERENCE, source_ref: REFERENCE, source_removed: true });
+  expect(jobs.json.items[0].result.profiles_reset).toEqual([{ profile_id: profile.profile_id, profile_name: "공정데이터_A양식" }]);
+  errors.assertClean();
+});
+
+test("문서 삭제 거부 — 없는 문서 404 · 빈 목록 422 · 상한 초과 422", async ({ page }) => {
+  const errors = collectErrors(page);
+  const missing = await api(page, "DELETE", "/documents/00000000-0000-4000-8000-000000000000");
+  expect(missing.status).toBe(404);
+  expect(missing.json.error.code).toBe("UNKNOWN_DOCUMENT");
+  const empty = await api(page, "POST", "/documents/delete", { document_ids: [] });
+  expect(empty.status).toBe(422);
+  expect(empty.json.error.code).toBe("VALIDATION_ERROR");
+  const tooMany = await api(page, "POST", "/documents/delete", { document_ids: Array.from({ length: 201 }, (_, i) => `id-${i}`) });
+  expect(tooMany.status).toBe(422);
+  expect(tooMany.json.error.code).toBe("TOO_MANY_DOCUMENTS");
+  expect(tooMany.json.error.message).toBe("한 번에 최대 200개까지 지울 수 있습니다. 나누어 지우세요.");
+  // 거부된 요청은 아무것도 지우지 않았다.
+  expect((await api(page, "GET", "/documents")).json.items).toHaveLength(6);
   errors.assertClean();
 });

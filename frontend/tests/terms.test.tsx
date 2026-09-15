@@ -2,7 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { listAppFiles, readSource, stripComments } from "./source-files";
 
-const BANNED = /템플릿|문서군|\bKG\b|Concept|Integration|Template/;
+// '비활성화'는 §4.2.3의 낱말 통일 — 스키마·프로파일의 `status='deprecated'`는 화면에서 언제나 '폐기'다.
+const BANNED = /템플릿|문서군|\bKG\b|Concept|Integration|Template|비활성화/;
 
 describe("용어 규칙(§0)", () => {
   it("src/app 아래 모든 파일의 코드·문자열에 금지 용어가 없다", () => {

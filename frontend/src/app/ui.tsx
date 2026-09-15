@@ -109,6 +109,8 @@ export function Modal({
   className = "",
   head,
   viewKey,
+  inert = false,
+  dismissible = true,
 }: {
   label: string;
   title?: ReactNode;
@@ -119,6 +121,11 @@ export function Modal({
   head?: ReactNode;
   // 대화상자 안에서 화면을 바꿀 때(값이 바뀌면) 초점을 패널로 되돌린다.
   viewKey?: string | number;
+  // 이 모달 위에 다른 확인 대화상자가 떠 있는 동안 뒤로 물러난다(aria-modal 대화상자가 둘 동시에 살아 있지 않게).
+  inert?: boolean;
+  // false면 Escape·배경 클릭·× 가 닫지 않는다 — 되돌릴 수 없는 요청이 도는 중에는 '취소'만 비활성으로 두고
+  // 다른 길로 닫히면 사용자는 취소했다고 믿는데 삭제는 끝까지 간다(§7).
+  dismissible?: boolean;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -139,7 +146,7 @@ export function Modal({
     if (e.defaultPrevented) return;
     if (e.key === "Escape") {
       e.stopPropagation();
-      onClose();
+      if (dismissible) onClose();
       return;
     }
     if (e.key !== "Tab" || !panel.current) return;
@@ -161,7 +168,7 @@ export function Modal({
   }
   return (
     <>
-      <div className="app-modal-backdrop" onClick={onClose} aria-hidden="true" />
+      <div className="app-modal-backdrop" onClick={dismissible && !inert ? onClose : undefined} aria-hidden="true" />
       <div
         className={"app-modal " + className}
         role="dialog"
@@ -169,12 +176,13 @@ export function Modal({
         aria-label={label}
         tabIndex={-1}
         ref={panel}
+        inert={inert || undefined}
         onKeyDown={onKeyDown}
       >
         <div className="app-modal-head">
           {title !== undefined ? <h2>{title}</h2> : null}
           {head}
-          <button type="button" className="app-modal-close" aria-label="닫기" onClick={onClose}>
+          <button type="button" className="app-modal-close" aria-label="닫기" disabled={!dismissible} onClick={onClose}>
             ×
           </button>
         </div>

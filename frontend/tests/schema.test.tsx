@@ -526,3 +526,118 @@ describe("파싱 스키마 화면", () => {
     expect(route().get("field_filter")).toBe("pressure");
   });
 });
+
+// §4.2.3 스키마 폐기·폐기 해제 — 낱말은 프로파일과 같은 '폐기'다('비활성화'라고 부르지 않는다).
+describe("스키마 폐기(§4.2.3)", () => {
+  // 상태 칩은 헤더의 것을 본다(트리에도 폐기된 필드 칩이 있다).
+  const statusChip = (label: string) => within(detail().querySelector(".app-card-head") as HTMLElement).getByText(label, { selector: ".app-chip" });
+  it("목록은 기본으로 활성만 읽고, 폐기하면 응답 하나로 상세를 갱신한 뒤 목록에서 빠진다", async () => {
+    const f = schemaFixture();
+    f.renderApp("?screen=schema&schema=" + SCHEMA_KEY);
+    await screen.findByRole("tree", { name: "필드 트리" });
+    // 기본은 활성 — status 파라미터를 붙이지 않는다(서버 기본값과 같다).
+    expect(f.callsTo(/^\/schemas(\?|$)/)).toHaveLength(1);
+    expect(f.callsTo(/^\/schemas(\?|$)/)[0].url.searchParams.get("status")).toBeNull();
+    const section = detail();
+    expect(within(section).queryByRole("button", { name: "폐기 해제" })).toBeNull();
+
+    const user = userEvent.setup();
+    await user.click(within(section).getByRole("button", { name: "폐기" }));
+    const dialog = await screen.findByRole("dialog", { name: "스키마 폐기" });
+    expect(dialog.textContent).toContain(
+      "'공정 데이터 표준'을(를) 폐기합니다. 새 파싱 프로파일을 이 스키마에 만들 수 없게 되고 목록 기본에서 숨깁니다. 이미 있는 프로파일·적용 건·추출값은 그대로이며 언제든 '폐기 해제'할 수 있습니다.",
+    );
+    await user.click(within(dialog.querySelector(".app-modal-actions") as HTMLElement).getByRole("button", { name: "폐기" }));
+    await f.waitForApi(new RegExp(`^/schemas/${SCHEMA_KEY}/deprecate$`), "POST");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "스키마 폐기" })).toBeNull());
+
+    // 응답만으로 상태 칩·버튼·안내가 바뀐다.
+    await waitFor(() => expect(statusChip("폐기")).toBeTruthy());
+    expect(within(detail()).getByRole("button", { name: "폐기 해제" })).toBeTruthy();
+    expect(within(detail()).queryByRole("button", { name: "폐기" })).toBeNull();
+    expect(detail().textContent).toContain("폐기된 스키마입니다. 이미 승인된 파싱 프로파일은 새 문서에 계속 적용됩니다 — 멈추려면 프로파일을 폐기하세요.");
+    expect(await screen.findByText(/'공정 데이터 표준' 스키마를 폐기했습니다\./)).toBeTruthy();
+    // 목록만 다시 읽고(기본=활성) 그 스키마는 빠진다. 상세·트리는 다시 읽지 않는다.
+    await waitFor(() => expect(within(screen.getByRole("region", { name: "스키마 목록" })).queryByRole("button", { name: /공정 데이터 표준/ })).toBeNull());
+    expect(f.callsTo(new RegExp(`^/schemas/${SCHEMA_KEY}/tree$`))).toHaveLength(1);
+  });
+
+  it("상태 필터 `폐기`로 다시 보이고, `폐기 해제`는 확인 없이 바로 되돌린다", async () => {
+    const f = schemaFixture();
+    f.schema.schemas = f.schema.schemas.map((s) => (s.schema_key === SCHEMA_KEY ? { ...s, status: "deprecated" } : s));
+    f.renderApp("?screen=schema&schema=" + SCHEMA_KEY);
+    await screen.findByRole("tree", { name: "필드 트리" });
+    const list = screen.getByRole("region", { name: "스키마 목록" });
+    expect(within(list).queryByRole("button", { name: /공정 데이터 표준/ })).toBeNull();
+
+    const user = userEvent.setup();
+    await user.selectOptions(within(list).getByLabelText("상태"), "deprecated");
+    expect(route().get("schema_status")).toBe("deprecated");
+    await f.waitForApi(/^\/schemas\?.*status=deprecated/);
+    const row = await within(list).findByRole("button", { name: /공정 데이터 표준/ });
+    expect(within(row).getByText("폐기", { selector: ".app-chip" })).toBeTruthy();
+
+    // 되돌릴 수 있는 일이므로 확인 대화상자 없이 바로 부른다.
+    await user.click(within(detail()).getByRole("button", { name: "폐기 해제" }));
+    await f.waitForApi(new RegExp(`^/schemas/${SCHEMA_KEY}/activate$`), "POST");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(f.schema.statusWrites).toEqual([{ schema_key: SCHEMA_KEY, action: "activate" }]);
+    await waitFor(() => expect(statusChip("활성")).toBeTruthy());
+    expect(await screen.findByText(/'공정 데이터 표준' 스키마의 폐기를 해제했습니다\./)).toBeTruthy();
+    // 상태 필터가 `폐기`인 목록에서는 이제 빠진다.
+    await waitFor(() => expect(within(screen.getByRole("region", { name: "스키마 목록" })).queryByRole("button", { name: /공정 데이터 표준/ })).toBeNull());
+  });
+
+  it("폐기 실패(409 ALREADY_DEPRECATED)는 대화상자를 열어 둔 채 서버 문구를 보인다", async () => {
+    const f = schemaFixture();
+    f.renderApp("?screen=schema&schema=" + SCHEMA_KEY);
+    await screen.findByRole("tree", { name: "필드 트리" });
+    f.overrides.set(`POST /schemas/${SCHEMA_KEY}/deprecate`, () => ({ __status: 409, body: { error: { code: "ALREADY_DEPRECATED", message: "이미 폐기된 스키마입니다." } } }));
+    const user = userEvent.setup();
+    await user.click(within(detail()).getByRole("button", { name: "폐기" }));
+    const dialog = await screen.findByRole("dialog", { name: "스키마 폐기" });
+    await user.click(within(dialog.querySelector(".app-modal-actions") as HTMLElement).getByRole("button", { name: "폐기" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toContain("이미 폐기된 스키마입니다.");
+    expect(statusChip("활성")).toBeTruthy();
+  });
+
+  it("스키마를 모두 폐기하면 '스키마가 없다'가 아니라 돌아갈 길을 안내한다", async () => {
+    const f = schemaFixture();
+    f.schema.schemas = f.schema.schemas.map((s) => ({ ...s, status: "deprecated" as const }));
+    f.renderApp("?screen=schema");
+    const list = await screen.findByRole("region", { name: "스키마 목록" });
+    await f.waitForApi(/^\/schemas\?.*status=deprecated/);
+    expect(
+      await within(list).findByText("활성 파싱 스키마가 없습니다. 폐기한 스키마는 상태를 '폐기'로 바꿔 보고 '폐기 해제'할 수 있습니다."),
+    ).toBeTruthy();
+    // 같은 스키마를 다시 만들게 두지 않는다 — 폐기 목록으로 가는 버튼을 준다.
+    expect(within(list).queryByRole("button", { name: "새 스키마" })).toBeNull();
+    const user = userEvent.setup();
+    await user.click(within(list).getByRole("button", { name: "폐기된 스키마 보기" }));
+    expect(await within(list).findByText("공정 데이터 표준")).toBeTruthy();
+    expect((within(list).getByLabelText("상태") as HTMLSelectElement).value).toBe("deprecated");
+  });
+
+  it("스키마가 하나도 없으면 지금까지처럼 `새 스키마`를 권한다", async () => {
+    const f = schemaFixture();
+    f.schema.schemas = [];
+    f.renderApp("?screen=schema");
+    const list = await screen.findByRole("region", { name: "스키마 목록" });
+    expect(await within(list).findByText("아직 파싱 스키마가 없습니다. 정의 JSON을 가져와 시작하세요.")).toBeTruthy();
+    expect(within(list).getByRole("button", { name: "새 스키마" })).toBeTruthy();
+  });
+
+  it("상태 필터 `전체`는 활성·폐기를 함께 보이고 빈 결과는 조건 문구로 안내한다", async () => {
+    const f = schemaFixture();
+    f.renderApp("?screen=schema&schema_status=all");
+    const list = await screen.findByRole("region", { name: "스키마 목록" });
+    await f.waitForApi(/^\/schemas\?.*status=all/);
+    await waitFor(() => expect(within(list).getByRole("heading", { level: 3 }).textContent).toBe("스키마 목록 (2)"));
+    const user = userEvent.setup();
+    await user.selectOptions(within(list).getByLabelText("상태"), "deprecated");
+    await f.waitForApi(/^\/schemas\?.*status=deprecated/);
+    expect(await within(list).findByText("조건에 맞는 파싱 스키마가 없습니다.")).toBeTruthy();
+    // 빈 목록이어도 '새 스키마'를 권하지 않는다(필터 때문이지 스키마가 없어서가 아니다).
+    expect(within(list).queryByRole("button", { name: "새 스키마" })).toBeNull();
+  });
+});

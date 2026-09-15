@@ -76,7 +76,8 @@ describe("설정 화면", () => {
     expect(render.textContent).toContain("내장(in-process)");
     expect(render.textContent).toContain("사용 안 함");
     const reader = screen.getByRole("region", { name: "Reader" });
-    expect(reader.textContent).toContain("기본(XLSX)");
+    // §7: 어댑터 줄은 factory 또는 '연결 안 됨'이다.
+    expect(within(reader).getByText("보안 읽기 어댑터").nextElementSibling?.textContent).toBe("연결 안 됨");
     expect(within(reader).getByText("연결 안 됨", { selector: ".app-chip" })).toBeTruthy();
     // 연결 안 됨일 때만 무엇을 설정해야 하는지 안내한다.
     expect(reader.textContent).toContain("SCHEMA_READER_FACTORY를 설정하고");
@@ -84,4 +85,41 @@ describe("설정 화면", () => {
     expect(screen.queryByRole("table", { name: "정규화 프리셋 목록" })).toBeNull();
   });
 
+  // 서버가 어댑터를 알려 주는데도 카드가 "설정하세요"라고 말하면 카드가 스스로와 어긋난다(drm 블록이 없는 응답).
+  it("drm 블록 없이 어댑터만 온 응답도 연결됨으로 읽고 설정 안내를 띄우지 않는다", async () => {
+    const f = appFixture();
+    f.overrides.set("GET /settings", () => ({
+      version: "3",
+      workspace: "/tmp/ws",
+      render: { mode: "inprocess", url: null, renderer_version: "r1" },
+      reader: { factory: "plugins.drm:make_reader", revision: "r7", timeout_seconds: 60, memory_mb: 512 },
+      limits: {},
+      paths: {},
+    }));
+    f.overrides.set("GET /normalization-presets", () => page([]));
+    f.renderApp("?screen=settings");
+    const reader = await screen.findByRole("region", { name: "Reader" });
+    expect(within(reader).getByText("연결됨", { selector: ".app-chip" })).toBeTruthy();
+    expect(reader.textContent).toContain("plugins.drm:make_reader");
+    expect(reader.textContent).not.toContain("SCHEMA_READER_FACTORY를 설정하고");
+  });
+
+  // §7 해제본 임시 폴더 칩: `정상` / `작업 공간 안(위험)`.
+  it("해제본 임시 폴더가 작업 공간 안이면 위험 칩을 보인다", async () => {
+    const f = appFixture();
+    f.overrides.set("GET /settings", () => ({
+      version: "3",
+      workspace: "/tmp/ws",
+      render: { mode: "inprocess", url: null, renderer_version: "r1" },
+      reader: { factory: "plugins.drm:make_reader", drm: { available: true, temp_dir_ok: false, ttl_seconds: 900, cache_mb: 2048, magics: 2 } },
+      limits: {},
+      paths: {},
+    }));
+    f.overrides.set("GET /normalization-presets", () => page([]));
+    f.renderApp("?screen=settings");
+    const reader = await screen.findByRole("region", { name: "Reader" });
+    expect(within(reader).getByText("작업 공간 안(위험)", { selector: ".app-chip" })).toBeTruthy();
+    // 시그니처는 개수로만 말한다(§6 `magics: n`).
+    expect(within(reader).getByText("등록된 보호 문서 시그니처").nextElementSibling?.textContent).toBe("2개");
+  });
 });
