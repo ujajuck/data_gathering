@@ -47,7 +47,7 @@ Playwright `webServer`는 `e2e/serve.py` 한 프로세스다. 이 프로세스�
 | test() | 28 (문서 상세 한 건 재파싱 §4.9 2개를 이번 회차에 추가) |
 | 통과 / 실패 / 건너뜀 / flaky | **28 / 0 / 0 / 0** |
 | 소요 | Playwright 보고 `28 passed (2.7m)` (시드·서버 기동·리셋 9회 포함) |
-| 안정성 | 최종 트리에서 3회 연속 전체 통과 — `28 passed (2.8m)` · `28 passed (2.8m)` · `28 passed (2.7m)`. 재시도 0(`retries: 0`). §3·§5는 **세 번째 실행**의 출력 그대로다(로그 원본을 남기려면 §1 마지막 명령으로 `e2e/test-results/run.log`에 옮긴다 — 그 폴더는 `.gitignore` 대상이라 저장소에는 들어가지 않는다) |
+| 안정성 | 최종 트리에서 3회 연속 전체 통과 — `28 passed (2.8m)` · `28 passed (2.8m)` · `28 passed (2.7m)`. 리뷰 지적을 고친 뒤(토스트 문구·버튼 title·폐기 가드) 같은 스위트를 두 번 더 돌려 `28 passed (3.1m)` · `28 passed (2.8m)`. 재시도 0(`retries: 0`). §3·§5는 **세 번째 실행**의 출력 그대로다(로그 원본을 남기려면 §1 마지막 명령으로 `e2e/test-results/run.log`에 옮긴다 — 그 폴더는 `.gitignore` 대상이라 저장소에는 들어가지 않는다) |
 
 같은 트리에서 사전 검사도 이어서 돌렸다: `cd frontend && npm run build` 성공(`✓ built in 1.55s`),
 `cd frontend && npm test -- --run`(vitest) **Test Files 15 passed (15) · Tests 184 passed (184)**,
